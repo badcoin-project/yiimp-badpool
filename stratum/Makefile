@@ -1,66 +1,46 @@
+# Modified for Badcoin project maintenance (c) 2025 The Badcoin Project
+# Modernized Makefile for Yiimp Stratum (Debian 12 / GCC 12+)
 
-CC=gcc
+CXX       := g++
+CXXFLAGS  := -O2 -march=native -std=c++17 -Wall -Wno-unused-result -fPIC
+CPPFLAGS  := -DHAVE_CURL -DNO_EXCHANGE
+SQLFLAGS  := $(shell mysql_config --cflags)
+LDFLAGS   := $(shell mysql_config --libs)
+LDLIBS    := iniparser/libiniparser.a algos/libalgos.a sha3/libhash.a \
+             -lpthread -lgmp -lm -lstdc++ -lssl -lcrypto
 
-CFLAGS= -g -march=native
-SQLFLAGS= `mysql_config --cflags --libs`
+# Curl
+LDCURL    := $(shell pkg-config --libs libcurl)
+LDFLAGS   += $(LDCURL)
 
-# Comment this line to disable address check on login,
-# if you use the auto exchange feature...
-CFLAGS += -DNO_EXCHANGE
+SOURCES := stratum.cpp db.cpp coind.cpp coind_aux.cpp coind_template.cpp coind_submit.cpp \
+           util.cpp list.cpp rpc.cpp job.cpp job_send.cpp job_core.cpp merkle.cpp share.cpp \
+           socket.cpp coinbase.cpp client.cpp client_submit.cpp client_core.cpp \
+           client_difficulty.cpp remote.cpp remote_template.cpp user.cpp object.cpp \
+           json.cpp base58.cpp rpc_curl.cpp
 
-#CFLAGS=-c -O2 -I /usr/include/mysql
-LDFLAGS=-O2 `mysql_config --libs`
+OBJECTS := $(SOURCES:.cpp=.o)
+OUTPUT  := stratum
 
-LDLIBS=iniparser/libiniparser.a algos/libalgos.a sha3/libhash.a -lpthread -lgmp -lm -lstdc++
-LDLIBS+=-lmysqlclient
+CODEDIRS := algos sha3
 
-SOURCES=stratum.cpp db.cpp coind.cpp coind_aux.cpp coind_template.cpp coind_submit.cpp util.cpp list.cpp \
-	rpc.cpp job.cpp job_send.cpp job_core.cpp merkle.cpp share.cpp socket.cpp coinbase.cpp \
-	client.cpp client_submit.cpp client_core.cpp client_difficulty.cpp remote.cpp remote_template.cpp \
-	user.cpp object.cpp json.cpp base58.cpp
+.PHONY: all clean install $(CODEDIRS)
 
-CFLAGS += -DHAVE_CURL
-SOURCES += rpc_curl.cpp
-LDCURL = $(shell /usr/bin/pkg-config --static --libs libcurl)
-LDFLAGS += $(LDCURL)
+all: $(CODEDIRS) $(OUTPUT)
 
-OBJECTS=$(SOURCES:.cpp=.o)
-OUTPUT=stratum
-
-CODEDIR1=algos
-CODEDIR2=sha3
-
-.PHONY: projectcode1 projectcode2
-
-all: projectcode1 projectcode2 $(SOURCES) $(OUTPUT)
-
-projectcode1:
-	$(MAKE) -C $(CODEDIR1)
-
-projectcode2:
-	$(MAKE) -C $(CODEDIR2)
-
-$(SOURCES): stratum.h util.h
+$(CODEDIRS):
+	$(MAKE) -C $@
 
 $(OUTPUT): $(OBJECTS)
-	$(CC) $(OBJECTS) $(LDLIBS) $(LDFLAGS) -o $@
+	$(CXX) $(OBJECTS) $(LDFLAGS) $(LDLIBS) -o $@
 
-.cpp.o:
-	$(CC) $(CFLAGS) $(SQLFLAGS) -c $<
-
-.c.o:
-	$(CC) $(CFLAGS) -c $<
+%.o: %.cpp
+	$(CXX) $(CXXFLAGS) $(CPPFLAGS) $(SQLFLAGS) -c $< -o $@
 
 clean:
-	rm -f *.o
-	rm -f algos/*.o
-	rm -f algos/*.a
-	rm -f sha3/*.o
-	rm -f sha3/*.a
-	rm -f algos/ar2/*.o
+	rm -f $(OBJECTS) $(OUTPUT)
+	for d in $(CODEDIRS); do $(MAKE) -C $$d clean; done
 
-install: clean all
-	strip -s stratum
-	cp stratum /usr/local/bin/
-	cp stratum ../bin/
-
+install: all
+	strip -s $(OUTPUT)
+	install -m 755 $(OUTPUT) /usr/local/bin/
