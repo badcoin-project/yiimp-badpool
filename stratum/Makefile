@@ -5,11 +5,12 @@ CXX       := g++
 CXXFLAGS  := -O2 -march=native -std=c++17 -Wall -Wno-unused-result -fPIC
 CXXFLAGS += -I/usr/include/x86_64-linux-gnu
 CXXFLAGS += -I/usr/include/mariadb
+CXXFLAGS += -I/usr/include/x86_64-linux-gnu/curl
 CPPFLAGS  := -DHAVE_CURL -DNO_EXCHANGE
 SQLFLAGS  := $(shell mysql_config --cflags)
 LDFLAGS   := $(shell mysql_config --libs)
 LDLIBS    := iniparser/libiniparser.a algos/libalgos.a sha3/libhash.a \
-             -lpthread -lgmp -lm -lstdc++ -lssl -lcrypto
+             -lpthread -lgmp -lm -lstdc++ -lssl -lcrypto -lcurl
 
 # Curl
 LDCURL    := $(shell pkg-config --libs libcurl)
