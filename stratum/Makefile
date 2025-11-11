@@ -4,6 +4,7 @@
 CXX       := g++
 CXXFLAGS  := -O2 -march=native -std=c++17 -Wall -Wno-unused-result -fPIC
 CXXFLAGS += -I/usr/include/x86_64-linux-gnu
+CXXFLAGS += -I/usr/include/mariadb
 CPPFLAGS  := -DHAVE_CURL -DNO_EXCHANGE
 SQLFLAGS  := $(shell mysql_config --cflags)
 LDFLAGS   := $(shell mysql_config --libs)
