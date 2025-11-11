@@ -10,6 +10,9 @@
  * You should have received a copy of the CC0 Public Domain Dedication along with
  * this software. If not, see <http://creativecommons.org/publicdomain/zero/1.0/>.
  */
+
+ // Modified for Badcoin project maintenance (c) 2025 The Badcoin Developers
+
 #pragma once
 #ifndef __BLAKE2_H__
 #define __BLAKE2_H__
@@ -118,12 +121,14 @@ typedef struct __blake2s_param
 
 ALIGN(32) typedef struct __blake2s_state
 {
-	uint32_t h[8];
-	uint32_t t[2];
-	uint32_t f[2];
-	uint8_t  buf[2 * BLAKE2S_BLOCKBYTES];
-	size_t   buflen;
-	uint8_t  last_node;
+uint32_t h[8];
+uint32_t t[2];
+uint32_t f[2];
+uint8_t  buf[BLAKE2S_BLOCKBYTES];
+size_t   buflen;
+/* Ensure sizeof(blake2s_state) is a multiple of 32 for GCC/array rules.
+       With BLAKE2S_BLOCKBYTES = 64 or 2*64, this pad brings size to 32N. */
+    uint8_t  _pad32[8];
 } blake2s_state;
 #pragma pack(pop)
 
