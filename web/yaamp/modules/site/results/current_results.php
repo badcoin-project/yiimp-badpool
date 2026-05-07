@@ -35,8 +35,10 @@ $best_algo = '';
 $best_norm = 0;
 
 $algos = array();
+$badcoin_algos = array('yescrypt','scrypt','groestl','skein','sha256d');
 foreach(yaamp_get_algos() as $algo)
 {
+        if (!in_array($algo, $badcoin_algos)) continue;
 	$algo_norm = yaamp_get_algo_norm($algo);
 
 	$price = controller()->memcache->get_database_scalar("current_price-$algo",

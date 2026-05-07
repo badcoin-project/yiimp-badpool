@@ -28,11 +28,6 @@ end;
 
 if($algo != 'all')
 echo <<<end
-<div class="main-left-box">
-<div class="main-left-title">Last 24 Hours Estimate ($algo)</div>
-<div class="main-left-inner"><br>
-<div id='graph_results_price' style='height: $height;'></div><br>
-</div></div><br>
 
 <div class="main-left-box">
 <div class="main-left-title">Last 24 Hours Hashrate ($algo)</div>
@@ -41,9 +36,6 @@ echo <<<end
 </div></div><br>
 end;
 
-$algo_unit = 'Mh';
-$algo_factor = yaamp_algo_mBTC_factor($algo);
-if ($algo_factor == 1000) $algo_unit = 'Gh';
 
 echo <<<end
 </td><td valign=top>
@@ -82,7 +74,6 @@ function page_refresh()
 	if(global_algo != 'all')
 	{
 		pool_hashrate_refresh();
-		main_refresh_price();
 	}
 }
 
@@ -123,55 +114,6 @@ function found_refresh()
 {
 	var url = "/site/found_results";
 	$.get(url, '', found_ready);
-}
-
-///////////////////////////////////////////////////////////////////////
-
-function main_ready_price(data)
-{
-	graph_init_price(data);
-}
-
-function main_refresh_price()
-{
-	var url = "/site/graph_price_results";
-	$.get(url, '', main_ready_price);
-}
-
-function graph_init_price(data)
-{
-	$('#graph_results_price').empty();
-
-	var t = $.parseJSON(data);
-	var plot1 = $.jqplot('graph_results_price', t,
-	{
-		title: '<b>Estimate (mBTC/{$algo_unit}/day)</b>',
-		axes: {
-			xaxis: {
-				tickInterval: 7200,
-				renderer: $.jqplot.DateAxisRenderer,
-				tickOptions: {formatString: '<font size=1>%#Hh</font>'}
-			},
-			yaxis: {
-				min: 0,
-				tickOptions: {formatString: '<font size=1>%#.3f &nbsp;</font>'}
-			}
-		},
-
-		seriesDefaults:
-		{
-			markerOptions: { style: 'none' }
-		},
-
-		grid:
-		{
-			borderWidth: 1,
-			shadowWidth: 0,
-			shadowDepth: 0,
-			background: '#ffffff'
-		},
-
-	});
 }
 
 ///////////////////////////////////////////////////////////////////////

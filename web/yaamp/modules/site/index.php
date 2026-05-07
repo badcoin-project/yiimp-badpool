@@ -1,7 +1,5 @@
 <?php
-
 $algo = user()->getState('yaamp-algo');
-
 JavascriptFile("/extensions/jqplot/jquery.jqplot.js");
 JavascriptFile("/extensions/jqplot/plugins/jqplot.dateAxisRenderer.js");
 JavascriptFile("/extensions/jqplot/plugins/jqplot.barRenderer.js");
@@ -10,103 +8,152 @@ JavascriptFile("/extensions/jqplot/plugins/jqplot.cursor.js");
 JavascriptFile('/yaamp/ui/js/auto_refresh.js');
 
 $height = '240px';
-
 $min_payout = floatval(YAAMP_PAYMENTS_MINI);
-$min_sunday = $min_payout/10;
-
 $payout_freq = (YAAMP_PAYMENTS_FREQ / 3600)." hours";
 ?>
-
 <div id='resume_update_button' style='color: #444; background-color: #ffd; border: 1px solid #eea;
-	padding: 10px; margin-left: 20px; margin-right: 20px; margin-top: 15px; cursor: pointer; display: none;'
-	onclick='auto_page_resume();' align=center>
-	<b>Auto refresh is paused - Click to resume</b></div>
+        padding: 10px; margin-left: 20px; margin-right: 20px; margin-top: 15px;
+        cursor: pointer; display: none;'
+        onclick='auto_page_resume();' align=center>
+        <b>Auto refresh is paused - Click to resume</b>
+</div>
 
-<table cellspacing=20 width=100%>
-<tr><td valign=top width=50%>
+<table cellspacing="20" width="100%">
+<tr>
+<td valign="top" width="50%">
 
-<!--  -->
-
-<div class="main-left-box">
-<div class="main-left-title">YII MINING POOLS</div>
-<div class="main-left-inner">
-
-<ul>
-
-<li>YiiMP is a pool management solution based on the Yii Framework.</li>
-<li>This fork was based on the yaamp source code and is now an open source project.</li>
-<li>No registration is required, we do payouts in the currency you mine. Use your wallet address as the username.</li>
-<li>&nbsp;</li>
-<li>Payouts are made automatically every <?= $payout_freq ?> for all balances above <b><?= $min_payout ?></b>, or <b><?= $min_sunday ?></b> on Sunday.</li>
-<li>For some coins, there is an initial delay before the first payout, please wait at least 6 hours before asking for support.</li>
-<li>Blocks are distributed proportionally among valid submitted shares.</li>
-
-<br/>
-
-</ul>
-</div></div>
-<br/>
-
-<!--  -->
-
-<div class="main-left-box">
-<div class="main-left-title">STRATUM SERVERS</div>
-<div class="main-left-inner">
-
-<ul>
-
-<li>
-<p class="main-left-box" style='padding: 3px; font-size: .8em; background-color: #ffffee; font-family: monospace;'>
-	-o stratum+tcp://<?= YAAMP_STRATUM_URL ?>:&lt;PORT&gt; -u &lt;WALLET_ADDRESS&gt; [-p &lt;OPTIONS&gt;]</p>
-</li>
-
-<?php if (YAAMP_ALLOW_EXCHANGE): ?>
-<li>&lt;WALLET_ADDRESS&gt; can be one of any currency we mine or a BTC address.</li>
-<?php else: ?>
-<li>&lt;WALLET_ADDRESS&gt; should be valid for the currency you mine. <b>DO NOT USE a BTC address here, the auto exchange is disabled</b>!</li>
-<?php endif; ?>
-<li>As optional password, you can use <b>-p c=&lt;SYMBOL&gt;</b> if yiimp does not set the currency correctly on the Wallet page.</li>
-<li>See the "Pool Status" area on the right for PORT numbers. Algorithms without associated coins are disabled.</li>
+<div class="main-left-box badpool-hero-box">
+        <div class="main-left-title">BADCOIN POOL</div>
+        <div class="main-left-inner">
+                <ul>
+                        <li>Mine Badcoin on one pool with multiple algorithm entry points.</li>
+                        <li>Choose the algorithm your miner supports, connect to the matching port, and use your Badcoin wallet address as your username.</li>
+                        <li>No registration is required.</li>
+                        <li>Payouts are sent automatically when your balance reaches the pool minimum threshold.</li>
+                        <li><b>Pool server:</b> <span class="badpool-mono">pool.badcoin.dev</span></li>
+                </ul>
+        </div>
+</div>
 
 <br>
 
-</ul>
-</div></div><br>
-
-<!--  -->
-
 <div class="main-left-box">
-<div class="main-left-title">LINKS</div>
-<div class="main-left-inner">
+        <div class="main-left-title">QUICK START</div>
+        <div class="main-left-inner">
+                <ul>
+                        <li><b>1.</b> Choose an algorithm below.</li>
+                        <li><b>2.</b> Set your miner server to <span class="badpool-mono">pool.badcoin.dev</span></li>
+                        <li><b>3.</b> Use the port for your chosen algorithm.</li>
+                        <li><b>4.</b> Use your Badcoin wallet address as the username.</li>
+                        <li><b>5.</b> Password is usually just <span class="badpool-mono">x</span></li>
+                </ul>
 
-<ul>
-
-<!--<li><b>BitcoinTalk</b> - <a href='https://bitcointalk.org/index.php?topic=508786.0' target=_blank >https://bitcointalk.org/index.php?topic=508786.0</a></li>-->
-<!--<li><b>IRC</b> - <a href='http://webchat.freenode.net/?channels=#yiimp' target=_blank >http://webchat.freenode.net/?channels=#yiimp</a></li>-->
-
-<li><b>API</b> - <a href='/site/api'>http://<?= YAAMP_SITE_URL ?>/site/api</a></li>
-<li><b>Difficulty</b> - <a href='/site/diff'>http://<?= YAAMP_SITE_URL ?>/site/diff</a></li>
-<?php if (YIIMP_PUBLIC_BENCHMARK): ?>
-<li><b>Benchmarks</b> - <a href='/site/benchmarks'>http://<?= YAAMP_SITE_URL ?>/site/benchmarks</a></li>
-<?php endif; ?>
-
-<?php if (YAAMP_ALLOW_EXCHANGE): ?>
-<li><b>Algo Switching</b> - <a href='/site/multialgo'>http://<?= YAAMP_SITE_URL ?>/site/multialgo</a></li>
-<?php endif; ?>
+                <div class="badpool-codebox">-o stratum+tcp://pool.badcoin.dev:&lt;PORT&gt; -u &lt;BADCOIN_WALLET&gt; -p x</div>
+        </div>
+</div>
 
 <br>
 
-</ul>
-</div></div><br>
+<div class="main-left-box">
+        <div class="main-left-title">CHOOSE YOUR ALGORITHM</div>
+        <div class="main-left-inner">
+                <div class="badpool-algo-grid">
+                        <div class="badpool-algo-card">
+                                <div class="badpool-algo-name">yescrypt</div>
+                                <div class="badpool-algo-port">Port 3032</div>
+                                <div class="badpool-algo-line">stratum.badcoin.dev:3032</div>
+                        </div>
+                        <div class="badpool-algo-card">
+                                <div class="badpool-algo-name">scrypt</div>
+                                <div class="badpool-algo-port">Port 4032</div>
+                                <div class="badpool-algo-line">stratum.badcoin.dev:4032</div>
+                        </div>
+                        <div class="badpool-algo-card">
+                                <div class="badpool-algo-name">groestl</div>
+                                <div class="badpool-algo-port">Port 5032</div>
+                                <div class="badpool-algo-line">stratum.badcoin.dev:5032</div>
+                        </div>
+                        <div class="badpool-algo-card">
+                                <div class="badpool-algo-name">skein</div>
+                                <div class="badpool-algo-port">Port 6032</div>
+                                <div class="badpool-algo-line">stratum.badcoin.dev:6032</div>
+                        </div>
+                        <div class="badpool-algo-card">
+                                <div class="badpool-algo-name">sha256d</div>
+                                <div class="badpool-algo-port">Port 7032</div>
+                                <div class="badpool-algo-line">stratum.badcoin.dev:7032</div>
+                        </div>
+                </div>
+                <ul>
+                        <li>This is one Badcoin pool with multiple algorithm ports, not five separate pools.</li>
+                        <li>If an algorithm is still being finalized or temporarily unavailable, use one of the working ports already announced by the project.</li>
+                </ul>
+        </div>
+</div>
 
-<!--  -->
+<br>
 
-<a class="twitter-timeline" href="https://twitter.com/hashtag/YAAMP" data-widget-id="617405893039292417" data-chrome="transparent" height="450px" data-tweet-limit="3" data-aria-polite="polite">Tweets about #YAAMP</a>
-<script>!function(d,s,id){var js,fjs=d.getElementsByTagName(s)[0],p=/^http:/.test(d.location)?'http':'https';if(!d.getElementById(id)){js=d.createElement(s);js.id=id;js.src=p+"://platform.twitter.com/widgets.js";fjs.parentNode.insertBefore(js,fjs);}}(document,"script","twitter-wjs");</script>
+<div class="main-left-box">
+        <div class="main-left-title">WHAT GOES IN YOUR MINER</div>
+        <div class="main-left-inner">
+                <ul>
+                        <li><b>Wallet address</b> = where your Badcoin payouts are sent.</li>
+                        <li><b>Worker name</b> = an optional label for a device, such as <span class="badpool-mono">YourWallet.rig1</span></li>
+                        <li><b>Password</b> = usually just <span class="badpool-mono">x</span></li>
+                </ul>
 
-</td><td valign=top>
+                <div class="badpool-codebox">Username: BADCOIN_WALLET</div>
+                <div class="badpool-codebox">Username with worker: BADCOIN_WALLET.rig1</div>
+                <div class="badpool-codebox">Password: x</div>
+        </div>
+</div>
 
-<!--  -->
+<br>
+
+<div class="main-left-box">
+        <div class="main-left-title">POOL NOTES</div>
+        <div class="main-left-inner">
+                <ul>
+                        <li>Minimum payout threshold: <b><?= $min_payout ?></b></li>
+                        <li>Automatic payout cycle: approximately every <b><?= $payout_freq ?></b></li>
+                        <li>Blocks are distributed proportionally across valid submitted shares.</li>
+                        <li>New miners may need some time before balances and payouts appear normally.</li>
+                </ul>
+        </div>
+</div>
+
+<br>
+
+<div class="main-left-box">
+        <div class="main-left-title">USEFUL LINKS</div>
+        <div class="main-left-inner">
+                <ul>
+                        <li><b>Pool Stats</b> - <a href="/stats">/stats</a></li>
+                        <li><b>Blocks</b> - <a href="/site/block">/site/block</a></li>
+                        <li><b>Payments</b> - <a href="/site/payments">/site/payments</a></li>
+                        <li><b>Miners</b> - <a href="/site/miners">/site/miners</a></li>
+                        <li><b>Wallet Lookup</b> - <a href="/site/wallet">/site/wallet</a></li>
+                        <li><b>API</b> - <a href="/site/api">/site/api</a></li>
+                        <li><b>Difficulty</b> - <a href="/site/diff">/site/diff</a></li>
+                </ul>
+        </div>
+</div>
+
+<br>
+
+<div class="main-left-box">
+        <div class="main-left-title">NEED HELP?</div>
+        <div class="main-left-inner">
+                <ul>
+                        <li>Start simple: choose an algorithm, copy the server and port, paste your wallet address, and use password <span class="badpool-mono">x</span>.</li>
+                        <li>If your miner connects but does not submit shares, the miner may not support the algorithm you selected.</li>
+                        <li>If your miner shows accepted shares but no balance yet, give the pool some time to process shares, rounds, and payout data.</li>
+                </ul>
+        </div>
+</div>
+
+</td>
+<td valign="top">
 
 <div id='pool_current_results'>
 <br><br><br><br><br><br><br><br><br><br>
@@ -116,7 +163,9 @@ $payout_freq = (YAAMP_PAYMENTS_FREQ / 3600)." hours";
 <br><br><br><br><br><br><br><br><br><br>
 </div>
 
-</td></tr></table>
+</td>
+</tr>
+</table>
 
 <br><br><br><br><br><br><br><br><br><br>
 <br><br><br><br><br><br><br><br><br><br>
@@ -124,43 +173,36 @@ $payout_freq = (YAAMP_PAYMENTS_FREQ / 3600)." hours";
 <br><br><br><br><br><br><br><br><br><br>
 
 <script>
-
 function page_refresh()
 {
-	pool_current_refresh();
-	pool_history_refresh();
+        pool_current_refresh();
+        pool_history_refresh();
 }
 
 function select_algo(algo)
 {
-	window.location.href = '/site/algo?algo='+algo+'&r=/';
+        window.location.href = '/site/algo?algo='+algo+'&r=/';
 }
-
-////////////////////////////////////////////////////
 
 function pool_current_ready(data)
 {
-	$('#pool_current_results').html(data);
+        $('#pool_current_results').html(data);
 }
 
 function pool_current_refresh()
 {
-	var url = "/site/current_results";
-	$.get(url, '', pool_current_ready);
+        var url = "/site/current_results";
+        $.get(url, '', pool_current_ready);
 }
-
-////////////////////////////////////////////////////
 
 function pool_history_ready(data)
 {
-	$('#pool_history_results').html(data);
+        $('#pool_history_results').html(data);
 }
 
 function pool_history_refresh()
 {
-	var url = "/site/history_results";
-	$.get(url, '', pool_history_ready);
+        var url = "/site/history_results";
+        $.get(url, '', pool_history_ready);
 }
-
 </script>
-

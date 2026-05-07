@@ -169,8 +169,12 @@ bool client_validate_user_address(YAAMP_CLIENT *client)
 
 	YAAMP_COIND *coind = (YAAMP_COIND *)object_find(&g_list_coind, client->coinid);
 	if (!coind) {
-		clientlog(client, "unable to find the wallet for coinid %d...", client->coinid);
-		return false;
+		clientlog(client, "unable to find the wallet for coinid %d, reset to auto...", client->coinid);
+		client->coinid = 0;
+		CommonLock(&g_db_mutex);
+		db_init_user_coinid(g_db, client);
+		CommonUnlock(&g_db_mutex);
+		return client_validate_user_address(client);
 	} else {
 		if(g_current_algo && strlen(g_current_algo->name) && strcmp(g_current_algo->name, coind->algo)) {
 			clientlog(client, "%s address is on the wrong coin %s, reset to auto...", client->username, coind->symbol);
