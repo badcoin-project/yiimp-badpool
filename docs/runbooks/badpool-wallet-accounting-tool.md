@@ -28,7 +28,7 @@ Apply mode requires all of the following:
 - A supported apply target in the internal allowlist.
 - `BADPOOL_APPLY_CONFIRM='I understand this mutates one BadPool algo'`.
 - Accounting freeze confirmed.
-- Payout and withdraw counts confirmed as zero.
+- Global `payouts` and `withdraws` table counts confirmed as zero.
 - Target row and algo mapping confirmed.
 - Target row backup created.
 - Target config backup created.
@@ -63,6 +63,12 @@ Do not run these as part of this wallet/accounting preflight or apply:
 - Do not print secrets.
 
 Payment crons must remain off while using this tool.
+
+
+## Backup Handling
+
+Apply mode creates root-only backups. The target `coin-row-$ROW_ID.tsv` backup may contain RPC credentials from the `coins` row. Keep these files root-owned/root-readable only and do not paste backup contents into chat, public issues, logs, or tickets.
+
 
 ## Read-Only Preflight
 

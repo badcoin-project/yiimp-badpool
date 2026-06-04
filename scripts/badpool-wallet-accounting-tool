@@ -5,7 +5,7 @@
 
 VERSION="2026-06-03"
 
-DB_NAME="${BADPOOL_DB_NAME:-yaamp}"
+DB_NAME="${BADPOOL_DB_NAME:-badpool}"
 DB_CLI="${BADPOOL_DB_CLI:-mysql --batch --skip-column-names}"
 BACKUP_ROOT="${BADPOOL_BACKUP_ROOT:-/root/badpool-wallet-accounting-backups}"
 APPLY_CONFIRM="${BADPOOL_APPLY_CONFIRM:-}"
@@ -53,7 +53,7 @@ badpool-wallet-accounting-tool --verify yescrypt|scrypt|skein|groestl|sha256d
 badpool-wallet-accounting-tool --apply yescrypt|skein|groestl|sha256d
 
 Environment:
-  BADPOOL_DB_NAME=yaamp
+  BADPOOL_DB_NAME=badpool
   BADPOOL_DB_CLI='mysql --batch --skip-column-names'
   BADPOOL_BACKUP_ROOT=/root/badpool-wallet-accounting-backups
   BADPOOL_COOKIE_REFRESH_HELPER=/path/to/helper
@@ -299,7 +299,7 @@ db_update_coin_cookie() {
   if [ -z "$assignments" ]; then
     return 1
   fi
-  db_query_show_errors "UPDATE coins SET $assignments WHERE id=$ROW_ID LIMIT 1;"
+  printf "%s\n" "UPDATE coins SET $assignments WHERE id=$ROW_ID LIMIT 1;" | $DB_CLI "$DB_NAME"
   return "$?"
 }
 
@@ -774,7 +774,9 @@ backup_one() {
   if [ "$?" -ne 0 ] || [ ! -s "$dir/coin-row-$ROW_ID.tsv" ]; then
     fail "target BAD row backup failed for row $ROW_ID"
   fi
+  chmod 600 "$dir/coin-row-$ROW_ID.tsv" 2>/dev/null
   info "target BAD row backup=$dir/coin-row-$ROW_ID.tsv"
+  info "WARNING: coin row backup may contain RPC credentials; keep root-only and do not paste into chat/logs"
 
   {
     printf 'payouts_count\t%s\n' "$(db_scalar_count payouts '')"
@@ -991,7 +993,8 @@ apply_one() {
   valid="$(rpc_validate_address_field "$new_addr" "isvalid")"
   owns="$(rpc_validate_address_field "$new_addr" "ismine")"
   info "generated one new reward address for account=$ACCOUNT"
-  info "new address validation isvalid=$valid ismine=$owns address=$new_addr"
+  addr_suffix="$(printf "%s" "$new_addr" | sed "s/^.*\\(.\\{8\\}\\)$/<redacted:\\1>/")"
+  info "new address validation isvalid=$valid ismine=$owns address=$addr_suffix"
   if [ "$valid" != "true" ] || [ "$owns" != "true" ]; then
     fail "generated reward address is not valid/owned"
   fi
