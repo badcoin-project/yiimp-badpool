@@ -8,6 +8,16 @@ It is intended to reduce repeated manual command blocks while preserving one-alg
 
 This tool must not be used to start payout or block accounting loops.
 
+## Repository Location
+
+The reviewed helper lives in:
+
+```text
+ops/badpool-wallet-accounting-tool
+```
+
+Do not install from the old `scripts/` path.
+
 ## Supported Modes
 
 - `--preflight all`
@@ -64,11 +74,9 @@ Do not run these as part of this wallet/accounting preflight or apply:
 
 Payment crons must remain off while using this tool.
 
-
 ## Backup Handling
 
 Apply mode creates root-only backups. The target `coin-row-$ROW_ID.tsv` backup may contain RPC credentials from the `coins` row. Keep these files root-owned/root-readable only and do not paste backup contents into chat, public issues, logs, or tickets.
-
 
 ## Read-Only Preflight
 
@@ -118,7 +126,7 @@ Verification should report:
 After the PR is reviewed and merged, pull the merged branch on the BadPool host and install:
 
 ```bash
-sudo install -o root -g root -m 0750 scripts/badpool-wallet-accounting-tool /usr/local/sbin/badpool-wallet-accounting-tool
+sudo install -o root -g root -m 0750 ops/badpool-wallet-accounting-tool /usr/local/sbin/badpool-wallet-accounting-tool
 ```
 
-Do not install from an unreviewed scratch artifact.
+Do not install from an unreviewed scratch artifact or the old `scripts/` path.
