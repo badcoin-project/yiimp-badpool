@@ -60,10 +60,11 @@ static bool client_configure(YAAMP_CLIENT *client, json_value *json_params)
 			if(!mining_configure_extension_name_is_safe(name)) continue;
 
 			size_t used = strlen(response);
-			size_t remaining = sizeof(response) - used;
-			int written = snprintf(response + used, remaining, "%s\"%s\":false", count? ",": "", name);
+			size_t needed = strlen(name) + strlen(count? ",\"\":false": "\"\":false");
 
-			if(written < 0 || (size_t)written >= remaining) break;
+			if(used + needed + 2 >= sizeof(response)) break;
+
+			snprintf(response + used, sizeof(response) - used, "%s\"%s\":false", count? ",": "", name);
 			count++;
 		}
 	}
