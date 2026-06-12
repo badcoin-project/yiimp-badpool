@@ -2,7 +2,7 @@
 
 $mining = getdbosql('db_mining');
 $algo = user()->getState('yaamp-algo');
-$badcoin_algos = array('yescrypt','scrypt','groestl','skein','sha256d');
+$badcoin_algos = array('yescrypt','scrypt','groestl','skein','sha256','sha256d');
 if($algo == 'all' || !in_array($algo, $badcoin_algos)) return;
 
 echo "<div class='main-left-box'>";

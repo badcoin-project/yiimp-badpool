@@ -89,19 +89,7 @@ echo <<<end
 	onclick='auto_page_resume();' align=center>
 	<b>Auto refresh is paused - Click to resume</b></div>
 
-<div align=right>
-Select Algo: <select id='algo_select'>$string</select>&nbsp;
-</div>
 
-<script>
-
-$('#algo_select').change(function(event)
-{
-	var algo = $('#algo_select').val();
-	window.location.href = '/site/algo?algo='+algo+'&r=/stats';
-});
-
-</script>
 
 <table width=100%><tr><td valign=top width=33%>
 

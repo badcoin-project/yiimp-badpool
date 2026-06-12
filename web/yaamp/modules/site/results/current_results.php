@@ -19,7 +19,6 @@ echo <<<END
 <tr>
 <th>Algo</th>
 <th data-sorter="numeric" align="right">Port</th>
-<th data-sorter="numeric" align="right">Coins</th>
 <th data-sorter="numeric" align="right">Miners</th>
 <th data-sorter="numeric" align="right">Hashrate</th>
 <th data-sorter="currency" align="right">Fees**</th>
@@ -35,7 +34,7 @@ $best_algo = '';
 $best_norm = 0;
 
 $algos = array();
-$badcoin_algos = array('yescrypt','scrypt','groestl','skein','sha256d');
+$badcoin_algos = array('yescrypt','scrypt','groestl','skein','sha256','sha256d');
 foreach(yaamp_get_algos() as $algo)
 {
         if (!in_array($algo, $badcoin_algos)) continue;
@@ -118,13 +117,11 @@ foreach($algos as $item)
 	$port = getAlgoPort($algo);
 
 	if($defaultalgo == $algo)
-		echo "<tr style='cursor: pointer; background-color: #e0d3e8;' onclick='javascript:select_algo(\"$algo\")'>";
+		echo "<tr style='cursor: pointer; background-color: #b40000; color: #fff;' onclick='javascript:select_algo(\"$algo\")'>";
 	else
-		echo "<tr style='cursor: pointer' class='ssrow' onclick='javascript:select_algo(\"$algo\")'>";
-
-	echo "<td><b>$algo</b></td>";
+		echo "<tr style='cursor: pointer' class='ssrow' onclick='javascript:select_algo(\"$algo\")'>";        $display_algo = ($algo == 'sha256') ? 'sha256d' : $algo;
+        echo "<td><b>$display_algo</b></td>";
 	echo "<td align=right style='font-size: .8em;'>$port</td>";
-	echo "<td align=right style='font-size: .8em;'>".($coins==1 ? $coinsym : $coins)."</td>";
 	echo "<td align=right style='font-size: .8em;'>$workers</td>";
 	echo '<td align="right" style="font-size: .8em;" data="'.$hashrate.'">'.$hashrate_sfx.'</td>';
 	echo "<td align=right style='font-size: .8em;'>{$fees}%</td>";
@@ -154,13 +151,12 @@ foreach($algos as $item)
 echo "</tbody>";
 
 if($defaultalgo == 'all')
-	echo "<tr style='cursor: pointer; background-color: #e0d3e8;' onclick='javascript:select_algo(\"all\")'>";
+	echo "<tr style='cursor: pointer; background-color: #b40000; color: #fff;' onclick='javascript:select_algo(\"all\")'>";
 else
 	echo "<tr style='cursor: pointer' class='ssrow' onclick='javascript:select_algo(\"all\")'>";
 
 echo "<td><b>all</b></td>";
 echo "<td></td>";
-echo "<td align=right style='font-size: .8em;'>$total_coins</td>";
 echo "<td align=right style='font-size: .8em;'>$total_miners</td>";
 echo "<td></td>";
 echo "<td></td>";
@@ -171,7 +167,7 @@ echo "</tr>";
 
 echo "</table>";
 
-echo '<p style="font-size: .8em;">&nbsp;* values in mBTC/MH/day, per GH for sha & blake algos</p>';
+echo '<p style="font-size: .8em;">&nbsp;Badcoin pool status by mining algorithm. Internal sha256 is shown publicly as sha256d.</p>';
 
 echo "</div></div><br>";
 ?>

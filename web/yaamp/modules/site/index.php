@@ -159,9 +159,7 @@ $payout_freq = (YAAMP_PAYMENTS_FREQ / 3600)." hours";
 <br><br><br><br><br><br><br><br><br><br>
 </div>
 
-<div id='pool_history_results'>
-<br><br><br><br><br><br><br><br><br><br>
-</div>
+<!-- Pool history panel removed from homepage: selected-algo stats belong on stats/mining pages. -->
 
 </td>
 </tr>
@@ -176,7 +174,7 @@ $payout_freq = (YAAMP_PAYMENTS_FREQ / 3600)." hours";
 function page_refresh()
 {
         pool_current_refresh();
-        pool_history_refresh();
+        // pool_history_refresh();
 }
 
 function select_algo(algo)
