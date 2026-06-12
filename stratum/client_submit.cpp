@@ -173,6 +173,8 @@ static void client_do_submit(YAAMP_CLIENT *client, YAAMP_JOB *job, YAAMP_JOB_VAL
 	uint64_t coin_target = decode_compact(templ->nbits);
 	if (templ->nbits && !coin_target) coin_target = 0xFFFF000000000000ULL;
 
+        bool full_block_target = hash_meets_target_from_nbits(submitvalues->hash_be, templ->nbits, NULL);
+
 	int block_size = YAAMP_SMALLBUFSIZE;
 	vector<string>::const_iterator i;
 
@@ -240,7 +242,7 @@ static void client_do_submit(YAAMP_CLIENT *client, YAAMP_JOB *job, YAAMP_JOB_VAL
 		}
 	}
 
-	if(hash_int <= coin_target)
+	if(full_block_target)
 	{
 		char count_hex[8] = { 0 };
 		if (templ->txcount <= 252)
@@ -521,7 +523,7 @@ bool client_submit(YAAMP_CLIENT *client, json_value *json_params)
 
 	// minimum hash diff begins with 0000, for all...
 	uint8_t pfx = submitvalues.hash_bin[30] | submitvalues.hash_bin[31];
-	if(pfx && strcmp(g_current_algo->name, "scrypt") && strcmp(g_current_algo->name, "yescrypt")) {
+	if(pfx && strcmp(g_current_algo->name, "scrypt") && strcmp(g_current_algo->name, "yescrypt") && strcmp(g_current_algo->name, "sha256")) {
 		if (g_debuglog_hash) {
 			debuglog("Possible %s error, hash starts with %02x%02x%02x%02x\n", g_current_algo->name,
 				(int) submitvalues.hash_bin[31], (int) submitvalues.hash_bin[30],

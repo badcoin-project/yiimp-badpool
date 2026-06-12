@@ -101,6 +101,9 @@ uint64_t diff_to_target(double difficulty);
 double target_to_diff(uint64_t target);
 
 uint64_t get_hash_difficulty(unsigned char *input);
+bool compact_to_target_hex(const char *input, char *target_hex);
+bool hash_be_meets_target_hex(const char *hash_be, const char *target_hex);
+bool hash_meets_target_from_nbits(const char *hash_be, const char *nbits, char *target_hex);
 
 long long current_timestamp();
 long long current_timestamp_dms();
