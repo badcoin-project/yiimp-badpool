@@ -95,6 +95,27 @@ function showPageHeader()
         showItemHeader(controller()->id=='stats', '/stats', 'Stats');
         showItemHeader($action=='miners', '/site/miners', 'Miners');
 
+        $current_algo = user()->getState('yaamp-algo');
+        if (empty($current_algo)) $current_algo = YAAMP_DEFAULT_ALGO;
+
+        $badpool_algos = array('all' => 'All');
+        $rows = dbolist("SELECT DISTINCT algo FROM coins WHERE symbol='BAD' AND enable=1 AND visible=1 AND auto_ready=1 AND installed=1 ORDER BY FIELD(algo,'sha256','scrypt','groestl','skein','yescrypt'), algo");
+        foreach($rows as $row)
+        {
+                $value = $row['algo'];
+                $label = ($value == 'sha256') ? 'sha256d' : $value;
+                $badpool_algos[$value] = $label;
+        }
+
+        echo '<span class="badpool-global-algo">Algo: <select id="badpool_global_algo">';
+        foreach($badpool_algos as $value => $label)
+        {
+                $selected = ($current_algo == $value) ? ' selected' : '';
+                echo '<option value="'.CHtml::encode($value).'"'.$selected.'>'.CHtml::encode($label).'</option>';
+        }
+        echo '</select></span>';
+        echo '<script>$(function(){ $("#badpool_global_algo").change(function(){ var r = window.location.pathname + window.location.search; window.location.href = "/site/algo?algo=" + encodeURIComponent(this.value) + "&r=" + encodeURIComponent(r); }); });</script>';
+
         if (YIIMP_PUBLIC_EXPLORER)
                 showItemHeader(controller()->id=='explorer', '/explorer', 'Explorers');
         if (YIIMP_PUBLIC_BENCHMARK)

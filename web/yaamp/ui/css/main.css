@@ -294,8 +294,8 @@ hr
 
 @media screen and (max-width: 900px)
 {
-        table[width="100%"] tr,
-        table[width="100%"] td
+        table[width="100%"] > tbody > tr,
+        table[width="100%"] > tbody > tr > td
         {
                 display: block;
                 width: 100% !important;
@@ -310,4 +310,23 @@ hr
         {
                 font-size: 1.05em;
         }
+}
+
+.badpool-global-algo
+{
+        float: right;
+        margin: 0 12px 0 0;
+        color: #eee;
+        font-size: .85em;
+        font-weight: normal;
+}
+
+.badpool-global-algo select
+{
+        font-size: .95em;
+        border: 1px solid #555;
+        border-radius: 4px;
+        padding: 2px 4px;
+        background: #fff;
+        color: #222;
 }
