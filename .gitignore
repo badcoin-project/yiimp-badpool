@@ -23,3 +23,38 @@ web/assets/
 .idea/*
 web/yaamp/.idea/
 *.0
+
+# BADPOOL LOCAL RUNTIME / BACKUP / SECRET GUARDRAILS
+# Keep VPS-local artifacts, backups, runtime files, and secrets out of Git.
+# Do not delete these files from disk just because they are ignored.
+
+/backups/
+*.bak
+*.bak.*
+*.save
+*.working
+*.working-*
+*.service.working
+*.run.log
+
+# Local dumps/artifacts. Upstream sql/ migrations are explicitly allowed below.
+*.sql
+*.sql.gz
+*.dump
+!sql/*.sql
+!sql/*.sql.gz
+
+# Local env/secrets/wallet/runtime files.
+.env
+.env.*
+*.env
+*.cookie
+.cookie
+wallet.dat
+*.wallet
+
+# Loose runtime/debug artifacts observed on VPS.
+difficulty
+newblock
+price
+reward

@@ -39,58 +39,40 @@ void coind_getauxblock(YAAMP_COIND *coind)
 
 YAAMP_JOB_TEMPLATE *coind_create_template_memorypool(YAAMP_COIND *coind)
 {
-	json_value *json = rpc_call(&coind->rpc, "getmemorypool");
-	if(!json || json->type == json_null)
-	{
-		coind_error(coind, "getmemorypool");
-		return NULL;
-	}
+json_value *json = rpc_call(&coind->rpc, "getblocktemplate", "[{\"rules\":[\"segwit\"]}]");
+        if(!json || json->type == json_null)
+        {
+                coind_error(coind, "getblocktemplate");
+                return NULL;
+        }
 
-	json_value *json_result = json_get_object(json, "result");
-	if(!json_result || json_result->type == json_null)
-	{
-		coind_error(coind, "getmemorypool");
-		json_value_free(json);
+        json_value *json_result = json_get_object(json, "result");
+        if(!json_result || json_result->type == json_null)
+        {
+                coind_error(coind, "getblocktemplate");
+                json_value_free(json);
+                return NULL;
+        }
 
-		return NULL;
-	}
+        YAAMP_JOB_TEMPLATE *templ = new YAAMP_JOB_TEMPLATE;
+        memset(templ, 0, sizeof(YAAMP_JOB_TEMPLATE));
+        templ->created = time(NULL);
+        templ->value = json_get_int(json_result, "coinbasevalue");
+        templ->height = json_get_int(json_result, "height");
+        sprintf(templ->version, "%08x", (unsigned int)json_get_int(json_result, "version"));
+        sprintf(templ->ntime, "%08x", (unsigned int)json_get_int(json_result, "curtime"));
 
-	YAAMP_JOB_TEMPLATE *templ = new YAAMP_JOB_TEMPLATE;
-	memset(templ, 0, sizeof(YAAMP_JOB_TEMPLATE));
+        const char *bits = json_get_string(json_result, "bits");
+        const char *prev = json_get_string(json_result, "previousblockhash");
 
-	templ->created = time(NULL);
-	templ->value = json_get_int(json_result, "coinbasevalue");
-//	templ->height = json_get_int(json_result, "height");
-	sprintf(templ->version, "%08x", (unsigned int)json_get_int(json_result, "version"));
-	sprintf(templ->ntime, "%08x", (unsigned int)json_get_int(json_result, "time"));
-	strcpy(templ->nbits, json_get_string(json_result, "bits"));
-	strcpy(templ->prevhash_hex, json_get_string(json_result, "previousblockhash"));
+        if(bits) strcpy(templ->nbits, bits);
+        if(prev) strcpy(templ->prevhash_hex, prev);
 
-	json_value_free(json);
+        json_value_free(json);
 
-	json = rpc_call(&coind->rpc, "getmininginfo", "[]");
-	if(!json || json->type == json_null)
-	{
-		coind_error(coind, "coind getmininginfo");
-		return NULL;
-	}
-
-	json_result = json_get_object(json, "result");
-	if(!json_result || json_result->type == json_null)
-	{
-		coind_error(coind, "coind getmininginfo");
-		json_value_free(json);
-
-		return NULL;
-	}
-
-	templ->height = json_get_int(json_result, "blocks")+1;
-	json_value_free(json);
-
-	coind_getauxblock(coind);
-
-	coind->usememorypool = true;
-	return templ;
+        coind_getauxblock(coind);
+        coind->usememorypool = true;
+        return templ;
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////
