@@ -22,6 +22,58 @@ bool client_suggest_target(YAAMP_CLIENT *client, json_value *json_params)
 	return true;
 }
 
+static bool mining_configure_extension_name_is_safe(const char *name)
+{
+	if(!name) return false;
+
+	size_t len = strlen(name);
+	if(!len || len > 64) return false;
+
+	for(size_t i = 0; i < len; i++)
+	{
+		char c = name[i];
+		if((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+			(c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.')
+			continue;
+
+		return false;
+	}
+
+	return true;
+}
+
+static bool client_configure(YAAMP_CLIENT *client, json_value *json_params)
+{
+	char response[YAAMP_SMALLBUFSIZE] = "{";
+	int count = 0;
+
+	if(json_params->u.array.length > 0 && json_is_array(json_params->u.array.values[0]))
+	{
+		json_value *extensions = json_params->u.array.values[0];
+
+		for(unsigned int i = 0; i < extensions->u.array.length; i++)
+		{
+			json_value *extension = extensions->u.array.values[i];
+			if(!json_is_string(extension)) continue;
+
+			const char *name = extension->u.string.ptr;
+			if(!mining_configure_extension_name_is_safe(name)) continue;
+
+			size_t used = strlen(response);
+			size_t needed = strlen(name) + strlen(count? ",\"\":false": "\"\":false");
+
+			if(used + needed + 2 >= sizeof(response)) break;
+
+			snprintf(response + used, sizeof(response) - used, "%s\"%s\":false", count? ",": "", name);
+			count++;
+		}
+	}
+
+	strcat(response, "}");
+
+	return client_send_result(client, "%s", response);
+}
+
 bool client_subscribe(YAAMP_CLIENT *client, json_value *json_params)
 {
 	//if(client_find_my_ip(client->sock->ip)) return false;
@@ -594,7 +646,10 @@ void *client_thread(void *p)
 		}
 
 		bool b = false;
-		if(!strcmp(method, "mining.subscribe"))
+		if(!strcmp(method, "mining.configure"))
+			b = client_configure(client, json_params);
+
+		else if(!strcmp(method, "mining.subscribe"))
 			b = client_subscribe(client, json_params);
 
 		else if(!strcmp(method, "mining.authorize"))

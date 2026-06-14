@@ -1,0 +1,1092 @@
+#!/usr/bin/env bash
+
+# BadPool wallet/accounting preflight and one-algo apply helper.
+# Intentionally avoids shell errexit and pipeline-failure modes.
+
+VERSION="2026-06-03"
+
+DB_NAME="${BADPOOL_DB_NAME:-badpool}"
+DB_CLI="${BADPOOL_DB_CLI:-mysql --batch --skip-column-names}"
+BACKUP_ROOT="${BADPOOL_BACKUP_ROOT:-/root/badpool-wallet-accounting-backups}"
+APPLY_CONFIRM="${BADPOOL_APPLY_CONFIRM:-}"
+COOKIE_REFRESH_HELPER="${BADPOOL_COOKIE_REFRESH_HELPER:-}"
+NOW_UTC="$(date -u +%Y%m%dT%H%M%SZ 2>/dev/null)"
+
+MODE=""
+TARGET=""
+RISK_NOTE=""
+SUMMARY_ROWS=""
+GLOBAL_PAYOUTS_COUNT="unknown"
+GLOBAL_WITHDRAWS_COUNT="unknown"
+
+print_section() {
+  printf '\n==== %s ====\n' "$1"
+}
+
+info() {
+  printf '%s\n' "$*"
+}
+
+warn() {
+  printf 'WARN: %s\n' "$*"
+}
+
+fail() {
+  printf 'REFUSE: %s\n' "$*" >&2
+  exit 1
+}
+
+need_cmd() {
+  command -v "$1" >/dev/null 2>&1
+  if [ "$?" -ne 0 ]; then
+    fail "missing required command: $1"
+  fi
+}
+
+usage() {
+  cat <<'USAGE'
+==== usage ====
+badpool-wallet-accounting-tool --preflight all
+badpool-wallet-accounting-tool --dry-run all
+badpool-wallet-accounting-tool --dry-run yescrypt|scrypt|skein|groestl|sha256d
+badpool-wallet-accounting-tool --verify yescrypt|scrypt|skein|groestl|sha256d
+badpool-wallet-accounting-tool --apply yescrypt|skein|groestl|sha256d
+
+Environment:
+  BADPOOL_DB_NAME=badpool
+  BADPOOL_DB_CLI='mysql --batch --skip-column-names'
+  BADPOOL_BACKUP_ROOT=/root/badpool-wallet-accounting-backups
+  BADPOOL_COOKIE_REFRESH_HELPER=/path/to/helper
+  BADPOOL_APPLY_CONFIRM='I understand this mutates one BadPool algo'
+
+Safety:
+  --apply all refuses.
+  --apply scrypt refuses unless this tool is edited after explicit authorization.
+  --apply requires BADPOOL_APPLY_CONFIRM exactly as shown above.
+USAGE
+}
+
+parse_args() {
+  if [ "$#" -ne 2 ]; then
+    usage
+    exit 2
+  fi
+
+  case "$1" in
+    --preflight|--dry-run)
+      MODE="preflight"
+      ;;
+    --verify)
+      MODE="verify"
+      ;;
+    --apply)
+      MODE="apply"
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      usage
+      exit 2
+      ;;
+  esac
+
+  TARGET="$2"
+}
+
+algo_known() {
+  case "$1" in
+    all|yescrypt|scrypt|skein|groestl|sha256d) return 0 ;;
+  esac
+  return 1
+}
+
+algo_apply_allowed() {
+  case "$1" in
+    yescrypt|skein|groestl|sha256d) return 0 ;;
+  esac
+  return 1
+}
+
+load_algo() {
+  ALGO="$1"
+  ROW_ID=""
+  DAEMON_SERVICE=""
+  STRATUM_SERVICE=""
+  CONFIG_PATH=""
+  DATADIR=""
+  RPC_HOST="127.0.0.1"
+  RPC_PORT=""
+  STRATUM_PORT=""
+  ACCOUNT=""
+  DAEMON_ALGO=""
+  YIIMP_ALGO=""
+  PUBLIC_LABEL=""
+
+  case "$ALGO" in
+    yescrypt)
+      ROW_ID="1266"
+      DAEMON_SERVICE="badcoind-pool-yescrypt.service"
+      STRATUM_SERVICE="badpool-yescrypt.service"
+      CONFIG_PATH="/etc/badcoin/pool-yescrypt.conf"
+      DATADIR="/var/lib/badcoin-pool-yescrypt"
+      RPC_PORT="11866"
+      STRATUM_PORT="3032"
+      ACCOUNT="pool-yescrypt"
+      DAEMON_ALGO="yescrypt"
+      YIIMP_ALGO="yescrypt"
+      PUBLIC_LABEL="yescrypt"
+      ;;
+    scrypt)
+      ROW_ID="1267"
+      DAEMON_SERVICE="badcoind-pool-scrypt.service"
+      STRATUM_SERVICE="badpool-scrypt.service"
+      CONFIG_PATH="/etc/badcoin/pool-scrypt.conf"
+      DATADIR="/var/lib/badcoin-pool-scrypt"
+      RPC_PORT="11867"
+      STRATUM_PORT="4032"
+      ACCOUNT="pool-scrypt"
+      DAEMON_ALGO="scrypt"
+      YIIMP_ALGO="scrypt"
+      PUBLIC_LABEL="scrypt"
+      ;;
+    skein)
+      ROW_ID="1268"
+      DAEMON_SERVICE="badcoind-pool-skein.service"
+      STRATUM_SERVICE="badpool-skein.service"
+      CONFIG_PATH="/etc/badcoin/pool-skein.conf"
+      DATADIR="/var/lib/badcoin-pool-skein"
+      RPC_PORT="11868"
+      STRATUM_PORT="6032"
+      ACCOUNT="pool-skein"
+      DAEMON_ALGO="skein"
+      YIIMP_ALGO="skein"
+      PUBLIC_LABEL="skein"
+      ;;
+    groestl)
+      ROW_ID="1269"
+      DAEMON_SERVICE="badcoind-pool-groestl.service"
+      STRATUM_SERVICE="badpool-groestl.service"
+      CONFIG_PATH="/etc/badcoin/pool-groestl.conf"
+      DATADIR="/var/lib/badcoin-pool-groestl"
+      RPC_PORT="11869"
+      STRATUM_PORT="5032"
+      ACCOUNT="pool-groestl"
+      DAEMON_ALGO="groestl"
+      YIIMP_ALGO="groestl"
+      PUBLIC_LABEL="groestl"
+      ;;
+    sha256d)
+      ROW_ID="1270"
+      DAEMON_SERVICE="badcoind-pool-sha256d.service"
+      STRATUM_SERVICE="badpool-sha256d.service"
+      CONFIG_PATH="/etc/badcoin/pool-sha256d.conf"
+      DATADIR="/var/lib/badcoin-pool-sha256d"
+      RPC_PORT="11870"
+      STRATUM_PORT="7032"
+      ACCOUNT="pool-sha256d"
+      DAEMON_ALGO="sha256d"
+      YIIMP_ALGO="sha256"
+      PUBLIC_LABEL="SHA256D"
+      ;;
+    *)
+      fail "unknown algo: $ALGO"
+      ;;
+  esac
+}
+
+json_get() {
+  local key="$1"
+  local file="$2"
+  if command -v jq >/dev/null 2>&1; then
+    jq -r "$key // empty" "$file" 2>/dev/null
+  else
+    sed -n 's/.*"'"${key#.}"'"[[:space:]]*:[[:space:]]*"\{0,1\}\([^,"]*\)"\{0,1\}.*/\1/p' "$file" 2>/dev/null | head -n 1
+  fi
+}
+
+db_query() {
+  local sql="$1"
+  $DB_CLI "$DB_NAME" -e "$sql" 2>/dev/null
+  return "$?"
+}
+
+db_query_show_errors() {
+  local sql="$1"
+  $DB_CLI "$DB_NAME" -e "$sql"
+  return "$?"
+}
+
+sql_escape() {
+  printf '%s' "$1" | sed "s/'/''/g"
+}
+
+db_table_exists() {
+  local table="$1"
+  local count
+  count="$(db_query "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name='$(sql_escape "$table")';")"
+  [ "$count" = "1" ]
+}
+
+db_column_exists() {
+  local table="$1"
+  local column="$2"
+  local count
+  count="$(db_query "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='$(sql_escape "$table")' AND column_name='$(sql_escape "$column")';")"
+  [ "$count" = "1" ]
+}
+
+db_scalar_count() {
+  local table="$1"
+  local where="$2"
+  if db_table_exists "$table"; then
+    if [ -n "$where" ]; then
+      db_query "SELECT COUNT(*) FROM $table WHERE $where;"
+    else
+      db_query "SELECT COUNT(*) FROM $table;"
+    fi
+  else
+    printf 'missing-table'
+  fi
+}
+
+db_coin_projection() {
+  local cols="id"
+  for col in symbol algo account master_wallet rpcuser rpcpasswd rpchost rpcport rpcencoding; do
+    if db_column_exists "coins" "$col"; then
+      if [ "$col" = "rpcpasswd" ]; then
+        cols="$cols, CHAR_LENGTH(rpcpasswd)"
+      else
+        cols="$cols, $col"
+      fi
+    else
+      cols="$cols, '<missing:$col>'"
+    fi
+  done
+  db_query "SELECT $cols FROM coins WHERE id=$ROW_ID;"
+}
+
+db_coin_raw_field() {
+  local col="$1"
+  if db_column_exists "coins" "$col"; then
+    db_query "SELECT COALESCE($col, '') FROM coins WHERE id=$ROW_ID LIMIT 1;"
+  else
+    printf ''
+  fi
+}
+
+db_update_coin_wallet_account() {
+  local address="$1"
+  local account="$2"
+  db_query_show_errors "UPDATE coins SET account='$(sql_escape "$account")', master_wallet='$(sql_escape "$address")' WHERE id=$ROW_ID LIMIT 1;"
+  return "$?"
+}
+
+db_update_coin_cookie() {
+  local user="$1"
+  local pass="$2"
+  local assignments=""
+  if db_column_exists "coins" "rpcuser"; then
+    assignments="rpcuser='$(sql_escape "$user")'"
+  fi
+  if db_column_exists "coins" "rpcpasswd"; then
+    if [ -n "$assignments" ]; then
+      assignments="$assignments, "
+    fi
+    assignments="${assignments}rpcpasswd='$(sql_escape "$pass")'"
+  fi
+  if [ -z "$assignments" ]; then
+    return 1
+  fi
+  printf "%s\n" "UPDATE coins SET $assignments WHERE id=$ROW_ID LIMIT 1;" | $DB_CLI "$DB_NAME"
+  return "$?"
+}
+
+service_active() {
+  systemctl is-active "$1" 2>/dev/null
+}
+
+service_enabled() {
+  systemctl is-enabled "$1" 2>/dev/null
+}
+
+service_restart_count() {
+  systemctl show "$1" -p NRestarts --value 2>/dev/null
+}
+
+config_disablewallet_state() {
+  if [ ! -f "$CONFIG_PATH" ]; then
+    printf 'config-missing'
+    return
+  fi
+  local active commented
+  active="$(grep -E '^[[:space:]]*disablewallet[[:space:]]*=[[:space:]]*1([[:space:]]*(#.*)?)?$' "$CONFIG_PATH" 2>/dev/null | wc -l)"
+  commented="$(grep -E '^[[:space:]]*#[[:space:]]*disablewallet[[:space:]]*=[[:space:]]*1' "$CONFIG_PATH" 2>/dev/null | wc -l)"
+  if [ "$active" -gt 0 ]; then
+    printf 'present-active'
+  elif [ "$commented" -gt 0 ]; then
+    printf 'commented'
+  else
+    printf 'absent'
+  fi
+}
+
+cookie_path() {
+  printf '%s/.cookie' "$DATADIR"
+}
+
+cookie_exists() {
+  [ -s "$(cookie_path)" ]
+}
+
+cookie_user() {
+  local c
+  c="$(cat "$(cookie_path)" 2>/dev/null)"
+  printf '%s' "${c%%:*}"
+}
+
+cookie_pass() {
+  local c
+  c="$(cat "$(cookie_path)" 2>/dev/null)"
+  printf '%s' "${c#*:}"
+}
+
+cookie_config_file() {
+  local tmp
+  tmp="$(mktemp 2>/dev/null)"
+  if [ -z "$tmp" ]; then
+    return 1
+  fi
+  chmod 600 "$tmp" 2>/dev/null
+  {
+    printf 'silent\n'
+    printf 'show-error\n'
+    printf 'user = "%s"\n' "$(cat "$(cookie_path)" 2>/dev/null)"
+    printf 'header = "content-type: text/plain;"\n'
+    printf 'connect-timeout = 5\n'
+    printf 'max-time = 20\n'
+  } > "$tmp"
+  printf '%s' "$tmp"
+}
+
+rpc_call() {
+  local method="$1"
+  local params="$2"
+  local outfile="$3"
+  local cfg
+  if ! cookie_exists; then
+    return 44
+  fi
+  cfg="$(cookie_config_file)"
+  if [ -z "$cfg" ] || [ ! -f "$cfg" ]; then
+    return 45
+  fi
+  curl --config "$cfg" --data-binary "{\"jsonrpc\":\"1.0\",\"id\":\"badpool-tool\",\"method\":\"$method\",\"params\":$params}" "http://$RPC_HOST:$RPC_PORT/" > "$outfile" 2>"$outfile.err"
+  local rc="$?"
+  rm -f "$cfg" 2>/dev/null
+  return "$rc"
+}
+
+rpc_ok() {
+  local method="$1"
+  local params="$2"
+  local tmp
+  tmp="$(mktemp 2>/dev/null)"
+  rpc_call "$method" "$params" "$tmp"
+  local rc="$?"
+  if [ "$rc" -ne 0 ]; then
+    rm -f "$tmp" "$tmp.err" 2>/dev/null
+    return "$rc"
+  fi
+  if grep -q '"error"[[:space:]]*:[[:space:]]*null' "$tmp" 2>/dev/null; then
+    rm -f "$tmp" "$tmp.err" 2>/dev/null
+    return 0
+  fi
+  rm -f "$tmp" "$tmp.err" 2>/dev/null
+  return 1
+}
+
+rpc_result_file() {
+  local method="$1"
+  local params="$2"
+  local tmp
+  tmp="$(mktemp 2>/dev/null)"
+  rpc_call "$method" "$params" "$tmp"
+  local rc="$?"
+  if [ "$rc" -ne 0 ]; then
+    printf '%s' "$tmp"
+    return "$rc"
+  fi
+  printf '%s' "$tmp"
+  return 0
+}
+
+rpc_method_available() {
+  local method="$1"
+  local tmp
+  tmp="$(rpc_result_file help "[\"$method\"]")"
+  local rc="$?"
+  if [ "$rc" -eq 0 ] && grep -q '"error"[[:space:]]*:[[:space:]]*null' "$tmp" 2>/dev/null; then
+    rm -f "$tmp" "$tmp.err" 2>/dev/null
+    return 0
+  fi
+  rm -f "$tmp" "$tmp.err" 2>/dev/null
+  return 1
+}
+
+rpc_validate_address_field() {
+  local address="$1"
+  local field="$2"
+  local tmp val
+  tmp="$(rpc_result_file validateaddress "[\"$address\"]")"
+  if [ "$?" -ne 0 ]; then
+    rm -f "$tmp" "$tmp.err" 2>/dev/null
+    printf 'rpc-failed'
+    return 1
+  fi
+  if command -v jq >/dev/null 2>&1; then
+    val="$(jq -r ".result.$field // \"missing\"" "$tmp" 2>/dev/null)"
+  else
+    val="$(grep -o "\"$field\"[[:space:]]*:[[:space:]]*[^,}]*" "$tmp" 2>/dev/null | head -n 1 | sed 's/.*:[[:space:]]*//;s/[",]//g')"
+    if [ -z "$val" ]; then
+      val="missing"
+    fi
+  fi
+  rm -f "$tmp" "$tmp.err" 2>/dev/null
+  printf '%s' "$val"
+}
+
+rpc_getnewaddress() {
+  local account="$1"
+  local tmp addr
+  tmp="$(rpc_result_file getnewaddress "[\"$account\"]")"
+  if [ "$?" -ne 0 ]; then
+    rm -f "$tmp" "$tmp.err" 2>/dev/null
+    return 1
+  fi
+  if command -v jq >/dev/null 2>&1; then
+    addr="$(jq -r '.result // empty' "$tmp" 2>/dev/null)"
+  else
+    addr="$(sed -n 's/.*"result"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$tmp" 2>/dev/null | head -n 1)"
+  fi
+  rm -f "$tmp" "$tmp.err" 2>/dev/null
+  if [ -z "$addr" ] || [ "$addr" = "null" ]; then
+    return 1
+  fi
+  printf '%s' "$addr"
+  return 0
+}
+
+listener_live() {
+  if command -v ss >/dev/null 2>&1; then
+    ss -ltn 2>/dev/null | awk '{print $4}' | grep -Eq "[:.]$STRATUM_PORT$"
+    return "$?"
+  fi
+  if command -v netstat >/dev/null 2>&1; then
+    netstat -ltn 2>/dev/null | awk '{print $4}' | grep -Eq "[:.]$STRATUM_PORT$"
+    return "$?"
+  fi
+  return 2
+}
+
+active_public_ports() {
+  if command -v ss >/dev/null 2>&1; then
+    ss -ltn 2>/dev/null | awk 'NR>1 {print $4}' | sed 's/.*://g' | sort -n | uniq | tr '\n' ' '
+    return
+  fi
+  if command -v netstat >/dev/null 2>&1; then
+    netstat -ltn 2>/dev/null | awk 'NR>2 {print $4}' | sed 's/.*://g' | sort -n | uniq | tr '\n' ' '
+    return
+  fi
+  printf 'unknown'
+}
+
+global_accounting_freeze_report() {
+  print_section "global accounting freeze"
+  local blocks_active blocks_enabled loop_active loop_enabled main_count backend_count cron_count
+  blocks_active="$(service_active badpool-blocks.service)"
+  blocks_enabled="$(service_enabled badpool-blocks.service)"
+  loop_active="$(service_active badpool-loop2.service)"
+  loop_enabled="$(service_enabled badpool-loop2.service)"
+  main_count="$(pgrep -af '(^|/)main\.sh($|[[:space:]])' 2>/dev/null | grep -v grep | wc -l)"
+  backend_count="$(pgrep -af 'BackendPayments|BackendCoinPayments' 2>/dev/null | grep -v grep | wc -l)"
+  cron_count="$(pgrep -af 'cronjob/run' 2>/dev/null | grep -v grep | wc -l)"
+  GLOBAL_PAYOUTS_COUNT="$(db_scalar_count payouts '')"
+  GLOBAL_WITHDRAWS_COUNT="$(db_scalar_count withdraws '')"
+
+  info "badpool-blocks.service active=$blocks_active enabled=$blocks_enabled"
+  info "badpool-loop2.service active=$loop_active enabled=$loop_enabled"
+  info "main.sh process count=$main_count"
+  info "BackendPayments/BackendCoinPayments process count=$backend_count"
+  info "cronjob/run process count=$cron_count"
+  info "payouts count=$GLOBAL_PAYOUTS_COUNT"
+  info "withdraws count=$GLOBAL_WITHDRAWS_COUNT"
+  info "active public/listening ports=$(active_public_ports)"
+  info "load=$(cat /proc/loadavg 2>/dev/null | awk '{print $1,$2,$3}')"
+  info "ram/swap=$(free -h 2>/dev/null | awk 'NR==2 {printf \"mem used/total=\" $3 \"/\" $2} NR==3 {printf \" swap used/total=\" $3 \"/\" $2}')"
+}
+
+accounting_freeze_ok() {
+  local blocks_active loop_active main_count backend_count cron_count
+  blocks_active="$(service_active badpool-blocks.service)"
+  loop_active="$(service_active badpool-loop2.service)"
+  main_count="$(pgrep -af '(^|/)main\.sh($|[[:space:]])' 2>/dev/null | grep -v grep | wc -l)"
+  backend_count="$(pgrep -af 'BackendPayments|BackendCoinPayments' 2>/dev/null | grep -v grep | wc -l)"
+  cron_count="$(pgrep -af 'cronjob/run' 2>/dev/null | grep -v grep | wc -l)"
+  GLOBAL_PAYOUTS_COUNT="$(db_scalar_count payouts '')"
+  GLOBAL_WITHDRAWS_COUNT="$(db_scalar_count withdraws '')"
+
+  [ "$blocks_active" != "active" ] &&
+    [ "$loop_active" != "active" ] &&
+    [ "$main_count" = "0" ] &&
+    [ "$backend_count" = "0" ] &&
+    [ "$cron_count" = "0" ] &&
+    [ "$GLOBAL_PAYOUTS_COUNT" = "0" ] &&
+    [ "$GLOBAL_WITHDRAWS_COUNT" = "0" ]
+}
+
+cookie_match_status() {
+  if ! cookie_exists; then
+    printf 'cookie-missing'
+    return
+  fi
+  local db_user db_pass_len db_pass live_user live_pass
+  db_user="$(db_coin_raw_field rpcuser)"
+  if db_column_exists "coins" "rpcpasswd"; then
+    db_pass="$(db_query "SELECT COALESCE(rpcpasswd, '') FROM coins WHERE id=$ROW_ID LIMIT 1;")"
+    db_pass_len="$(printf '%s' "$db_pass" | wc -c | tr -d ' ')"
+  else
+    db_pass=""
+    db_pass_len="missing-column"
+  fi
+  live_user="$(cookie_user)"
+  live_pass="$(cookie_pass)"
+  if [ "$db_user:$db_pass" = "$live_user:$live_pass" ]; then
+    printf 'match-full'
+  elif [ "$db_pass" = "$live_pass" ]; then
+    printf 'match-password'
+  else
+    printf 'mismatch db_rpcpasswd_len=%s live_cookie_pass_len=%s' "$db_pass_len" "$(printf '%s' "$live_pass" | wc -c | tr -d ' ')"
+  fi
+}
+
+recent_count_for_algo() {
+  local table="$1"
+  local where=""
+  if ! db_table_exists "$table"; then
+    printf 'missing-table'
+    return
+  fi
+  if db_column_exists "$table" "algo"; then
+    where="algo='$(sql_escape "$YIIMP_ALGO")'"
+  elif db_column_exists "$table" "coinid"; then
+    where="coinid=$ROW_ID"
+  elif db_column_exists "$table" "coin_id"; then
+    where="coin_id=$ROW_ID"
+  fi
+  if [ -n "$where" ]; then
+    db_scalar_count "$table" "$where"
+  else
+    db_scalar_count "$table" ""
+  fi
+}
+
+risk_classification() {
+  local wallet_rpc="$1"
+  local owns="$2"
+  local gbt="$3"
+  local cookie="$4"
+  if [ "$wallet_rpc" = "ok" ] && [ "$owns" = "true" ] && [ "$gbt" = "ok" ] && printf '%s' "$cookie" | grep -q '^match'; then
+    printf 'low-for-forward-proof'
+  elif [ "$gbt" = "ok" ] && [ "$wallet_rpc" != "ok" ]; then
+    printf 'wallet-accounting-risk'
+  else
+    printf 'blocked'
+  fi
+}
+
+preflight_one() {
+  load_algo "$1"
+  print_section "preflight $ALGO"
+
+  local row dbline symbol db_algo db_account db_master db_rpcuser db_rpcpasswd_len db_rpchost db_rpcport db_rpcencoding
+  dbline="$(db_coin_projection)"
+  if [ -z "$dbline" ]; then
+    info "expected row id=$ROW_ID"
+    info "DB row exists=false"
+    SUMMARY_ROWS="${SUMMARY_ROWS}${ALGO} | ${ROW_ID} | unknown | unknown | unknown | unknown | unknown | unknown | no"$'\n'
+    return
+  fi
+
+  IFS="$(printf '\t')" read -r row symbol db_algo db_account db_master db_rpcuser db_rpcpasswd_len db_rpchost db_rpcport db_rpcencoding <<EOF
+$dbline
+EOF
+
+  local daemon_active daemon_enabled stratum_active stratum_enabled disable_state wallet_exists cookie_state chain_ok ibd warnings gbt_ok wallet_help wallet_info tx_help owns valid watchonly labels cookie_match shares_count blocks_count risk ready
+
+  daemon_active="$(service_active "$DAEMON_SERVICE")"
+  daemon_enabled="$(service_enabled "$DAEMON_SERVICE")"
+  stratum_active="$(service_active "$STRATUM_SERVICE")"
+  stratum_enabled="$(service_enabled "$STRATUM_SERVICE")"
+  disable_state="$(config_disablewallet_state)"
+  if [ -f "$DATADIR/wallet.dat" ]; then wallet_exists="yes"; else wallet_exists="no"; fi
+  if cookie_exists; then cookie_state="yes"; else cookie_state="no"; fi
+
+  if rpc_ok getblockchaininfo "[]"; then chain_ok="ok"; else chain_ok="fail"; fi
+  local chain_tmp
+  chain_tmp="$(rpc_result_file getblockchaininfo "[]")"
+  if [ "$?" -eq 0 ]; then
+    ibd="$(json_get '.result.initialblockdownload' "$chain_tmp")"
+    warnings="$(json_get '.result.warnings' "$chain_tmp")"
+  else
+    ibd="unknown"
+    warnings="rpc-failed"
+  fi
+  rm -f "$chain_tmp" "$chain_tmp.err" 2>/dev/null
+
+  if rpc_ok getblocktemplate "[]"; then gbt_ok="ok"; else gbt_ok="fail"; fi
+  if rpc_method_available getwalletinfo; then wallet_help="available"; else wallet_help="missing-or-failed"; fi
+  if rpc_ok getwalletinfo "[]"; then wallet_info="ok"; else wallet_info="fail"; fi
+  if rpc_method_available gettransaction; then tx_help="available"; else tx_help="missing-or-failed"; fi
+
+  if [ -n "$db_master" ] && [ "$db_master" != "<missing:master_wallet>" ]; then
+    valid="$(rpc_validate_address_field "$db_master" "isvalid")"
+    owns="$(rpc_validate_address_field "$db_master" "ismine")"
+    watchonly="$(rpc_validate_address_field "$db_master" "iswatchonly")"
+    labels="$(rpc_validate_address_field "$db_master" "labels")"
+  else
+    valid="missing-master-wallet"
+    owns="false"
+    watchonly="missing"
+    labels="missing"
+  fi
+
+  if [ -n "$COOKIE_REFRESH_HELPER" ] && [ -x "$COOKIE_REFRESH_HELPER" ]; then
+    helper_state="env-helper-executable"
+  elif [ -x "/usr/local/sbin/badpool-refresh-row-cookie" ]; then
+    helper_state="/usr/local/sbin/badpool-refresh-row-cookie"
+  else
+    helper_state="not-found; built-in safe refresh available in apply"
+  fi
+
+  cookie_match="$(cookie_match_status)"
+  shares_count="$(recent_count_for_algo shares)"
+  blocks_count="$(recent_count_for_algo blocks)"
+  risk="$(risk_classification "$wallet_info" "$owns" "$gbt_ok" "$cookie_match")"
+  if [ "$risk" = "low-for-forward-proof" ]; then ready="yes"; else ready="no"; fi
+
+  info "expected row id=$ROW_ID"
+  info "DB row exists=true"
+  info "symbol=$symbol"
+  info "DB algo=$db_algo expected_yiimp_algo=$YIIMP_ALGO daemon_algo=$DAEMON_ALGO public_label=$PUBLIC_LABEL"
+  info "account=$db_account expected_account=$ACCOUNT"
+  info "master_wallet=$db_master"
+  info "rpc host/port expected=$RPC_HOST:$RPC_PORT db_host=$db_rpchost db_port=$db_rpcport"
+  info "rpcuser=$db_rpcuser"
+  info "rpcpasswd length only=$db_rpcpasswd_len"
+  info "rpccurl=http://$RPC_HOST:$RPC_PORT/ user=<cookie-or-db-redacted>"
+  info "daemon service $DAEMON_SERVICE active=$daemon_active enabled=$daemon_enabled"
+  info "stratum service $STRATUM_SERVICE active=$stratum_active enabled=$stratum_enabled"
+  info "config exists=$([ -f "$CONFIG_PATH" ] && printf yes || printf no) path=$CONFIG_PATH"
+  info "disablewallet state=$disable_state"
+  info "datadir exists=$([ -d "$DATADIR" ] && printf yes || printf no) path=$DATADIR"
+  info "wallet.dat exists=$wallet_exists"
+  info "cookie exists=$cookie_state"
+  info "RPC reachable/getblockchaininfo=$chain_ok"
+  info "initialblockdownload=$ibd"
+  info "warnings=${warnings:-none}"
+  info "getblocktemplate=$gbt_ok"
+  info "help getwalletinfo=$wallet_help"
+  info "getwalletinfo=$wallet_info"
+  info "help gettransaction=$tx_help"
+  info "current master_wallet ownership isvalid=$valid ismine=$owns iswatchonly=$watchonly account_or_labels=$labels"
+  info "readiness helper=$helper_state"
+  info "row/live cookie match=$cookie_match"
+  info "recent shares count=$shares_count"
+  info "recent blocks count=$blocks_count"
+  info "risk classification=$risk"
+
+  SUMMARY_ROWS="${SUMMARY_ROWS}${ALGO} | ${ROW_ID} | ${daemon_active}/${daemon_enabled} | ${stratum_active}/${stratum_enabled} | ${wallet_info} | ${owns} | ${gbt_ok} | ${cookie_match} | ${ready}"$'\n'
+}
+
+verify_one() {
+  load_algo "$1"
+  print_section "verify $ALGO"
+
+  local db_account db_master wallet_exists wallet_info tx_help gbt_ok owns cookie_match stratum_live stratum_active freeze payout_after withdraw_after ready
+  db_account="$(db_coin_raw_field account)"
+  db_master="$(db_coin_raw_field master_wallet)"
+  if [ -f "$DATADIR/wallet.dat" ]; then wallet_exists="yes"; else wallet_exists="no"; fi
+  if rpc_ok getwalletinfo "[]"; then wallet_info="ok"; else wallet_info="fail"; fi
+  if rpc_method_available gettransaction; then tx_help="available"; else tx_help="missing-or-failed"; fi
+  if rpc_ok getblocktemplate "[]"; then gbt_ok="ok"; else gbt_ok="fail"; fi
+  owns="$(rpc_validate_address_field "$db_master" "ismine")"
+  cookie_match="$(cookie_match_status)"
+  if listener_live; then stratum_live="yes"; else stratum_live="no"; fi
+  stratum_active="$(service_active "$STRATUM_SERVICE")"
+  if accounting_freeze_ok; then freeze="ok"; else freeze="not-ok"; fi
+  payout_after="$(db_scalar_count payouts '')"
+  withdraw_after="$(db_scalar_count withdraws '')"
+  if [ "$wallet_info" = "ok" ] && [ "$tx_help" = "available" ] && [ "$gbt_ok" = "ok" ] && [ "$owns" = "true" ] && [ "$db_account" = "$ACCOUNT" ] && printf '%s' "$cookie_match" | grep -q '^match' && [ "$stratum_live" = "yes" ] && [ "$freeze" = "ok" ] && [ "$payout_after" = "0" ] && [ "$withdraw_after" = "0" ]; then
+    ready="yes"
+  else
+    ready="no"
+  fi
+
+  info "daemon wallet exists=$wallet_exists"
+  info "wallet RPC getwalletinfo=$wallet_info"
+  info "gettransaction exists=$tx_help"
+  info "getblocktemplate=$gbt_ok"
+  info "DB master_wallet owned by daemon=$owns"
+  info "target row account=$db_account expected=$ACCOUNT"
+  info "target row cookie match=$cookie_match"
+  info "target stratum live=$stratum_live active=$stratum_active"
+  info "payouts count=$payout_after"
+  info "withdraws count=$withdraw_after"
+  info "accounting loops frozen=$freeze"
+
+  SUMMARY_ROWS="${SUMMARY_ROWS}${ALGO} | ${ROW_ID} | $(service_active "$DAEMON_SERVICE")/$(service_enabled "$DAEMON_SERVICE") | ${stratum_active}/$(service_enabled "$STRATUM_SERVICE") | ${wallet_info} | ${owns} | ${gbt_ok} | ${cookie_match} | ${ready}"$'\n'
+}
+
+backup_one() {
+  load_algo "$1"
+  local dir="$BACKUP_ROOT/$NOW_UTC-$ALGO"
+  mkdir -p "$dir" 2>/dev/null
+  if [ "$?" -ne 0 ]; then
+    fail "cannot create backup directory $dir"
+  fi
+  chmod 700 "$dir" 2>/dev/null
+
+  print_section "backup $ALGO"
+  if [ -f "$CONFIG_PATH" ]; then
+    cp -a "$CONFIG_PATH" "$dir/$(basename "$CONFIG_PATH").bak"
+    info "config backup=$dir/$(basename "$CONFIG_PATH").bak"
+  else
+    fail "target config missing: $CONFIG_PATH"
+  fi
+
+  systemctl cat "$DAEMON_SERVICE" > "$dir/$DAEMON_SERVICE.systemctl-cat.txt" 2>/dev/null
+  systemctl cat "$STRATUM_SERVICE" > "$dir/$STRATUM_SERVICE.systemctl-cat.txt" 2>/dev/null
+  info "service/drop-in snapshots=$dir"
+
+  db_query_show_errors "SELECT * FROM coins WHERE id=$ROW_ID;" > "$dir/coin-row-$ROW_ID.tsv"
+  if [ "$?" -ne 0 ] || [ ! -s "$dir/coin-row-$ROW_ID.tsv" ]; then
+    fail "target BAD row backup failed for row $ROW_ID"
+  fi
+  chmod 600 "$dir/coin-row-$ROW_ID.tsv" 2>/dev/null
+  info "target BAD row backup=$dir/coin-row-$ROW_ID.tsv"
+  info "WARNING: coin row backup may contain RPC credentials; keep root-only and do not paste into chat/logs"
+
+  {
+    printf 'payouts_count\t%s\n' "$(db_scalar_count payouts '')"
+    printf 'withdraws_count\t%s\n' "$(db_scalar_count withdraws '')"
+    printf 'blocks_count_for_algo\t%s\n' "$(recent_count_for_algo blocks)"
+    printf 'shares_count_for_algo\t%s\n' "$(recent_count_for_algo shares)"
+  } > "$dir/minimal-accounting-snapshot.tsv"
+  info "minimal accounting snapshot=$dir/minimal-accounting-snapshot.tsv"
+}
+
+comment_disablewallet() {
+  print_section "config edit $ALGO"
+  if [ ! -f "$CONFIG_PATH" ]; then
+    fail "config missing: $CONFIG_PATH"
+  fi
+  local count
+  count="$(grep -E '^[[:space:]]*disablewallet[[:space:]]*=[[:space:]]*1([[:space:]]*(#.*)?)?$' "$CONFIG_PATH" 2>/dev/null | wc -l)"
+  if [ "$count" -eq 0 ]; then
+    info "no active disablewallet=1 line to comment"
+    return 0
+  fi
+  local tmp
+  tmp="$(mktemp 2>/dev/null)"
+  awk '
+    /^[[:space:]]*disablewallet[[:space:]]*=[[:space:]]*1([[:space:]]*(#.*)?)?$/ {
+      print "# " $0 " # commented by badpool-wallet-accounting-tool " strftime("%Y-%m-%dT%H:%M:%SZ", systime(), 1)
+      next
+    }
+    { print }
+  ' "$CONFIG_PATH" > "$tmp"
+  if [ "$?" -ne 0 ] || [ ! -s "$tmp" ]; then
+    rm -f "$tmp" 2>/dev/null
+    fail "failed preparing config edit"
+  fi
+  cat "$tmp" > "$CONFIG_PATH"
+  rm -f "$tmp" 2>/dev/null
+  info "commented active disablewallet=1 lines in $CONFIG_PATH"
+}
+
+wait_service_active() {
+  local svc="$1"
+  local tries=30
+  local i=0
+  while [ "$i" -lt "$tries" ]; do
+    if [ "$(service_active "$svc")" = "active" ]; then
+      return 0
+    fi
+    sleep 2
+    i=$((i + 1))
+  done
+  return 1
+}
+
+wait_rpc_chain() {
+  local tries=45
+  local i=0
+  while [ "$i" -lt "$tries" ]; do
+    if rpc_ok getblockchaininfo "[]"; then
+      return 0
+    fi
+    sleep 2
+    i=$((i + 1))
+  done
+  return 1
+}
+
+ensure_wallet_rpc() {
+  if rpc_ok getwalletinfo "[]"; then
+    return 0
+  fi
+
+  if rpc_method_available createwallet; then
+    local tmp
+    tmp="$(rpc_result_file createwallet "[\"\",false,false,\"\",false,true]")"
+    if grep -q '"error"[[:space:]]*:[[:space:]]*null' "$tmp" 2>/dev/null; then
+      rm -f "$tmp" "$tmp.err" 2>/dev/null
+      sleep 2
+      rpc_ok getwalletinfo "[]"
+      return "$?"
+    fi
+    rm -f "$tmp" "$tmp.err" 2>/dev/null
+  fi
+
+  return 1
+}
+
+refresh_cookie() {
+  print_section "cookie refresh $ALGO"
+  if ! cookie_exists; then
+    fail "cookie missing after daemon restart: $(cookie_path)"
+  fi
+
+  if [ -n "$COOKIE_REFRESH_HELPER" ] && [ -x "$COOKIE_REFRESH_HELPER" ]; then
+    local helper_log
+    helper_log="$(mktemp 2>/dev/null)"
+    "$COOKIE_REFRESH_HELPER" "$ALGO" > "$helper_log" 2>&1
+    if [ "$?" -ne 0 ]; then
+      rm -f "$helper_log" 2>/dev/null
+      fail "configured cookie refresh helper failed"
+    fi
+    rm -f "$helper_log" 2>/dev/null
+    info "cookie refresh helper completed"
+  elif [ -x "/usr/local/sbin/badpool-refresh-row-cookie" ]; then
+    local helper_log
+    helper_log="$(mktemp 2>/dev/null)"
+    /usr/local/sbin/badpool-refresh-row-cookie "$ALGO" > "$helper_log" 2>&1
+    if [ "$?" -ne 0 ]; then
+      rm -f "$helper_log" 2>/dev/null
+      fail "default cookie refresh helper failed"
+    fi
+    rm -f "$helper_log" 2>/dev/null
+    info "default cookie refresh helper completed"
+  else
+    local user pass
+    user="$(cookie_user)"
+    pass="$(cookie_pass)"
+    if [ -z "$user" ] || [ -z "$pass" ] || [ "$user" = "$pass" ]; then
+      fail "live cookie parse failed; refusing DB cookie update"
+    fi
+    db_update_coin_cookie "$user" "$pass"
+    if [ "$?" -ne 0 ]; then
+      fail "built-in safe row cookie refresh failed"
+    fi
+    info "built-in safe row cookie refresh updated only row $ROW_ID; secrets not printed"
+  fi
+
+  local match
+  match="$(cookie_match_status)"
+  info "post-refresh DB/live cookie match=$match"
+  printf '%s' "$match" | grep -q '^match'
+  if [ "$?" -ne 0 ]; then
+    fail "DB/live cookie mismatch after refresh"
+  fi
+}
+
+apply_one() {
+  load_algo "$1"
+
+  print_section "apply gate $ALGO"
+  if ! algo_apply_allowed "$ALGO"; then
+    fail "--apply $ALGO is not allowed by this tool"
+  fi
+  if [ "$APPLY_CONFIRM" != "I understand this mutates one BadPool algo" ]; then
+    fail "set BADPOOL_APPLY_CONFIRM='I understand this mutates one BadPool algo' for one-algo apply"
+  fi
+  if [ "$TARGET" = "all" ]; then
+    fail "--apply all is forbidden"
+  fi
+
+  local row_count
+  row_count="$(db_query "SELECT COUNT(*) FROM coins WHERE id=$ROW_ID AND algo='$(sql_escape "$YIIMP_ALGO")';")"
+  if [ "$row_count" != "1" ]; then
+    fail "target mapping mismatch for row $ROW_ID / yiimp algo $YIIMP_ALGO"
+  fi
+  info "target mapping confirmed row=$ROW_ID algo=$YIIMP_ALGO daemon_algo=$DAEMON_ALGO account=$ACCOUNT"
+
+  if ! accounting_freeze_ok; then
+    global_accounting_freeze_report
+    fail "accounting freeze/payout gate not clean"
+  fi
+  info "accounting freeze confirmed; payouts=0 withdraws=0"
+
+  if ! cookie_exists; then
+    fail "cookie missing before apply: $(cookie_path)"
+  fi
+  if ! rpc_ok getblockchaininfo "[]"; then
+    fail "daemon RPC unreachable before apply"
+  fi
+  if ! rpc_ok getblocktemplate "[]"; then
+    fail "getblocktemplate fails before apply"
+  fi
+
+  backup_one "$ALGO"
+
+  print_section "stop target stratum $ALGO"
+  systemctl stop "$STRATUM_SERVICE"
+  if [ "$?" -ne 0 ]; then
+    fail "failed stopping target stratum $STRATUM_SERVICE"
+  fi
+  info "stopped only $STRATUM_SERVICE"
+
+  comment_disablewallet
+
+  print_section "restart target daemon $ALGO"
+  systemctl restart "$DAEMON_SERVICE"
+  if [ "$?" -ne 0 ]; then
+    fail "failed restarting target daemon $DAEMON_SERVICE"
+  fi
+  if ! wait_service_active "$DAEMON_SERVICE"; then
+    fail "target daemon did not return active"
+  fi
+  if ! wait_rpc_chain; then
+    fail "target daemon chain RPC did not recover"
+  fi
+  info "daemon active and chain RPC healthy"
+
+  if ! ensure_wallet_rpc; then
+    fail "wallet RPC unavailable after wallet-enable attempt"
+  fi
+  info "wallet RPC healthy"
+  if ! rpc_method_available gettransaction; then
+    fail "gettransaction remains unavailable"
+  fi
+  if ! rpc_ok getblocktemplate "[]"; then
+    fail "getblocktemplate failed after restart"
+  fi
+
+  print_section "new reward address $ALGO"
+  local new_addr valid owns
+  new_addr="$(rpc_getnewaddress "$ACCOUNT")"
+  if [ -z "$new_addr" ]; then
+    fail "failed generating new reward address"
+  fi
+  valid="$(rpc_validate_address_field "$new_addr" "isvalid")"
+  owns="$(rpc_validate_address_field "$new_addr" "ismine")"
+  info "generated one new reward address for account=$ACCOUNT"
+  addr_suffix="$(printf "%s" "$new_addr" | sed "s/^.*\\(.\\{8\\}\\)$/<redacted:\\1>/")"
+  info "new address validation isvalid=$valid ismine=$owns address=$addr_suffix"
+  if [ "$valid" != "true" ] || [ "$owns" != "true" ]; then
+    fail "generated reward address is not valid/owned"
+  fi
+
+  print_section "DB target row update $ALGO"
+  db_update_coin_wallet_account "$new_addr" "$ACCOUNT"
+  if [ "$?" -ne 0 ]; then
+    fail "failed updating only target BAD row"
+  fi
+  info "updated only coins.id=$ROW_ID account=$ACCOUNT master_wallet=<new daemon-owned address>"
+
+  refresh_cookie
+
+  print_section "restart target stratum $ALGO"
+  local restarts_before restarts_after
+  restarts_before="$(service_restart_count "$STRATUM_SERVICE")"
+  systemctl restart "$STRATUM_SERVICE"
+  if [ "$?" -ne 0 ]; then
+    fail "failed restarting target stratum $STRATUM_SERVICE"
+  fi
+  if ! wait_service_active "$STRATUM_SERVICE"; then
+    fail "target stratum did not return active"
+  fi
+  sleep 3
+  restarts_after="$(service_restart_count "$STRATUM_SERVICE")"
+  if listener_live; then
+    info "listener live on port $STRATUM_PORT"
+  else
+    fail "stratum listener not live on port $STRATUM_PORT"
+  fi
+  info "stratum service active; NRestarts before=$restarts_before after=$restarts_after"
+
+  if ! accounting_freeze_ok; then
+    global_accounting_freeze_report
+    fail "accounting loops/payout rows changed after apply"
+  fi
+  info "no payout/withdraw rows created; accounting loops still frozen"
+
+  verify_one "$ALGO"
+}
+
+summary_table() {
+  print_section "summary table"
+  info "algo | row | daemon | stratum | wallet_rpc | owns_master_wallet | gbt | cookie_match | ready_for_forward_proof"
+  printf '%s' "$SUMMARY_ROWS"
+}
+
+main() {
+  parse_args "$@"
+  algo_known "$TARGET"
+  if [ "$?" -ne 0 ]; then
+    fail "unknown target: $TARGET"
+  fi
+  if [ "$MODE" = "apply" ] && [ "$TARGET" = "all" ]; then
+    fail "--apply all is forbidden"
+  fi
+
+  need_cmd mysql
+  need_cmd curl
+  need_cmd systemctl
+  need_cmd grep
+  need_cmd awk
+  need_cmd sed
+
+  print_section "badpool wallet accounting tool"
+  info "version=$VERSION"
+  info "mode=$MODE target=$TARGET"
+  info "db=$DB_NAME"
+  info "no secrets are printed; RPC password/cookie values are redacted or length-only"
+
+  global_accounting_freeze_report
+
+  if [ "$MODE" = "preflight" ]; then
+    if [ "$TARGET" = "all" ]; then
+      for a in yescrypt scrypt skein groestl sha256d; do
+        preflight_one "$a"
+      done
+    else
+      preflight_one "$TARGET"
+    fi
+  elif [ "$MODE" = "verify" ]; then
+    if [ "$TARGET" = "all" ]; then
+      fail "--verify all is intentionally unsupported; verify one algo at a time"
+    fi
+    verify_one "$TARGET"
+  elif [ "$MODE" = "apply" ]; then
+    apply_one "$TARGET"
+  else
+    fail "unknown mode: $MODE"
+  fi
+
+  summary_table
+}
+
+main "$@"
