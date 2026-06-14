@@ -1,5 +1,15 @@
 
 #include "stratum.h"
+// --- YESCRYPT DEBUG HELPER ---
+static void debug_hex(const char* label, const unsigned char* data, int len)
+{
+    char buf[512];
+    for (int i = 0; i < len; i++)
+        sprintf(buf + i*2, "%02x", data[i]);
+    buf[len*2] = 0;
+    debuglog("%s: %s", label, buf);
+}
+
 
 uint64_t lyra2z_height = 0;
 
@@ -50,6 +60,13 @@ void build_submit_values(YAAMP_JOB_VALUES *submitvalues, YAAMP_JOB_TEMPLATE *tem
 //	printf("%s\n", submitvalues->header_be);
 	int header_len = strlen(submitvalues->header)/2;
 	g_current_algo->hash_function((char *)submitvalues->header_bin, (char *)submitvalues->hash_bin, header_len);
+
+    if (!strcmp(g_stratum_algo, "yescrypt")) {
+        debuglog("=== YESCRYPT HASH DEBUG ===");
+        debug_hex("header_bin", submitvalues->header_bin, header_len);
+        debug_hex("hash_bin", submitvalues->hash_bin, 32);
+    }
+
 
 	hexlify(submitvalues->hash_hex, submitvalues->hash_bin, 32);
 	string_be(submitvalues->hash_hex, submitvalues->hash_be);
@@ -130,6 +147,13 @@ static void build_submit_values_decred(YAAMP_JOB_VALUES *submitvalues, YAAMP_JOB
 	int header_len = strlen(submitvalues->header)/2;
 	g_current_algo->hash_function((char *)submitvalues->header_bin, (char *)submitvalues->hash_bin, header_len);
 
+    if (!strcmp(g_stratum_algo, "yescrypt")) {
+        debuglog("=== YESCRYPT HASH DEBUG ===");
+        debug_hex("header_bin", submitvalues->header_bin, header_len);
+        debug_hex("hash_bin", submitvalues->hash_bin, 32);
+    }
+
+
 	hexlify(submitvalues->hash_hex, submitvalues->hash_bin, 32);
 	string_be(submitvalues->hash_hex, submitvalues->hash_be);
 }
@@ -148,6 +172,8 @@ static void client_do_submit(YAAMP_CLIENT *client, YAAMP_JOB *job, YAAMP_JOB_VAL
 	uint64_t hash_int = get_hash_difficulty(submitvalues->hash_bin);
 	uint64_t coin_target = decode_compact(templ->nbits);
 	if (templ->nbits && !coin_target) coin_target = 0xFFFF000000000000ULL;
+
+        bool full_block_target = hash_meets_target_from_nbits(submitvalues->hash_be, templ->nbits, NULL);
 
 	int block_size = YAAMP_SMALLBUFSIZE;
 	vector<string>::const_iterator i;
@@ -216,7 +242,7 @@ static void client_do_submit(YAAMP_CLIENT *client, YAAMP_JOB *job, YAAMP_JOB_VAL
 		}
 	}
 
-	if(hash_int <= coin_target)
+	if(full_block_target)
 	{
 		char count_hex[8] = { 0 };
 		if (templ->txcount <= 252)
@@ -497,7 +523,7 @@ bool client_submit(YAAMP_CLIENT *client, json_value *json_params)
 
 	// minimum hash diff begins with 0000, for all...
 	uint8_t pfx = submitvalues.hash_bin[30] | submitvalues.hash_bin[31];
-	if(pfx) {
+	if(pfx && strcmp(g_current_algo->name, "scrypt") && strcmp(g_current_algo->name, "yescrypt") && strcmp(g_current_algo->name, "sha256")) {
 		if (g_debuglog_hash) {
 			debuglog("Possible %s error, hash starts with %02x%02x%02x%02x\n", g_current_algo->name,
 				(int) submitvalues.hash_bin[31], (int) submitvalues.hash_bin[30],
@@ -508,9 +534,15 @@ bool client_submit(YAAMP_CLIENT *client, json_value *json_params)
 	}
 
 	uint64_t hash_int = get_hash_difficulty(submitvalues.hash_bin);
+	debuglog("POOL hash_hex=%s\n", submitvalues.hash_hex);
+	debuglog("POOL hash_be=%s\n", submitvalues.hash_be);
+	
 	uint64_t user_target = diff_to_target(client->difficulty_actual);
 	uint64_t coin_target = decode_compact(templ->nbits);
 	if (templ->nbits && !coin_target) coin_target = 0xFFFF000000000000ULL;
+	
+	debuglog("POOL user_target=%016llx\n", (unsigned long long)user_target);
+	debuglog("POOL coin_target=%016llx\n", (unsigned long long)coin_target);
 
 	if (g_debuglog_hash) {
 		debuglog("%016llx actual\n", hash_int);

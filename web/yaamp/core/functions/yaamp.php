@@ -132,7 +132,7 @@ function yaamp_get_algo_norm($algo)
 		'skein2'	=> 1.0,
 		'velvet'	=> 1.0,
 		'whirlpool'	=> 1.0,
-		'yescrypt'	=> 1.0,
+                'yescrypt'      => 1.0,
 		'yescryptR16'	=> 1.0,
 		'yescryptR32'	=> 1.0,
 		'zr5'		=> 1.0,
@@ -215,7 +215,6 @@ function getAlgoColors($algo)
 		'velvet'	=> '#aac0cc',
 		'vitalium'	=> '#f0b0a0',
 		'whirlpool'	=> '#d0e0e0',
-		'yescrypt'	=> '#e0d0e0',
 		'yescryptR16'	=> '#e2d0e2',
 		'yescryptR32'	=> '#e2d0d2',
 		'zr5'		=> '#d0b0d0',
@@ -232,96 +231,24 @@ function getAlgoColors($algo)
 
 function getAlgoPort($algo)
 {
-	$a = array(
-		'sha256'	=> 3333,
-		'sha256t'	=> 3339,
-		'sha256q'	=> 3337,
-		'lbry'		=> 3334,
-		'scrypt'	=> 3433,
-		'timetravel'	=> 3555,
-		'bitcore'	=> 3556,
-		'exosis'	=> 3557,
-		'c11'		=> 3573,
-		'deep'		=> 3535,
-		'x11'		=> 3533,
-		'x11evo'	=> 3553,
-		'x12'		=> 3233,
-		'x13'		=> 3633,
-		'x15'		=> 3733,
-		'x16r'		=> 3636,
-		'x16rv2'	=> 3637,
-		'x16s'		=> 3663,
-		'x17'		=> 3737,
-		'x22i'		=> 3223,
-		'aergo'		=> 3691,
-		'xevan'		=> 3739,
-		'hmq1725'	=> 3747,
-		'nist5'		=> 3833,
-		'x14'		=> 3933,
-		'quark'		=> 4033,
-		'whirlpool'	=> 4133,
-		'neoscrypt'	=> 4233,
-		'argon2'	=> 4234,
-		'argon2d-dyn'	=> 4239,
-		'scryptn'	=> 4333,
-		'allium'	=> 4443,
-		'lbk3'		=> 5522,
-		'lyra2'		=> 4432,
-		'lyra2v2'	=> 4533,
-		'lyra2v3'	=> 4433,
-		'lyra2z'	=> 4553,
-		'lyra2zz'	=> 4555,
-		'jha'		=> 4633,
-		'qubit'		=> 4733,
-		'zr5'		=> 4833,
-		'skein'		=> 4933,
-		'sib'		=> 5033,
-		'keccak'	=> 5133,
-		'keccakc'	=> 5134,
-		'hex'		=> 5135,
-		'skein2'	=> 5233,
-		//'groestl'	=> 5333,
-		'dmd-gr'	=> 5333,
-		'myr-gr'	=> 5433,
-		'zr5'		=> 5533,
-		// 5555 to 5683 reserved
-		'blake'		=> 5733,
-		'blakecoin'	=> 5743,
-		'decred'	=> 3252,
-		'vanilla'	=> 5755,
-		'blake2s'	=> 5766,
-		'blake2b'	=> 5777,
-		'penta'		=> 5833,
-		'rainforest'	=> 7443,
-		'luffa'		=> 5933,
-		'm7m'		=> 6033,
-		'veltor'	=> 5034,
-		'velvet'	=> 6133,
-		'vitalium'	=> 3233,
-		'yescrypt'	=> 6233,
-		'yescryptR16'	=> 6333,
-		'yescryptR32'	=> 6343,
-		'bastion'	=> 6433,
-		'hsr'		=> 7433,
-		'phi'		=> 8333,
-		'phi2'		=> 8332,
-		'polytimos'	=> 8463,
-		'skunk'		=> 8433,
-		'tribus'	=> 8533,
-	        'a5a'   	=> 8633,
-	);
+        $a = array(
+                'yescrypt'      => 3032,
+                'scrypt'        => 4032,
+                'groestl'       => 5032,
+                'skein'         => 6032,
+                'sha256'        => 7032,
+                'sha256d'       => 7032,
+        );
 
-	global $configCustomPorts;
-	if(isset($configCustomPorts[$algo]))
-		return $configCustomPorts[$algo];
+        global $configCustomPorts;
+        if(isset($configCustomPorts[$algo]))
+                return $configCustomPorts[$algo];
 
-	if(!isset($a[$algo]))
-		return 3033;
+        if(!isset($a[$algo]))
+                return 3033;
 
-	return $a[$algo];
+        return $a[$algo];
 }
-
-////////////////////////////////////////////////////////////////////////
 
 function yaamp_fee($algo)
 {

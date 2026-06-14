@@ -15,8 +15,8 @@ echo <<<END
 <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
 <meta http-equiv="X-UA-Compatible" content="IE=edge,chrome=1">
 
-<meta name="description" content="Yii mining pools for alternative crypto currencies">
-<meta name="keywords" content="anonymous,mining,pool,maxcoin,bitcoin,altcoin,auto,switch,exchange,profit,decred,scrypt,x11,x13,x14,x15,lbry,lyra2re,neoscrypt,sha256,quark,skein2">
+<meta name="description" content="Badcoin Pool is the official Badcoin mining pool with multiple algorithm entry points, simple miner setup, and direct wallet-based mining.">
+<meta name="keywords" content="Badcoin, Badcoin Pool, crypto mining pool, multi-algo mining, yescrypt, scrypt, groestl, skein, sha256d, stratum, wallet mining">
 
 END;
 
@@ -27,6 +27,7 @@ echo '<title>'.$pageTitle.'</title>';
 echo CHtml::cssFile("/extensions/jquery/themes/ui-lightness/jquery-ui.css");
 echo CHtml::cssFile('/yaamp/ui/css/main.css');
 echo CHtml::cssFile('/yaamp/ui/css/table.css');
+echo CHtml::cssFile('/assets/css/badcoin-shared.css');
 
 //echo CHtml::scriptFile('/extensions/jquery/js/jquery-1.8.3-dev.js');
 //echo CHtml::scriptFile('/extensions/jquery/js/jquery-ui-1.9.1.custom.min.js');
@@ -80,59 +81,76 @@ function showItemHeader($selected, $url, $name)
 
 function showPageHeader()
 {
-	echo '<div class="tabmenu-out">';
-	echo '<div class="tabmenu-inner">';
+        echo '<div class="tabmenu-out">';
+        echo '<div class="tabmenu-inner">';
+        echo '&nbsp;&nbsp;<a href="/">'.YAAMP_SITE_NAME.'</a>';
+        $action = controller()->action->id;
+        $wallet = user()->getState('yaamp-wallet');
+        $ad = isset($_GET['address']);
 
-	echo '&nbsp;&nbsp;<a href="/">'.YAAMP_SITE_NAME.'</a>';
+        showItemHeader(controller()->id=='site' && $action=='index' && !$ad, '/', 'Home');
+        showItemHeader($action=='mining', '/site/mining', 'Pool Status');
+        if (!empty($wallet) && $ad)
+                showItemHeader(controller()->id=='site'&&($action=='index' || $action=='wallet') && $ad, "/?address=$wallet", 'Wallet');
+        showItemHeader(controller()->id=='stats', '/stats', 'Stats');
+        showItemHeader($action=='miners', '/site/miners', 'Miners');
 
-	$action = controller()->action->id;
-	$wallet = user()->getState('yaamp-wallet');
-	$ad = isset($_GET['address']);
+        $current_algo = user()->getState('yaamp-algo');
+        if (empty($current_algo)) $current_algo = YAAMP_DEFAULT_ALGO;
 
-	showItemHeader(controller()->id=='site' && $action=='index' && !$ad, '/', 'Home');
-	showItemHeader($action=='mining', '/site/mining', 'Pool');
-	showItemHeader(controller()->id=='site'&&($action=='index' || $action=='wallet') && $ad, "/?address=$wallet", 'Wallet');
-	showItemHeader(controller()->id=='stats', '/stats', 'Graphs');
-	showItemHeader($action=='miners', '/site/miners', 'Miners');
-	if (YIIMP_PUBLIC_EXPLORER)
-		showItemHeader(controller()->id=='explorer', '/explorer', 'Explorers');
+        $badpool_algos = array('all' => 'All');
+        $rows = dbolist("SELECT DISTINCT algo FROM coins WHERE symbol='BAD' AND enable=1 AND visible=1 AND auto_ready=1 AND installed=1 ORDER BY FIELD(algo,'sha256','scrypt','groestl','skein','yescrypt'), algo");
+        foreach($rows as $row)
+        {
+                $value = $row['algo'];
+                $label = ($value == 'sha256') ? 'sha256d' : $value;
+                $badpool_algos[$value] = $label;
+        }
 
-	if (YIIMP_PUBLIC_BENCHMARK)
-		showItemHeader(controller()->id=='bench', '/bench', 'Benchs');
+        echo '<span class="badpool-global-algo">Algo: <select id="badpool_global_algo">';
+        foreach($badpool_algos as $value => $label)
+        {
+                $selected = ($current_algo == $value) ? ' selected' : '';
+                echo '<option value="'.CHtml::encode($value).'"'.$selected.'>'.CHtml::encode($label).'</option>';
+        }
+        echo '</select></span>';
+        echo '<script>$(function(){ $("#badpool_global_algo").change(function(){ var r = window.location.pathname + window.location.search; window.location.href = "/site/algo?algo=" + encodeURIComponent(this.value) + "&r=" + encodeURIComponent(r); }); });</script>';
 
-	if (YAAMP_RENTAL)
-		showItemHeader(controller()->id=='renting', '/renting', 'Rental');
+        if (YIIMP_PUBLIC_EXPLORER)
+                showItemHeader(controller()->id=='explorer', '/explorer', 'Explorers');
+        if (YIIMP_PUBLIC_BENCHMARK)
+                showItemHeader(controller()->id=='bench', '/bench', 'Benchs');
+        if (YAAMP_RENTAL)
+                showItemHeader(controller()->id=='renting', '/renting', 'Rental');
 
-	if(controller()->admin)
-	{
-		if (isAdminIP($_SERVER['REMOTE_ADDR']) === false)
-			debuglog("admin {$_SERVER['REMOTE_ADDR']}");
+        if(controller()->admin)
+        {
+                if (isAdminIP($_SERVER['REMOTE_ADDR']) === false)
+                        debuglog("admin {$_SERVER['REMOTE_ADDR']}");
+                showItemHeader(controller()->id=='coin', '/coin', 'Coins');
+                showItemHeader($action=='common', '/site/common', 'Dashboard');
+                showItemHeader(controller()->id=='site'&&$action=='admin', "/site/admin", 'Wallets');
+                if (YAAMP_RENTAL)
+                        showItemHeader(controller()->id=='renting' && $action=='admin', '/renting/admin', 'Jobs');
+                if (YAAMP_ALLOW_EXCHANGE)
+                        showItemHeader(controller()->id=='trading', '/trading', 'Trading');
+                if (YAAMP_USE_NICEHASH_API)
+                        showItemHeader(controller()->id=='nicehash', '/nicehash', 'Nicehash');
+        }
 
-		showItemHeader(controller()->id=='coin', '/coin', 'Coins');
-		showItemHeader($action=='common', '/site/common', 'Dashboard');
-		showItemHeader(controller()->id=='site'&&$action=='admin', "/site/admin", 'Wallets');
-
-		if (YAAMP_RENTAL)
-			showItemHeader(controller()->id=='renting' && $action=='admin', '/renting/admin', 'Jobs');
-
-		if (YAAMP_ALLOW_EXCHANGE)
-			showItemHeader(controller()->id=='trading', '/trading', 'Trading');
-
-		if (YAAMP_USE_NICEHASH_API)
-			showItemHeader(controller()->id=='nicehash', '/nicehash', 'Nicehash');
-	}
-
-	echo '<span style="float: right;">';
-
-	$mining = getdbosql('db_mining');
-	$nextpayment = date('H:i T', $mining->last_payout+YAAMP_PAYMENTS_FREQ);
-	$eta = ($mining->last_payout+YAAMP_PAYMENTS_FREQ) - time();
-	$eta_mn = 'in '.round($eta / 60).' minutes';
-
-	echo '<span id="nextpayout" style="font-size: .8em;" title="'.$eta_mn.'">Next Payout: '.$nextpayment.'</span>';
-
-	echo "</div>";
-	echo "</div>";
+        echo '<span style="float: right;">';
+        $mining = getdbosql('db_mining');
+        if ($mining && !empty($mining->last_payout) && $mining->last_payout > 0) {
+                $next_ts = $mining->last_payout + YAAMP_PAYMENTS_FREQ;
+                $nextpayment = date('H:i T', $next_ts);
+                $eta = $next_ts - time();
+                if ($eta > 0) {
+                        $eta_mn = 'in '.round($eta / 60).' minutes';
+                        echo '<span id="nextpayout" style="font-size: .8em;" title="'.$eta_mn.'">Next Payout: '.$nextpayment.'</span>';
+                }
+        }
+        echo "</div>";
+        echo "</div>";
 }
 
 function showPageFooter()
@@ -141,7 +159,7 @@ function showPageFooter()
 	$year = date("Y", time());
 
 	echo "<p>&copy; $year ".YAAMP_SITE_NAME.' - '.
-		'<a href="http://github.com/tpruvot/yiimp">Open source Project</a></p>';
+		'<a href="https://github.com/tpruvot/yiimp" target="_blank" rel="noopener">Powered by YiiMP</a></p>';
 
 	echo '</div><!-- footer -->';
 }

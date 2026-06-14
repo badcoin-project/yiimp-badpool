@@ -123,7 +123,7 @@ char *rpc_do_call(YAAMP_RPC *rpc, char const *data)
 	// HTTP 1.1 accepts chunked data, and keep the connection
 	rpc_send(rpc, "POST / HTTP/1.1\r\n");
 	rpc_send(rpc, "Authorization: Basic %s\r\n", rpc->credential);
-	rpc_send(rpc, "Host: %s:%d\n", rpc->host, rpc->port);
+	rpc_send(rpc, "Host: %s:%d\r\n", rpc->host, rpc->port);
 	rpc_send(rpc, "Accept: */*\r\n");
 	rpc_send(rpc, "Content-Type: application/json\r\n");
 	rpc_send(rpc, "Content-Length: %d\r\n\r\n", strlen(data));

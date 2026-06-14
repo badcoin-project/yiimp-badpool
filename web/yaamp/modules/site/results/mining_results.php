@@ -1,233 +1,123 @@
 <?php
-
-function WriteBoxHeader($title)
-{
-	echo "<div class='main-left-box'>";
-	echo "<div class='main-left-title'>$title</div>";
-	echo "<div class='main-left-inner'>";
-}
-
-$showrental = (bool) YAAMP_RENTAL;
-
 $algo = user()->getState('yaamp-algo');
+if (empty($algo)) $algo = YAAMP_DEFAULT_ALGO;
 
-$total_rate = yaamp_pool_rate();
-$total_rate_d = $total_rate? 'at '.Itoa2($total_rate).'h/s': '';
-
-if($algo == 'all')
-	$list = getdbolist('db_coins', "enable and visible order by index_avg desc");
-else
-	$list = getdbolist('db_coins', "enable and visible and algo=:algo order by index_avg desc", array(':algo'=>$algo));
-
-$count = count($list);
-
-if($algo == 'all')
-	$worker = getdbocount('db_workers');
-else
-	$worker = getdbocount('db_workers', "algo=:algo", array(':algo'=>$algo));
-
-if ($showrental)
-	$services = getdbolist('db_services', "algo=:algo ORDER BY price DESC", array(':algo'=>$algo));
-else
-	$services = array();
-
-////////////////////////////////////////////////////////////////////////////////////
-
-$coin_count = $count > 1 ? "on $count wallets" : 'on a single wallet';
-$miner_count = $worker > 1 ? "$worker miners" : "$worker miner";
-WriteBoxHeader("Mining $coin_count $total_rate_d, $miner_count");
-
-showTableSorter('maintable3', "{
-	tableClass: 'dataGrid2',
-	textExtraction: {
-		3: function(node, table, n) { return $(node).attr('data'); },
-		6: function(node, table, n) { return $(node).attr('data'); },
-		7: function(node, table, n) { return $(node).attr('data'); }
-	}
-}");
-
-echo <<<END
-<thead>
-<tr>
-<th data-sorter=""></th>
-<th data-sorter="text">Name</th>
-<th align="right">Amount</th>
-<th data-sorter="numeric" align="right">Diff</th>
-<th align="right">Block</th>
-<th align="right">TTF***</th>
-<th data-sorter="numeric" align="right">Hash**</th>
-<th data-sorter="currency" align="right">Profit*</th>
-</tr>
-</thead>
-END;
-
-if($algo != 'all' && $showrental)
+function badpool_display_algo($algo)
 {
-	$hashrate_jobs = yaamp_rented_rate($algo);
-	$hashrate_jobs = $hashrate_jobs? Itoa2($hashrate_jobs).'h/s': '';
-
-	$price_rent = dboscalar("select rent from hashrate where algo=:algo order by time desc", array(':algo'=>$algo));
-	$price_rent = mbitcoinvaluetoa($price_rent);
-
-	$amount_rent = dboscalar("select sum(amount) from jobsubmits where status=1 and algo=:algo", array(':algo'=>$algo));
-	$amount_rent = bitcoinvaluetoa($amount_rent);
+        return $algo == 'sha256' ? 'sha256d' : $algo;
 }
 
-foreach($list as $coin)
+$badcoin_algos = array('sha256','scrypt','groestl','skein','yescrypt');
+$rows = dbolist("SELECT DISTINCT algo FROM coins WHERE symbol='BAD' AND enable=1 AND visible=1 AND auto_ready=1 AND installed=1 ORDER BY FIELD(algo,'sha256','scrypt','groestl','skein','yescrypt'), algo");
+
+$active_algos = array();
+foreach($rows as $row)
 {
-	$name = substr($coin->name, 0, 12);
-	$difficulty = Itoa2($coin->difficulty, 3);
-	$price = bitcoinvaluetoa($coin->price);
-	$height = number_format($coin->block_height, 0, '.', ' ');
-//	$pool_ttf = $coin->pool_ttf? sectoa2($coin->pool_ttf): '';
-	$pool_ttf = $total_rate? $coin->difficulty * 0x100000000 / $total_rate: 0;
-	$reward = round($coin->reward, 3);
-
-	$btcmhd = yaamp_profitability($coin);
-	$pool_hash = yaamp_coin_rate($coin->id);
-	$real_ttf = $pool_hash? $coin->difficulty * 0x100000000 / $pool_hash: 0;
-
-	$pool_hash_sfx = $pool_hash? Itoa2($pool_hash).'h/s': '';
-	$real_ttf = $real_ttf? sectoa2($real_ttf): '';
-	$pool_ttf = $pool_ttf? sectoa2($pool_ttf): '';
-
-	$pool_hash_pow = yaamp_pool_rate_pow($coin->algo);
-	$pool_hash_pow_sfx = $pool_hash_pow? Itoa2($pool_hash_pow).'h/s': '';
-
-	$min_ttf = $coin->network_ttf>0? min($coin->actual_ttf, $coin->network_ttf): $coin->actual_ttf;
-	$network_hash = $coin->difficulty * 0x100000000 / ($min_ttf? $min_ttf: 60);
-	$network_hash = $network_hash? 'network hash '.Itoa2($network_hash).'h/s': '';
-
-	if(controller()->admin && $services)
-	{
-		foreach($services as $i=>$service)
-		{
-			if($service->price*1000 < $btcmhd) continue;
-			$service_btcmhd = mbitcoinvaluetoa($service->price*1000);
-
-			echo "<tr class='ssrow'>";
-			echo "<td width=18><img width=16 src='/images/btc.png'></td>";
-			echo "<td><b>$service->name</b></td>";
-			echo "<td></td>";
-			echo "<td></td>";
-			echo "<td></td>";
-			echo "<td></td>";
-			echo "<td></td>";
-			echo "<td align=right style='font-size: .8em;'><b>$service_btcmhd</b></td>";
-			echo "</tr>";
-
-			unset($services[$i]);
-		}
-	}
-
-	if(isset($price_rent) && $price_rent > $btcmhd)
-	{
-		echo "<tr class='ssrow'>";
-		echo "<td width=18><img width=16 src='/images/btc.png'></td>";
-		echo "<td><b>Rental</b></td>";
-		echo "<td align=right style='font-size: .8em;'><b>$amount_rent BTC</b></td>";
-		echo "<td></td>";
-		echo "<td></td>";
-		echo "<td></td>";
-		echo "<td align=right style='font-size: .8em;'>$hashrate_jobs</td>";
-		echo "<td align=right style='font-size: .8em;'><b>$price_rent</b></td>";
-		echo "</tr>";
-
-		unset($price_rent);
-	}
-
-	if(!$coin->auto_ready)
-		echo "<tr style='opacity: 0.4;'>";
-	else
-		echo "<tr class='ssrow'>";
-
-	echo '<td width="18">';
-	echo $coin->createExplorerLink('<img width="16" src="'.$coin->image.'">');
-	echo '</td>';
-
-	$owed = dboscalar("select sum(balance) from accounts where coinid=$coin->id");
-	if(YAAMP_ALLOW_EXCHANGE && $coin->balance+$coin->mint < $owed*0.9 ) {
-		$owed2 = bitcoinvaluetoa($owed - $coin->balance);
-		$symbol = $coin->getOfficialSymbol();
-		$title = "We are short of this currency ($owed2 $symbol). Please switch to another currency until we find more $symbol blocks.";
-		echo "<td><b><a href=\"/site/block?id={$coin->id}\" title=\"$title\" style=\"color: #c55;\">$name</a></b><span style=\"font-size: .8em;\"> ({$coin->algo})</span></td>";
-	} else {
-		echo "<td><b><a href='/site/block?id=$coin->id'>$name</a></b><span style='font-size: .8em'> ($coin->algo)</span></td>";
-	}
-	echo "<td align=right style='font-size: .8em;'><b>$reward $coin->symbol_show</b></td>";
-
-	$title = "POW $coin->difficulty";
-	if($coin->rpcencoding == 'POS')
-		$title .= "\nPOS $coin->difficulty_pos";
-
-	echo '<td align="right" style="font-size: .8em;" data="'.$coin->difficulty.'" title="'.$title.'">'.$difficulty.'</td>';
-
-	if(!empty($coin->errors))
-		echo "<td align=right style='font-size: .8em; color: red;' title='$coin->errors'>$height</td>";
-	else
-		echo "<td align=right style='font-size: .8em;'>$height</td>";
-
-	if(!YAAMP_ALLOW_EXCHANGE && !empty($real_ttf))
-		echo '<td align="right" style="font-size: .8em;" title="'.$pool_ttf.' at full pool speed">'.$real_ttf.'</td>';
-	elseif(!empty($real_ttf))
-		echo '<td align="right" style="font-size: .8em;" title="'.$real_ttf.' at '.Itoa2($pool_hash).'">'.$pool_ttf.'</td>';
-	else
-		echo '<td align="right" style="font-size: .8em;" title="At current pool speed">'.$pool_ttf.'</td>';
-
-	if($coin->auxpow && $coin->auto_ready)
-		echo "<td align=right style='font-size: .8em; opacity: 0.6;' title='merge mined\n$network_hash' data='$pool_hash_pow'>$pool_hash_pow_sfx</td>";
-	else
-		echo "<td align=right style='font-size: .8em;' title='$network_hash' data='$pool_hash'>$pool_hash_sfx</td>";
-
-	$btcmhd = mbitcoinvaluetoa($btcmhd);
-	echo "<td align=right style='font-size: .8em;' data='$btcmhd'><b>$btcmhd</b></td>";
-	echo "</tr>";
+        if (in_array($row['algo'], $badcoin_algos))
+                $active_algos[] = $row['algo'];
 }
 
-if(controller()->admin && $services)
-{
-	foreach($services as $i=>$service)
-	{
-		$service_btcmhd = mbitcoinvaluetoa($service->price*1000);
+$selected_algo = ($algo != 'all' && in_array($algo, $active_algos)) ? $algo : '';
+$selected_port = $selected_algo ? getAlgoPort($selected_algo) : '&lt;PORT&gt;';
 
-		echo "<tr class='ssrow'>";
-		echo "<td width=18><img width=16 src='/images/btc.png'></td>";
-		echo "<td><b>$service->name</b></td>";
-		echo "<td></td>";
-		echo "<td></td>";
-		echo "<td></td>";
-		echo "<td></td>";
-		echo "<td></td>";
-		echo "<td align=right style='font-size: .8em;'><b>$service_btcmhd</b></td>";
-		echo "</tr>";
-	}
+echo "<div class='main-left-box'>";
+echo "<div class='main-left-title'>Mining Setup</div>";
+echo "<div class='main-left-inner'>";
+
+echo "<ul>";
+echo "<li><b>Pool server:</b> <span class='badpool-mono'>".YAAMP_STRATUM_URL."</span></li>";
+echo "<li><b>Username:</b> your Badcoin wallet address</li>";
+echo "<li><b>Worker name:</b> optional, such as <span class='badpool-mono'>rig1</span></li>";
+echo "<li><b>Password:</b> usually <span class='badpool-mono'>x</span></li>";
+echo "</ul>";
+
+echo "<div class='badpool-builder'>";
+echo "<div style='margin: 8px 0;'>";
+echo "<label><b>Badcoin wallet address</b></label><br>";
+echo "<input id='badpool_wallet' class='main-text-input' type='text' placeholder='Paste your Badcoin wallet address'>";
+echo "</div>";
+
+echo "<div style='margin: 8px 0;'>";
+echo "<label><b>Worker name</b> <span style='font-size: .85em;'>(optional)</span></label><br>";
+echo "<input id='badpool_worker' class='main-text-input' type='text' placeholder='rig1'>";
+echo "</div>";
+
+echo "<div style='margin: 8px 0;'>";
+echo "<label><b>Algorithm</b></label><br>";
+echo "<select id='badpool_builder_algo' class='main-text-input'>";
+echo "<option value='' data-port=''".($selected_algo ? "" : " selected").">Choose an algorithm</option>";
+foreach($active_algos as $a)
+{
+        $display = badpool_display_algo($a);
+        $port = getAlgoPort($a);
+        $sel = ($a == $selected_algo) ? ' selected' : '';
+        echo "<option value='$a' data-port='$port'$sel>$display - port $port</option>";
+}
+echo "</select>";
+echo "</div>";
+
+echo "<div class='badpool-codebox' id='badpool_command'>-o stratum+tcp://".YAAMP_STRATUM_URL.":$selected_port -u &lt;BADCOIN_WALLET&gt; -p x</div>";
+echo "<button type='button' class='main-submit-button' id='badpool_copy_command' style='width: 130px;'>Copy command</button>";
+echo "<span id='badpool_copy_status' style='font-size: .85em; margin-left: 8px;'></span>";
+echo "</div>";
+
+echo "<br>";
+echo "<table class='dataGrid2'>";
+echo "<thead><tr>";
+echo "<th>Algo</th>";
+echo "<th align='right'>Port</th>";
+echo "<th>Server</th>";
+echo "</tr></thead><tbody>";
+
+foreach($active_algos as $a)
+{
+        $display = badpool_display_algo($a);
+        $port = getAlgoPort($a);
+
+        echo "<tr class='ssrow'>";
+        echo "<td><b>$display</b></td>";
+        echo "<td align='right'>$port</td>";
+        echo "<td><span class='badpool-mono'>".YAAMP_STRATUM_URL.":$port</span></td>";
+        echo "</tr>";
 }
 
-if(isset($price_rent) && $showrental)
-{
-	echo "<tr class='ssrow'>";
-	echo "<td width=18><img width=16 src='/images/btc.png'></td>";
-	echo "<td><b>Rental</b></td>";
-	echo "<td align=right style='font-size: .8em;'><b>$amount_rent BTC</b></td>";
-	echo "<td></td>";
-	echo "<td></td>";
-	echo "<td></td>";
-	echo "<td align=right style='font-size: .8em;'>$hashrate_jobs</td>";
-	echo "<td align=right style='font-size: .8em;'><b>$price_rent</b></td>";
-	echo "</tr>";
+echo "</tbody></table>";
 
-	unset($price_rent);
+echo "<p style='font-size: .8em;'>Use a real Badcoin wallet address. Do not use a BTC address; auto-exchange is disabled.</p>";
+
+echo "<script>\n";
+echo "var badpoolServer = ".json_encode(YAAMP_STRATUM_URL).";\n";
+echo <<<'JS'
+function badpoolBuildCommand()
+{
+        var wallet = $('#badpool_wallet').val().trim();
+        var worker = $('#badpool_worker').val().trim();
+        var option = $('#badpool_builder_algo option:selected');
+        var port = option.data('port') || '<PORT>';
+
+        var user = wallet || '<BADCOIN_WALLET>';
+        if(wallet && worker) user = wallet + '.' + worker;
+
+        var cmd = '-o stratum+tcp://' + badpoolServer + ':' + port + ' -u ' + user + ' -p x';
+        $('#badpool_command').text(cmd);
+        $('#badpool_copy_status').text('');
 }
 
+$('#badpool_wallet, #badpool_worker, #badpool_builder_algo').on('input change', badpoolBuildCommand);
 
-echo "</table>";
+$('#badpool_copy_command').on('click', function() {
+        var text = $('#badpool_command').text();
+        if(navigator.clipboard) {
+                navigator.clipboard.writeText(text).then(function() {
+                        $('#badpool_copy_status').text('Copied');
+                });
+        } else {
+                $('#badpool_copy_status').text('Select and copy manually');
+        }
+});
 
-echo '<p style="font-size: .8em;">
-	&nbsp;*** estimated average time to find a block at full pool speed<br/>
-	&nbsp;** approximate from the last 5 minutes submitted shares<br/>
-	&nbsp;* 24h estimation from net difficulty in mBTC/MH/day (GH/day for sha & blake algos)<br>
-</p>';
+badpoolBuildCommand();
+JS;
+echo "\n</script>";
 
 echo "</div></div><br>";
-
-

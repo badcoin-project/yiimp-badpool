@@ -769,3 +769,74 @@ void sha256_hash_hex(const char *input, char *output, unsigned int len)
 	hexlify(output, (unsigned char *)output1, 32);
 }
 
+
+
+bool compact_to_target_hex(const char *input, char *target_hex)
+{
+        if(!input || !target_hex) return false;
+        if(strlen(input) != 8) return false;
+        if(!ishexa((char *)input, 8)) return false;
+
+        memset(target_hex, '0', 64);
+        target_hex[64] = '\0';
+
+        unsigned int compact = htoi(input);
+        int size = (compact >> 24) & 0xff;
+        unsigned int word = compact & 0x007fffff;
+
+        if(size <= 0 || size > 32 || word == 0) return false;
+
+        unsigned char target[32];
+        memset(target, 0, sizeof(target));
+
+        if(size <= 3)
+        {
+                word >>= 8 * (3 - size);
+                for(int i=0; i<size; i++)
+                        target[32 - size + i] = (word >> (8 * (size - 1 - i))) & 0xff;
+        }
+        else
+        {
+                int offset = 32 - size;
+                if(offset < 0 || offset + 2 >= 32) return false;
+
+                target[offset] = (word >> 16) & 0xff;
+                target[offset + 1] = (word >> 8) & 0xff;
+                target[offset + 2] = word & 0xff;
+        }
+
+        hexlify(target_hex, target, 32);
+        return true;
+}
+
+static char hex_lower_char(char c)
+{
+        if(c >= 'A' && c <= 'F') return c + 32;
+        return c;
+}
+
+bool hash_be_meets_target_hex(const char *hash_be, const char *target_hex)
+{
+        if(!hash_be || !target_hex) return false;
+        if(strlen(hash_be) != 64 || strlen(target_hex) != 64) return false;
+
+        for(int i=0; i<64; i++)
+        {
+                char h = hex_lower_char(hash_be[i]);
+                char t = hex_lower_char(target_hex[i]);
+
+                if(h < t) return true;
+                if(h > t) return false;
+        }
+
+        return true;
+}
+
+bool hash_meets_target_from_nbits(const char *hash_be, const char *nbits, char *target_hex)
+{
+        char local_target[65];
+        char *out = target_hex ? target_hex : local_target;
+
+        if(!compact_to_target_hex(nbits, out)) return false;
+        return hash_be_meets_target_hex(hash_be, out);
+}

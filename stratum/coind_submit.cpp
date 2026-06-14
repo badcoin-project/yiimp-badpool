@@ -61,6 +61,14 @@ bool coind_submitblock(YAAMP_COIND *coind, const char *block)
 	json_value *json_result = json_get_object(json, "result");
 
 	bool b = json_result && json_result->type == json_null;
+	if(!b) {
+		if(json_result && json_result->type == json_string && json_result->u.string.ptr)
+			stratumlog("ERROR %s submitblock result %s\n", coind->name, json_result->u.string.ptr);
+		else if(json_result)
+			stratumlog("ERROR %s submitblock result type %d\n", coind->name, json_result->type);
+		else
+			stratumlog("ERROR %s submitblock missing result\n", coind->name);
+	}
 	json_value_free(json);
 
 	return b;
@@ -94,6 +102,14 @@ bool coind_submitblocktemplate(YAAMP_COIND *coind, const char *block)
 	json_value *json_result = json_get_object(json, "result");
 
 	bool b = json_result && json_result->type == json_null;
+	if(!b) {
+		if(json_result && json_result->type == json_string && json_result->u.string.ptr)
+			stratumlog("ERROR %s getblocktemplate-submit result %s\n", coind->name, json_result->u.string.ptr);
+		else if(json_result)
+			stratumlog("ERROR %s getblocktemplate-submit result type %d\n", coind->name, json_result->type);
+		else
+			stratumlog("ERROR %s getblocktemplate-submit missing result\n", coind->name);
+	}
 	json_value_free(json);
 
 	return b;
