@@ -127,6 +127,23 @@ CLI aliases should mirror config flags:
 
 Add new command entry points rather than extending the always-on cron loops first. Proposed command names are illustrative and should be implemented in a new command class such as `BackendGuardCommand` or `BadpoolGuardCommand`.
 
+### Patch group A implementation status
+
+Patch group A is implemented by `web/yaamp/commands/BadpoolGuardCommand.php` as a read-only Yii console command. This repository's command convention routes command classes through `web/yaamp/yiic.php`, not through `runconsole.php`, which is reserved for thread controller routes such as `cronjob/run`.
+
+Implemented read-only syntax:
+
+```text
+php web/yaamp/yiic.php badpoolguard overview --coin-id=<coin-id>
+php web/yaamp/yiic.php badpoolguard blocks-preview --coin-id=<coin-id>
+php web/yaamp/yiic.php badpoolguard earnings-preview --coin-id=<coin-id>
+php web/yaamp/yiic.php badpoolguard account-credit-preview --coin-id=<coin-id>
+php web/yaamp/yiic.php badpoolguard payout-candidates-preview --coin-id=<coin-id>
+php web/yaamp/yiic.php badpoolguard safety-scan --coin-id=<coin-id>
+```
+
+JSON is the default output format. `--format=text` is available for human review. All-coin preview is refused unless `--all-coins-preview` is explicitly supplied. Patch group A does not add execute/apply behavior, wallet reads, wallet sends, DB mutations, share deletion, payout row creation, payout retry/delete, service inspection, or cron/service start behavior.
+
 ### Read-only preview commands
 
 ```text
