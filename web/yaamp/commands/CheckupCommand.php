@@ -1,4 +1,6 @@
 <?php
+require_once(dirname(__FILE__).'/../core/backend/BadpoolShareDeleteGuard.php');
+
 /**
  * CheckupCommand is a console command, to double check the site requirements :
  *  - directories rights
@@ -249,7 +251,7 @@ class CheckupCommand extends CConsoleCommand
 				$user->balance = 0;
 				dborun("DELETE FROM balanceuser WHERE userid=".$user->id);
 				dborun("DELETE FROM hashuser WHERE userid=".$user->id);
-				dborun("DELETE FROM shares WHERE userid=".$user->id);
+				badpool_share_delete_guard_skip(__METHOD__, "userid=".intval($user->id));
 				dborun("DELETE FROM workers WHERE userid=".$user->id);
 				dborun("UPDATE earnings SET userid=0 WHERE userid=".$user->id);
 				dborun("UPDATE blocks SET userid=0 WHERE userid=".$user->id);

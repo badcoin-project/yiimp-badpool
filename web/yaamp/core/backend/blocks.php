@@ -1,5 +1,7 @@
 <?php
 
+require_once(dirname(__FILE__).'/BadpoolShareDeleteGuard.php');
+
 function BackendBlockNew($coin, $db_block)
 {
 //	debuglog("NEW BLOCK $coin->name $db_block->height");
@@ -66,17 +68,7 @@ function BackendBlockNew($coin, $db_block)
 	if(!YAAMP_ALLOW_EXCHANGE) // only one coin mined
 		$sqlCond .= " AND coinid = ".intval($coin->id);
 
-	try {
-		dborun("DELETE FROM shares WHERE algo=:algo AND $sqlCond", array(':algo'=>$coin->algo));
-
-	} catch (CDbException $e) {
-
-		debuglog("unable to delete shares $sqlCond retrying...");
-		sleep(1);
-		dborun("DELETE FROM shares WHERE algo=:algo AND $sqlCond", array(':algo'=>$coin->algo));
-		// [errorInfo] => array(0 => 'HY000', 1 => 1205, 2 => 'Lock wait timeout exceeded; try restarting transaction')
-		// [*:message] => 'CDbCommand failed to execute the SQL statement: SQLSTATE[HY000]: General error: 1205 Lock wait timeout exceeded; try restarting transaction'
-	}
+	badpool_share_delete_guard_skip(__FUNCTION__, "algo=:algo AND $sqlCond", array(':algo'=>$coin->algo));
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
@@ -166,7 +158,7 @@ function BackendBlockFind1($coinid = NULL)
 			debuglog(__FUNCTION__.": unable to insert block!");
 
 		if($db_block->category != 'orphan')
-			BackendBlockNew($coin, $db_block); // will drop shares
+			BackendBlockNew($coin, $db_block); // share cleanup is guarded
 	}
 }
 

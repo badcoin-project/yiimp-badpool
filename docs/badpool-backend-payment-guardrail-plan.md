@@ -174,6 +174,24 @@ Patch group C adds a source-level wallet-send hard guard in:
 
 This implementation has no source-level activation path and does not add execute/apply behavior. Future wallet-send enablement must be designed and approved in a separate task with explicit command context, coin scope, report checksum validation, and production approval. Read-only preview commands continue to report `wallet_reads=false` and `wallet_sends=false`.
 
+### Patch group D implementation status
+
+Patch group D adds a source-level share-delete hard guard in:
+
+- `web/yaamp/core/backend/BadpoolShareDeleteGuard.php`
+- `web/yaamp/core/backend/blocks.php`
+- `web/yaamp/core/backend/system.php`
+
+`BackendBlockNew()` now routes its historical share cleanup point through `badpool_share_delete_guard_skip()` instead of issuing share deletion SQL. The guard counts matching share rows with a SELECT-only query when possible, logs an explicit skipped-deletion message, and returns without deleting shares. Historical share evidence is therefore preserved during backend/accounting restoration planning.
+
+Backend database cleanup share-deletion paths in `system.php` also route through the same guard. Old-share consolidation is skipped while share deletion is disabled, so the cleanup path does not create aggregate share rows without removing originals.
+
+Other command/model cleanup paths that previously deleted from `shares` also call the same guard. They log skipped share deletion while leaving their non-share cleanup behavior unchanged.
+
+This implementation has no source-level activation path and does not add execute/apply behavior. Future share deletion enablement must be designed and approved in a separate task with explicit command context, coin/algo scope, preflight candidate counts, report checksum validation, production approval, and service-state review. Backend/payment services remain frozen unless separately approved.
+
+Read-only preview commands continue to report `share_deletion=false`. `overview`, `blocks-preview`, and `safety-scan` now include `share_delete_guard` metadata with a guarded status and SELECT-only share candidate summary.
+
 ### Read-only preview commands
 
 ```text
@@ -613,9 +631,9 @@ These must be answered by L3 using read-only live-server checks, not by reposito
 ### Patch group D: share-delete hard guard
 
 - Guard the `DELETE FROM shares` statements in `BackendBlockNew()`.
-- Add a preview count before deletion.
+- Add a preview count before skipped deletion.
 - Default behavior: report-only; no deletion.
-- Add a separate cleanup command for share deletion with explicit confirmation.
+- Do not add an activation path in this patch; any future share deletion cleanup command must be separately approved.
 
 ### Patch group E: payout preview and execute separation
 
