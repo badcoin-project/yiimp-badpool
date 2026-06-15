@@ -1,6 +1,6 @@
 # BadPool Read-Only Preview Commands
 
-Patch group A adds a guarded Yii console command for DB-only preview reports:
+Patch group A adds a guarded Yii console command for DB-only preview reports. Patch group B adds shared guard context/report plumbing used by the same commands.
 
 ```text
 cd web
@@ -10,6 +10,7 @@ php yaamp/yiic.php badpoolguard earnings-preview --coin-id=<coin-id>
 php yaamp/yiic.php badpoolguard account-credit-preview --coin-id=<coin-id>
 php yaamp/yiic.php badpoolguard payout-candidates-preview --coin-id=<coin-id>
 php yaamp/yiic.php badpoolguard safety-scan --coin-id=<coin-id>
+php yaamp/yiic.php badpoolguard guard-context --coin-id=<coin-id>
 ```
 
 On the VPS layout, run these from `/srv/badpool/yiimp-badpool/web`. `yaamp/yiic.php` loads `serverconfig.php` through a relative path, so repository-root invocations with a `web/` prefix are not valid for that layout.
@@ -24,6 +25,8 @@ php yaamp/yiic.php badpoolguard overview --all-coins-preview
 ```
 
 These commands are read-only. They use SELECT-only database queries and are for review before any L3/live apply work.
+
+The shared guard context centralizes option parsing, coin scope validation, dangerous-option refusal, safety metadata, JSON/text rendering, and SELECT-only query helpers. No execute/apply mode exists yet.
 
 Safety properties:
 
