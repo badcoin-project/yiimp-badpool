@@ -147,6 +147,22 @@ On the VPS layout, run these from `/srv/badpool/yiimp-badpool/web`. `yaamp/yiic.
 
 JSON is the default output format. `--format=text` is available for human review. All-coin preview is refused unless `--all-coins-preview` is explicitly supplied. Patch group A does not add execute/apply behavior, wallet reads, wallet sends, DB mutations, share deletion, payout row creation, payout retry/delete, service inspection, or cron/service start behavior.
 
+### Patch group B implementation status
+
+Patch group B adds shared dry-run plumbing in:
+
+- `web/yaamp/core/backend/BadpoolGuardContext.php`
+- `web/yaamp/core/backend/BadpoolGuardReport.php`
+
+`BadpoolGuardContext` centralizes read-only option parsing, dangerous-option refusal, coin scope validation, safety metadata, warnings/errors, and SELECT-only query helpers. `BadpoolGuardReport` centralizes JSON and text rendering. Existing preview commands remain compatible, and the metadata-only context report is available as:
+
+```text
+cd web
+php yaamp/yiic.php badpoolguard guard-context --coin-id=<coin-id>
+```
+
+No execute/apply mode exists yet. Commands remain read-only previews with no wallet reads by default, no wallet sends, no DB mutations, no share deletion, no payout retry/delete, and no service or cron actions.
+
 ### Read-only preview commands
 
 ```text
