@@ -163,6 +163,17 @@ php yaamp/yiic.php badpoolguard guard-context --coin-id=<coin-id>
 
 No execute/apply mode exists yet. Commands remain read-only previews with no wallet reads by default, no wallet sends, no DB mutations, no share deletion, no payout retry/delete, and no service or cron actions.
 
+### Patch group C implementation status
+
+Patch group C adds a source-level wallet-send hard guard in:
+
+- `web/yaamp/core/rpc/wallet-send-guard.php`
+- `web/yaamp/core/rpc/wallet-rpc.php`
+
+`WalletRPC::__call()` now refuses wallet-send methods before they reach Bitcoin, Ethereum, or CryptoNote RPC clients. The raw JSON and parsed console paths in `WalletRPC::execute()` use the same refusal helper so console-style wallet sends cannot bypass the guard. Guarded methods include `sendmany`, `sendtoaddress`, `walletpassphrase`, CryptoNote `transfer` wrappers, and other known send-style RPC verbs.
+
+This implementation has no source-level activation path and does not add execute/apply behavior. Future wallet-send enablement must be designed and approved in a separate task with explicit command context, coin scope, report checksum validation, and production approval. Read-only preview commands continue to report `wallet_reads=false` and `wallet_sends=false`.
+
 ### Read-only preview commands
 
 ```text
@@ -594,9 +605,10 @@ These must be answered by L3 using read-only live-server checks, not by reposito
 ### Patch group C: wallet-send hard guard
 
 - Add central guard in `WalletRPC::__call()` for send methods.
-- Add call-site checks before `sendtoaddress()` and `sendmany()` in backend/payment, payout command, renting, market, sell, and trading paths.
-- Default behavior: blocked with structured error.
-- Add a deliberately narrow override requiring explicit command context.
+- Guard raw JSON and parsed console execution paths that could otherwise call send methods directly.
+- Default behavior: blocked with an explicit logged refusal.
+- Do not add an activation path in this patch; any future wallet-send activation must be separately approved.
+- Leave call-site separation for later payout execution work, after read-only previews and report checksums are established.
 
 ### Patch group D: share-delete hard guard
 
