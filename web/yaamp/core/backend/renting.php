@@ -1,5 +1,7 @@
 <?php
 
+require_once(dirname(__FILE__).'/BadpoolShareDeleteGuard.php');
+
 function BackendRentingUpdate()
 {
 //	debuglog(__FUNCTION__);
@@ -130,7 +132,7 @@ function BackendRentingPayout()
 		}
 
 		$delay = time() - 5*60;
-		dborun("delete from shares where algo=:algo and time<$delay", array(':algo'=>$algo));
+		badpool_share_delete_guard_skip(__FUNCTION__, "algo=:algo and time<$delay", array(':algo'=>$algo));
 	}
 
 	if($total_cleared>0)
