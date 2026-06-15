@@ -2,6 +2,8 @@
 /**
  * Common yiimp Wallet RPC object
  */
+require_once(dirname(__FILE__).'/wallet-send-guard.php');
+
 class WalletRPC {
 
 	public $type = 'Bitcoin';
@@ -55,6 +57,11 @@ class WalletRPC {
 
 	function __call($method, $params)
 	{
+		if (badpool_wallet_send_guard_is_send_method($method)) {
+			$this->error = badpool_wallet_send_guard_refuse($method);
+			return false;
+		}
+
 		if (stripos($method, "dump") !== false || stripos($method, "backupwallet") !== false) {
 			$this->error = "$method not authorized!";
 			debuglog("$method rpc method is not authorized!");
@@ -430,7 +437,13 @@ class WalletRPC {
 		if (!empty($query)) try {
 
 			// if its a raw json query...
-			if (strpos($query,"{") !== false && json_decode($query)) {
+			$json_query = json_decode($query);
+			if (strpos($query,"{") !== false && $json_query) {
+				if (isset($json_query->method) && badpool_wallet_send_guard_is_send_method($json_query->method)) {
+					$this->error = badpool_wallet_send_guard_refuse($json_query->method);
+					return false;
+				}
+
 				try {
 					debuglog($query);
 					$result = $this->rpc->request_json($query);
@@ -442,6 +455,10 @@ class WalletRPC {
 
 			$params = explode(' ', trim($query));
 			$command = array_shift($params);
+			if (badpool_wallet_send_guard_is_send_method($command)) {
+				$this->error = badpool_wallet_send_guard_refuse($command);
+				return false;
+			}
 
 			$p = array();
 			foreach ($params as $param) {
