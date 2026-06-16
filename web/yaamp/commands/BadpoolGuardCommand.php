@@ -27,13 +27,13 @@ class BadpoolGuardCommand extends CConsoleCommand
 		if (!in_array($action, $this->actions, true)) {
 			$this->guard = new BadpoolGuardContext($action);
 			$this->guard->addError("Unknown badpoolguard action: $action");
-			$this->guard->emit($this->guard->refusalReport());
+			$this->emitFinalReport($this->guard->refusalReport());
 			return 2;
 		}
 
 		$this->guard = BadpoolGuardContext::fromArgs($action, $args);
 		if (!$this->guard->isValid()) {
-			$this->guard->emit($this->guard->refusalReport());
+			$this->emitFinalReport($this->guard->refusalReport());
 			return 2;
 		}
 
@@ -64,7 +64,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 				$report = $this->guard->refusalReport();
 		}
 
-		$this->guard->emit($report);
+		$this->emitFinalReport($report);
 		return $this->guard->isValid() ? 0 : 2;
 	}
 
@@ -484,6 +484,45 @@ class BadpoolGuardCommand extends CConsoleCommand
 			'checksum_note' => 'See top-level report_checksum; generated_at is excluded from checksum input.',
 			'checksum_purpose' => 'preview audit comparison only; not payout authorization',
 		);
+	}
+
+	private function emitFinalReport($report)
+	{
+		$report = $this->finalizeCommandReport($report);
+
+		if ($this->guard->getFormat() == 'json') {
+			echo json_encode($report, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES)."\n";
+			return;
+		}
+
+		BadpoolGuardReport::render($report, $this->guard->getFormat());
+	}
+
+	private function finalizeCommandReport($report)
+	{
+		$report = $this->guard->finalizeReport($report);
+		if (arraySafeVal($report, 'command') == 'payout-candidates-preview') {
+			$report = $this->ensurePayoutPreviewAuditFields($report);
+		}
+		$report['report_checksum'] = BadpoolGuardReport::checksum($report);
+		return $report;
+	}
+
+	private function ensurePayoutPreviewAuditFields($report)
+	{
+		if (!isset($report['summary']) || !is_array($report['summary'])) {
+			$report['summary'] = array();
+		}
+		if (!isset($report['summary']['audit']) || !is_array($report['summary']['audit'])) {
+			$report['summary']['audit'] = $this->payoutPreviewAuditSummary($report);
+		}
+		if (!isset($report['summary']['audit']['checksum_note'])) {
+			$report['summary']['audit']['checksum_note'] = 'See top-level report_checksum; generated_at is excluded from checksum input.';
+		}
+		if (!isset($report['summary']['audit']['checksum_purpose'])) {
+			$report['summary']['audit']['checksum_purpose'] = 'preview audit comparison only; not payout authorization';
+		}
+		return $report;
 	}
 
 	private function failedPayoutsSummary()

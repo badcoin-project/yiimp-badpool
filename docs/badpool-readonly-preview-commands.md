@@ -30,6 +30,8 @@ These commands are read-only. They use SELECT-only database queries and are for 
 
 Each rendered preview report includes a top-level `report_checksum` object. The checksum excludes volatile `generated_at` metadata and is intended only for comparing repeated preview reports during review. It is not payout authorization and does not enable execution.
 
+`BadpoolGuardCommand` finalizes reports immediately before output, and JSON output is emitted only after checksum and payout audit metadata are attached.
+
 Runtime validation should check checksum fields with explicit matches, for example `grep -q '"report_checksum"' preview.json` and `grep -q '"audit"' preview.json`, or with explicit match counts. Do not use `grep` piped to `sed` as the condition for these checks.
 
 The shared guard context centralizes option parsing, coin scope validation, dangerous-option refusal, safety metadata, JSON/text rendering, and SELECT-only query helpers. No execute/apply mode exists yet.
