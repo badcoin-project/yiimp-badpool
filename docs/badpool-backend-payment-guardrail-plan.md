@@ -253,6 +253,14 @@ The dry-run plan reports selected coin, coin symbol/algo, candidate count, proje
 
 This plan is read-only. It does not create payout rows, debit accounts, call wallet RPC, write logs, write backups, authorize execution, or change production payment behavior. Future payout-row creation still requires a separate approved PR, separate validation, and separate operator action.
 
+### Patch group J implementation status
+
+Patch group J is documented in `docs/badpool-payout-row-approval-package.md`. It defines the approval package required before any future payout-row creation implementation or mutation-capable task is proposed.
+
+The package requires the latest candidate, preflight, and dry-run plan report paths and checksums; coin ID and algorithm; candidate count; projected payout total; threshold used; operator approval text; backup and mutation-log paths; expected payout-row count; expected account debit total; STOP conditions; rerun/idempotency rule; active wallet-send and share-delete guards; inactive/disabled backend services; separate stage confirmation; and an explicit statement that the package does not authorize wallet sends.
+
+This is documentation-only and adds no payout-row creation capability.
+
 ### Read-only preview commands
 
 ```text
@@ -725,6 +733,15 @@ These must be answered by L3 using read-only live-server checks, not by reposito
 - Report selected coin, coin symbol/algo, candidate count, projected payout total, threshold used, required source preview checksum input, proposed stage name, proposed mutation-log and backup/snapshot status, idempotency/rerun status, blocked row creation, blocked account debit, blocked wallet send, and blocked post-execution verification checklist.
 - Do not create payout rows, debit accounts, call wallet RPC, write logs, write backups, retry/delete payouts, add activation flags, change services, or restore backend loops.
 - Future payout-row creation remains a separate approved PR and operator action.
+
+### Patch group J: payout-row approval package
+
+- Add a documentation-only approval package checklist for future payout-row creation review.
+- Require latest candidate, preflight, and dry-run plan report paths and checksums.
+- Require coin scope, candidate count, projected total, threshold, explicit operator approval text, backup path, mutation log path, expected payout-row count, expected account debit total, STOP conditions, and rerun/idempotency rule.
+- Require confirmation that wallet-send and share-delete guards remain active, `badpool-blocks.service` and `badpool-loop2.service` remain inactive/disabled, and payout-row creation, account debit, wallet send, and post-send verification remain separate stages.
+- State explicitly that the package does not authorize wallet sends.
+- Do not add code, runtime behavior, service behavior, or deployment behavior.
 
 ## Non-goals for this plan
 
