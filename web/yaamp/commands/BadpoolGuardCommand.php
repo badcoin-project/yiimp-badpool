@@ -13,6 +13,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 		'account-credit-preview',
 		'payout-candidates-preview',
 		'payout-row-preflight-preview',
+		'payout-row-dryrun-plan',
 		'safety-scan',
 		'guard-context',
 	);
@@ -57,6 +58,9 @@ class BadpoolGuardCommand extends CConsoleCommand
 			case 'payout-row-preflight-preview':
 				$report = $this->payoutRowPreflightPreviewReport();
 				break;
+			case 'payout-row-dryrun-plan':
+				$report = $this->payoutRowDryRunPlanReport();
+				break;
 			case 'safety-scan':
 				$report = $this->safetyScanReport();
 				break;
@@ -82,6 +86,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 			"       php yaamp/yiic.php badpoolguard account-credit-preview --coin-id=<id> [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard payout-candidates-preview --coin-id=<id> [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard payout-row-preflight-preview --coin-id=<id> [--format=json|text]\n".
+			"       php yaamp/yiic.php badpoolguard payout-row-dryrun-plan --coin-id=<id> [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard safety-scan --coin-id=<id> [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard guard-context --coin-id=<id> [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard overview --all-coins-preview [--format=json|text]\n\n".
@@ -168,6 +173,36 @@ class BadpoolGuardCommand extends CConsoleCommand
 		$report['summary']['projected_total_payout_amount'] = $projectedTotal;
 		$report['summary']['projected_total_remaining_balance'] = $projectedRemaining;
 		$report['summary']['payout_row_preflight'] = $this->payoutRowPreflightSummary($threshold, $candidateCount, $projectedTotal);
+		$report['summary']['audit'] = $this->payoutPreviewAuditSummary($report);
+		$report['items']['candidate_preview'] = $candidates;
+
+		$report = $this->guard->finalizeReport($report);
+		$report = $this->ensurePayoutPreviewAuditFields($report);
+		$report['report_checksum'] = BadpoolGuardReport::checksum($report);
+		return $report;
+	}
+
+	private function payoutRowDryRunPlanReport()
+	{
+		if ($this->guard->isAllCoinsPreview()) {
+			$this->guard->addError('payout-row-dryrun-plan requires --coin-id and refuses all-coin scope.');
+			return $this->guard->refusalReport();
+		}
+
+		$report = $this->guard->baseReport();
+		$candidates = $this->buildReadOnlyPayoutCandidates();
+		$threshold = $this->payoutThreshold();
+		$candidateCount = count($candidates);
+		$projectedTotal = $this->sumColumn($candidates, 'projected_payout_amount');
+		$projectedRemaining = $this->sumColumn($candidates, 'projected_remaining_balance');
+
+		$report['summary']['threshold'] = $threshold;
+		$report['summary']['execution_blocked'] = $this->payoutRowDryRunBlockedMetadata();
+		$report['summary']['preview_limit'] = 200;
+		$report['summary']['candidate_count'] = $candidateCount;
+		$report['summary']['projected_total_payout_amount'] = $projectedTotal;
+		$report['summary']['projected_total_remaining_balance'] = $projectedRemaining;
+		$report['summary']['payout_row_dryrun_plan'] = $this->payoutRowDryRunPlanSummary($threshold, $candidateCount, $projectedTotal);
 		$report['summary']['audit'] = $this->payoutPreviewAuditSummary($report);
 		$report['items']['candidate_preview'] = $candidates;
 
@@ -557,6 +592,82 @@ class BadpoolGuardCommand extends CConsoleCommand
 		);
 	}
 
+	private function payoutRowDryRunBlockedMetadata()
+	{
+		$blocked = $this->payoutExecutionBlockedMetadata();
+		$blocked['stage'] = 'payout_row_creation_dryrun_plan';
+		$blocked['dryrun_plan_status'] = 'read_only';
+		$blocked['payout_row_creation_status'] = 'blocked';
+		$blocked['account_debit_status'] = 'blocked';
+		$blocked['wallet_send_status'] = 'blocked';
+		$blocked['mutation_log_status'] = 'blocked_not_run';
+		$blocked['backup_snapshot_status'] = 'blocked_not_run';
+		$blocked['post_execution_verification_status'] = 'blocked_not_run';
+		$blocked['message'] = 'Read-only payout-row dry-run plan only. Row creation, account debit, wallet send, and verification writes remain unavailable.';
+		return $blocked;
+	}
+
+	private function payoutRowDryRunPlanSummary($threshold, $candidateCount, $projectedTotal)
+	{
+		$scope = $this->guard->getScope();
+		$coin = arraySafeVal($scope, 'coin', array());
+		return array(
+			'coin_id' => arraySafeVal($scope, 'coin_id'),
+			'coin_symbol' => arraySafeVal($coin, 'symbol'),
+			'coin_algo' => arraySafeVal($coin, 'algo'),
+			'candidate_count' => $candidateCount,
+			'projected_payout_total' => $projectedTotal,
+			'threshold_used' => arraySafeVal($threshold, 'minimum_payout', 0),
+			'required_source_preview_checksum_input' => array(
+				'required' => true,
+				'source' => 'approved payout-candidates-preview top-level report_checksum.value',
+				'accepted_by_this_command' => false,
+				'status' => 'blocked_not_run',
+				'note' => 'Dry-run planning reports the checksum requirement but does not accept it as authorization.',
+			),
+			'proposed_payout_row_stage_name' => 'payout_row_creation',
+			'proposed_mutation_log' => array(
+				'path' => null,
+				'status' => 'blocked_not_run',
+				'message' => 'No mutation log is opened or written by this read-only plan.',
+			),
+			'proposed_backup_snapshot' => array(
+				'status' => 'blocked_not_run',
+				'message' => 'Backup and snapshot verification is a future operator preflight and is not performed by this command.',
+			),
+			'idempotency_rerun_status' => array(
+				'idempotency_status' => 'blocked',
+				'rerun_status' => 'not_applicable',
+				'message' => 'No idempotency key is generated because no mutation stage exists in this patch.',
+			),
+			'payout_row_creation' => array(
+				'status' => 'blocked',
+				'creates_rows' => false,
+			),
+			'account_debit' => array(
+				'status' => 'blocked',
+				'debits_accounts' => false,
+			),
+			'wallet_send' => array(
+				'status' => 'blocked',
+				'calls_wallet_rpc' => false,
+				'sends_coins' => false,
+			),
+			'post_execution_verification_checklist' => array(
+				'status' => 'blocked_not_run',
+				'items' => array(
+					'payout_rows',
+					'account_balances',
+					'balance_history_if_used',
+					'withdraws_if_used',
+					'wallet_txid_if_used',
+					'miner_visible_balance_payment_state',
+				),
+			),
+			'blocked_action_metadata' => $this->payoutRowDryRunBlockedMetadata(),
+		);
+	}
+
 	private function payoutPreviewAuditSummary($report)
 	{
 		$scope = $this->guard->getScope();
@@ -601,7 +712,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 
 	private function isPayoutAuditCommand($command)
 	{
-		return in_array($command, array('payout-candidates-preview', 'payout-row-preflight-preview'), true);
+		return in_array($command, array('payout-candidates-preview', 'payout-row-preflight-preview', 'payout-row-dryrun-plan'), true);
 	}
 
 	private function ensurePayoutPreviewAuditFields($report)

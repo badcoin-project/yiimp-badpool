@@ -76,6 +76,10 @@ Current scaffolding may report payout-row preflight readiness in read-only mode.
 
 The preflight report does not create payout rows, debit accounts, call wallet RPC, authorize execution, or perform any database mutation. Future payout-row creation still requires a separate approved PR and operator action.
 
+Current scaffolding may also report a read-only payout-row dry-run plan. That plan can list the selected coin, proposed row-creation stage name, required source preview checksum input, proposed mutation-log and backup/snapshot status, idempotency/rerun status, blocked row creation, blocked account debit, blocked wallet send, and a blocked post-execution verification checklist.
+
+The dry-run plan does not create rows, debit accounts, call wallet RPC, write logs, write backups, authorize execution, or perform any database mutation.
+
 This future stage may only create payout-intent rows after approval for a specific preview report and coin. It must not debit accounts and must not call wallet code.
 
 The mutation log must record every row that would be or was created, including account ID, coin ID, amount, fee fields, status fields, and an idempotency key derived from deterministic non-secret inputs.

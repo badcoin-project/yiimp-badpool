@@ -72,7 +72,7 @@ class BadpoolGuardReport
 
 	private static function isPayoutAuditCommand($command)
 	{
-		return in_array($command, array('payout-candidates-preview', 'payout-row-preflight-preview'), true);
+		return in_array($command, array('payout-candidates-preview', 'payout-row-preflight-preview', 'payout-row-dryrun-plan'), true);
 	}
 
 	private static function canonicalizeForChecksum($value, $keyName=null)

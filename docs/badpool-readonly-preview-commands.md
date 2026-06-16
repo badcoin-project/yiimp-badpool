@@ -1,6 +1,6 @@
 # BadPool Read-Only Preview Commands
 
-Patch group A adds a guarded Yii console command for DB-only preview reports. Patch group B adds shared guard context/report plumbing used by the same commands. Patch group C adds a source-level wallet-send hard guard. Patch group D adds a source-level share-delete hard guard. Patch group E improves read-only payout candidate preview reporting. Patch group F adds deterministic preview checksum metadata. Patch group G defines the future payout execution design. Patch group H adds read-only payout-row preflight scaffolding. These guards and previews do not add execute/apply behavior or any activation path.
+Patch group A adds a guarded Yii console command for DB-only preview reports. Patch group B adds shared guard context/report plumbing used by the same commands. Patch group C adds a source-level wallet-send hard guard. Patch group D adds a source-level share-delete hard guard. Patch group E improves read-only payout candidate preview reporting. Patch group F adds deterministic preview checksum metadata. Patch group G defines the future payout execution design. Patch group H adds read-only payout-row preflight scaffolding. Patch group I adds a read-only payout-row dry-run plan preview. These guards and previews do not add execute/apply behavior or any activation path.
 
 ```text
 cd web
@@ -10,6 +10,7 @@ php yaamp/yiic.php badpoolguard earnings-preview --coin-id=<coin-id>
 php yaamp/yiic.php badpoolguard account-credit-preview --coin-id=<coin-id>
 php yaamp/yiic.php badpoolguard payout-candidates-preview --coin-id=<coin-id>
 php yaamp/yiic.php badpoolguard payout-row-preflight-preview --coin-id=<coin-id>
+php yaamp/yiic.php badpoolguard payout-row-dryrun-plan --coin-id=<coin-id>
 php yaamp/yiic.php badpoolguard safety-scan --coin-id=<coin-id>
 php yaamp/yiic.php badpoolguard guard-context --coin-id=<coin-id>
 ```
@@ -30,6 +31,8 @@ These commands are read-only. They use SELECT-only database queries and are for 
 `payout-candidates-preview` reports account/coin payout candidates, threshold inputs, projected payout amounts, projected remaining balances, and blocked execution metadata. It does not create payout rows, does not debit accounts, does not call wallet RPC, and does not send coins.
 
 `payout-row-preflight-preview` reports the read-only preflight fields that a later payout-row creation task would require: selected coin, required preview checksum input, candidate count, projected payout total, payout threshold used, backup status, mutation-log status, stage status, and blocked action metadata. It does not create payout rows, does not debit accounts, does not call wallet RPC, does not authorize execution, and does not perform any database mutation.
+
+`payout-row-dryrun-plan` reports a read-only plan for future payout-row creation: selected coin, coin symbol/algo, candidate count, projected payout total, threshold used, required source preview checksum input, proposed stage name, proposed mutation-log and backup/snapshot status, idempotency/rerun status, blocked row creation, blocked account debit, blocked wallet send, and a blocked post-execution verification checklist. It plans future row creation but does not create rows, debit accounts, call wallet RPC, write logs, write backups, authorize execution, or perform any database mutation.
 
 Each rendered preview report includes a top-level `report_checksum` object. The checksum excludes volatile `generated_at` metadata and is intended only for comparing repeated preview reports during review. It is not payout authorization and does not enable execution.
 
@@ -59,4 +62,4 @@ Future share deletion enablement must also be a separate approved change. Histor
 
 Future payout execution must be a separate approved change. The future design is documented in `docs/badpool-future-payout-execution-design.md`; it keeps payout candidate reports, payout-row creation, account debits, payout retry/delete, and wallet sends as separate stages with report checksum review and explicit production approval.
 
-Future payout-row creation requires a separate approved PR and separate operator action. The preflight preview added after the design spec is review scaffolding only.
+Future payout-row creation requires a separate approved PR and separate operator action. The preflight and dry-run plan previews added after the design spec are review scaffolding only.
