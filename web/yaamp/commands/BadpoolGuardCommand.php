@@ -482,6 +482,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 			'projected_total_payout_amount' => arraySafeVal($report['summary'], 'projected_total_payout_amount', 0),
 			'blocked_actions' => arraySafeVal($report['summary']['execution_blocked'], 'blocked_actions', array()),
 			'checksum_note' => 'See top-level report_checksum; generated_at is excluded from checksum input.',
+			'checksum_purpose' => 'preview audit comparison only; not payout authorization',
 		);
 	}
 
