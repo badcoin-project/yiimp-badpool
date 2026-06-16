@@ -154,6 +154,7 @@ class BadpoolGuardContext
 	{
 		$report['warnings'] = $this->warnings;
 		$report['errors'] = $this->errors;
+		$report['report_checksum'] = BadpoolGuardReport::checksum($report);
 		return $report;
 	}
 

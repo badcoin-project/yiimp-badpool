@@ -1,6 +1,6 @@
 # BadPool Read-Only Preview Commands
 
-Patch group A adds a guarded Yii console command for DB-only preview reports. Patch group B adds shared guard context/report plumbing used by the same commands. Patch group C adds a source-level wallet-send hard guard. Patch group D adds a source-level share-delete hard guard. Patch group E improves read-only payout candidate preview reporting. These guards and previews do not add execute/apply behavior or any activation path.
+Patch group A adds a guarded Yii console command for DB-only preview reports. Patch group B adds shared guard context/report plumbing used by the same commands. Patch group C adds a source-level wallet-send hard guard. Patch group D adds a source-level share-delete hard guard. Patch group E improves read-only payout candidate preview reporting. Patch group F adds deterministic preview checksum metadata. These guards and previews do not add execute/apply behavior or any activation path.
 
 ```text
 cd web
@@ -27,6 +27,8 @@ php yaamp/yiic.php badpoolguard overview --all-coins-preview
 These commands are read-only. They use SELECT-only database queries and are for review before any L3/live apply work.
 
 `payout-candidates-preview` reports account/coin payout candidates, threshold inputs, projected payout amounts, projected remaining balances, and blocked execution metadata. It does not create payout rows, does not debit accounts, does not call wallet RPC, and does not send coins.
+
+Each rendered preview report includes a top-level `report_checksum` object. The checksum excludes volatile `generated_at` metadata and is intended only for comparing repeated preview reports during review. It is not payout authorization and does not enable execution.
 
 The shared guard context centralizes option parsing, coin scope validation, dangerous-option refusal, safety metadata, JSON/text rendering, and SELECT-only query helpers. No execute/apply mode exists yet.
 

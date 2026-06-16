@@ -135,6 +135,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 		$report['summary']['candidate_count'] = count($report['items']['candidates']);
 		$report['summary']['projected_total_payout_amount'] = $this->sumColumn($report['items']['candidates'], 'projected_payout_amount');
 		$report['summary']['projected_total_remaining_balance'] = $this->sumColumn($report['items']['candidates'], 'projected_remaining_balance');
+		$report['summary']['audit'] = $this->payoutPreviewAuditSummary($report);
 		return $this->guard->finalizeReport($report);
 	}
 
@@ -465,6 +466,22 @@ class BadpoolGuardCommand extends CConsoleCommand
 			),
 			'wallet_rpc_used' => false,
 			'message' => 'Read-only payout preview only. Execution requires a separate approved task.',
+		);
+	}
+
+	private function payoutPreviewAuditSummary($report)
+	{
+		$scope = $this->guard->getScope();
+		$coin = arraySafeVal($scope, 'coin', array());
+		return array(
+			'command' => arraySafeVal($report, 'command'),
+			'coin_id' => arraySafeVal($scope, 'coin_id'),
+			'coin_symbol' => arraySafeVal($coin, 'symbol'),
+			'coin_algo' => arraySafeVal($coin, 'algo'),
+			'candidate_count' => arraySafeVal($report['summary'], 'candidate_count', 0),
+			'projected_total_payout_amount' => arraySafeVal($report['summary'], 'projected_total_payout_amount', 0),
+			'blocked_actions' => arraySafeVal($report['summary']['execution_blocked'], 'blocked_actions', array()),
+			'checksum_note' => 'See top-level report_checksum; generated_at is excluded from checksum input.',
 		);
 	}
 

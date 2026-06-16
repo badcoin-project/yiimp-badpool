@@ -205,6 +205,18 @@ php yaamp/yiic.php badpoolguard payout-candidates-preview --coin-id=<coin-id>
 
 The preview uses SELECT-only account and coin queries. It does not call `BackendPayments()`, does not call `BackendCoinPayments()`, does not instantiate `WalletRPC`, does not call wallet RPC, does not create payout rows, does not debit accounts, does not retry/delete payouts, and does not send coins. Wallet-send remains blocked by the hard guard. Future payout execution requires a separate explicit approval task with report checksum validation, coin scope, account-debit separation, payout-row approval, and wallet-send approval.
 
+### Patch group F implementation status
+
+Patch group F adds deterministic checksum metadata for read-only preview reports in:
+
+- `web/yaamp/core/backend/BadpoolGuardReport.php`
+- `web/yaamp/core/backend/BadpoolGuardContext.php`
+- `web/yaamp/commands/BadpoolGuardCommand.php`
+
+`BadpoolGuardContext::finalizeReport()` adds a top-level `report_checksum` object to rendered JSON/text reports. The checksum uses SHA-256 over canonicalized report content with stable object key ordering and excludes volatile `generated_at` and `report_checksum` fields. This checksum is for preview audit comparison only and is not payout authorization.
+
+`payout-candidates-preview` also includes `summary.audit` fields for command, coin id, coin symbol/algo, candidate count, projected total payout amount, and blocked actions. It still does not create payout rows, debit accounts, call wallet RPC, send coins, add execute/apply flags, or change production payment behavior.
+
 ### Read-only preview commands
 
 ```text
@@ -661,6 +673,7 @@ These must be answered by L3 using read-only live-server checks, not by reposito
 - Add output adapters for table, JSON, JSONL, and CSV.
 - Add report checksum generation for execute gating.
 - Add redaction helpers for secrets and optional address/tx fingerprints.
+- Current Patch F implementation adds checksum metadata for preview audit comparison only; execution gating remains future work.
 
 ## Non-goals for this plan
 
