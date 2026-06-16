@@ -140,6 +140,7 @@ php yaamp/yiic.php badpoolguard blocks-preview --coin-id=<coin-id>
 php yaamp/yiic.php badpoolguard earnings-preview --coin-id=<coin-id>
 php yaamp/yiic.php badpoolguard account-credit-preview --coin-id=<coin-id>
 php yaamp/yiic.php badpoolguard payout-candidates-preview --coin-id=<coin-id>
+php yaamp/yiic.php badpoolguard payout-row-preflight-preview --coin-id=<coin-id>
 php yaamp/yiic.php badpoolguard safety-scan --coin-id=<coin-id>
 ```
 
@@ -224,6 +225,19 @@ Patch group G is documented in `docs/badpool-future-payout-execution-design.md`.
 The design requires future payout work to remain one coin at a time and one stage at a time. Candidate preview, payout row creation, account debit, wallet send, and post-send verification must be separately approved, logged, and verified. The preview checksum remains an audit comparison input only, not automatic authorization.
 
 Wallet-send and share-delete hard guards remain active. Any future payout execution implementation still requires a separate PR, separate code review, separate validation, and separate operator approval.
+
+### Patch group H implementation status
+
+Patch group H adds read-only payout-row creation preflight scaffolding to `web/yaamp/commands/BadpoolGuardCommand.php`:
+
+```text
+cd /srv/badpool/yiimp-badpool/web
+php yaamp/yiic.php badpoolguard payout-row-preflight-preview --coin-id=<coin-id>
+```
+
+The preflight preview reports selected coin, required preview checksum input, candidate count, projected payout total, payout threshold used, backup status, mutation-log status, stage status, and blocked action metadata. It does not create payout rows, debit accounts, call wallet RPC, authorize execution, or change production payment behavior.
+
+Future payout-row creation still requires a separate approved PR, separate validation, and separate operator action.
 
 ### Read-only preview commands
 
@@ -682,6 +696,13 @@ These must be answered by L3 using read-only live-server checks, not by reposito
 - Add report checksum generation for execute gating.
 - Add redaction helpers for secrets and optional address/tx fingerprints.
 - Current Patch F implementation adds checksum metadata for preview audit comparison only; execution gating remains future work.
+
+### Patch group H: payout-row preflight scaffolding
+
+- Add a read-only payout-row preflight preview section or command.
+- Report selected coin, required preview checksum input, candidate count, projected payout total, payout threshold used, backup status, mutation-log status, stage status, and blocked action metadata.
+- Do not add payout-row creation, account debit, wallet RPC calls, retry/delete behavior, activation flags, service changes, or backend loop restoration.
+- Future payout-row creation remains a separate approved PR and operator action.
 
 ## Non-goals for this plan
 

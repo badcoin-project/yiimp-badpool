@@ -1,6 +1,6 @@
 # BadPool Read-Only Preview Commands
 
-Patch group A adds a guarded Yii console command for DB-only preview reports. Patch group B adds shared guard context/report plumbing used by the same commands. Patch group C adds a source-level wallet-send hard guard. Patch group D adds a source-level share-delete hard guard. Patch group E improves read-only payout candidate preview reporting. Patch group F adds deterministic preview checksum metadata. These guards and previews do not add execute/apply behavior or any activation path.
+Patch group A adds a guarded Yii console command for DB-only preview reports. Patch group B adds shared guard context/report plumbing used by the same commands. Patch group C adds a source-level wallet-send hard guard. Patch group D adds a source-level share-delete hard guard. Patch group E improves read-only payout candidate preview reporting. Patch group F adds deterministic preview checksum metadata. Patch group G defines the future payout execution design. Patch group H adds read-only payout-row preflight scaffolding. These guards and previews do not add execute/apply behavior or any activation path.
 
 ```text
 cd web
@@ -9,6 +9,7 @@ php yaamp/yiic.php badpoolguard blocks-preview --coin-id=<coin-id>
 php yaamp/yiic.php badpoolguard earnings-preview --coin-id=<coin-id>
 php yaamp/yiic.php badpoolguard account-credit-preview --coin-id=<coin-id>
 php yaamp/yiic.php badpoolguard payout-candidates-preview --coin-id=<coin-id>
+php yaamp/yiic.php badpoolguard payout-row-preflight-preview --coin-id=<coin-id>
 php yaamp/yiic.php badpoolguard safety-scan --coin-id=<coin-id>
 php yaamp/yiic.php badpoolguard guard-context --coin-id=<coin-id>
 ```
@@ -27,6 +28,8 @@ php yaamp/yiic.php badpoolguard overview --all-coins-preview
 These commands are read-only. They use SELECT-only database queries and are for review before any L3/live apply work.
 
 `payout-candidates-preview` reports account/coin payout candidates, threshold inputs, projected payout amounts, projected remaining balances, and blocked execution metadata. It does not create payout rows, does not debit accounts, does not call wallet RPC, and does not send coins.
+
+`payout-row-preflight-preview` reports the read-only preflight fields that a later payout-row creation task would require: selected coin, required preview checksum input, candidate count, projected payout total, payout threshold used, backup status, mutation-log status, stage status, and blocked action metadata. It does not create payout rows, does not debit accounts, does not call wallet RPC, does not authorize execution, and does not perform any database mutation.
 
 Each rendered preview report includes a top-level `report_checksum` object. The checksum excludes volatile `generated_at` metadata and is intended only for comparing repeated preview reports during review. It is not payout authorization and does not enable execution.
 
@@ -55,3 +58,5 @@ Future wallet-send enablement must be a separate approved change. It should requ
 Future share deletion enablement must also be a separate approved change. Historical share evidence is preserved during restoration planning, and backend/payment services must remain frozen unless separately approved.
 
 Future payout execution must be a separate approved change. The future design is documented in `docs/badpool-future-payout-execution-design.md`; it keeps payout candidate reports, payout-row creation, account debits, payout retry/delete, and wallet sends as separate stages with report checksum review and explicit production approval.
+
+Future payout-row creation requires a separate approved PR and separate operator action. The preflight preview added after the design spec is review scaffolding only.

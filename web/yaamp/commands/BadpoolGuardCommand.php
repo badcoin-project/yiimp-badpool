@@ -12,6 +12,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 		'earnings-preview',
 		'account-credit-preview',
 		'payout-candidates-preview',
+		'payout-row-preflight-preview',
 		'safety-scan',
 		'guard-context',
 	);
@@ -53,6 +54,9 @@ class BadpoolGuardCommand extends CConsoleCommand
 			case 'payout-candidates-preview':
 				$report = $this->payoutCandidatesPreviewReport();
 				break;
+			case 'payout-row-preflight-preview':
+				$report = $this->payoutRowPreflightPreviewReport();
+				break;
 			case 'safety-scan':
 				$report = $this->safetyScanReport();
 				break;
@@ -77,6 +81,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 			"       php yaamp/yiic.php badpoolguard earnings-preview --coin-id=<id> [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard account-credit-preview --coin-id=<id> [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard payout-candidates-preview --coin-id=<id> [--format=json|text]\n".
+			"       php yaamp/yiic.php badpoolguard payout-row-preflight-preview --coin-id=<id> [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard safety-scan --coin-id=<id> [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard guard-context --coin-id=<id> [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard overview --all-coins-preview [--format=json|text]\n\n".
@@ -136,6 +141,36 @@ class BadpoolGuardCommand extends CConsoleCommand
 		$report['summary']['projected_total_payout_amount'] = $this->sumColumn($report['items']['candidates'], 'projected_payout_amount');
 		$report['summary']['projected_total_remaining_balance'] = $this->sumColumn($report['items']['candidates'], 'projected_remaining_balance');
 		$report['summary']['audit'] = $this->payoutPreviewAuditSummary($report);
+		$report = $this->guard->finalizeReport($report);
+		$report = $this->ensurePayoutPreviewAuditFields($report);
+		$report['report_checksum'] = BadpoolGuardReport::checksum($report);
+		return $report;
+	}
+
+	private function payoutRowPreflightPreviewReport()
+	{
+		if ($this->guard->isAllCoinsPreview()) {
+			$this->guard->addError('payout-row-preflight-preview requires --coin-id and refuses all-coin scope.');
+			return $this->guard->refusalReport();
+		}
+
+		$report = $this->guard->baseReport();
+		$candidates = $this->buildReadOnlyPayoutCandidates();
+		$threshold = $this->payoutThreshold();
+		$candidateCount = count($candidates);
+		$projectedTotal = $this->sumColumn($candidates, 'projected_payout_amount');
+		$projectedRemaining = $this->sumColumn($candidates, 'projected_remaining_balance');
+
+		$report['summary']['threshold'] = $threshold;
+		$report['summary']['execution_blocked'] = $this->payoutRowPreflightBlockedMetadata();
+		$report['summary']['preview_limit'] = 200;
+		$report['summary']['candidate_count'] = $candidateCount;
+		$report['summary']['projected_total_payout_amount'] = $projectedTotal;
+		$report['summary']['projected_total_remaining_balance'] = $projectedRemaining;
+		$report['summary']['payout_row_preflight'] = $this->payoutRowPreflightSummary($threshold, $candidateCount, $projectedTotal);
+		$report['summary']['audit'] = $this->payoutPreviewAuditSummary($report);
+		$report['items']['candidate_preview'] = $candidates;
+
 		$report = $this->guard->finalizeReport($report);
 		$report = $this->ensurePayoutPreviewAuditFields($report);
 		$report['report_checksum'] = BadpoolGuardReport::checksum($report);
@@ -472,18 +507,70 @@ class BadpoolGuardCommand extends CConsoleCommand
 		);
 	}
 
+	private function payoutRowPreflightBlockedMetadata()
+	{
+		$blocked = $this->payoutExecutionBlockedMetadata();
+		$blocked['stage'] = 'payout_row_creation_preflight';
+		$blocked['payout_row_creation_status'] = 'blocked';
+		$blocked['backup_status'] = 'blocked_not_run';
+		$blocked['mutation_log_status'] = 'blocked_not_run';
+		$blocked['message'] = 'Read-only payout-row preflight only. Row creation remains unavailable and requires a separate approved task.';
+		return $blocked;
+	}
+
+	private function payoutRowPreflightSummary($threshold, $candidateCount, $projectedTotal)
+	{
+		$scope = $this->guard->getScope();
+		return array(
+			'coin_id' => arraySafeVal($scope, 'coin_id'),
+			'report_checksum_input' => array(
+				'required_for_future_row_creation' => true,
+				'source' => 'approved payout-candidates-preview top-level report_checksum.value',
+				'accepted_by_this_command' => false,
+				'status' => 'blocked_not_run',
+				'note' => 'This preview reports the required checksum input but does not authorize or perform row creation.',
+			),
+			'candidate_count' => $candidateCount,
+			'projected_payout_total' => $projectedTotal,
+			'payout_threshold_used' => arraySafeVal($threshold, 'minimum_payout', 0),
+			'backup_status' => array(
+				'required' => true,
+				'status' => 'blocked_not_run',
+				'message' => 'Backup and snapshot verification must be completed outside this read-only preview before any future row creation task.',
+			),
+			'mutation_log_status' => array(
+				'required' => true,
+				'status' => 'blocked_not_run',
+				'message' => 'Mutation log setup is only reported here and is not opened or written by this preview.',
+			),
+			'execution_stage_status' => array(
+				'stage' => 'payout_row_creation',
+				'status' => 'blocked',
+				'message' => 'No mutation-capable payout-row stage exists in this patch.',
+			),
+			'payout_row_creation_status' => array(
+				'status' => 'blocked',
+				'creates_rows' => false,
+				'message' => 'No payout rows are created by this preview.',
+			),
+			'blocked_action_metadata' => $this->payoutRowPreflightBlockedMetadata(),
+		);
+	}
+
 	private function payoutPreviewAuditSummary($report)
 	{
 		$scope = $this->guard->getScope();
 		$coin = arraySafeVal($scope, 'coin', array());
+		$summary = arraySafeVal($report, 'summary', array());
+		$executionBlocked = arraySafeVal($summary, 'execution_blocked', array());
 		return array(
 			'command' => arraySafeVal($report, 'command'),
 			'coin_id' => arraySafeVal($scope, 'coin_id'),
 			'coin_symbol' => arraySafeVal($coin, 'symbol'),
 			'coin_algo' => arraySafeVal($coin, 'algo'),
-			'candidate_count' => arraySafeVal($report['summary'], 'candidate_count', 0),
-			'projected_total_payout_amount' => arraySafeVal($report['summary'], 'projected_total_payout_amount', 0),
-			'blocked_actions' => arraySafeVal($report['summary']['execution_blocked'], 'blocked_actions', array()),
+			'candidate_count' => arraySafeVal($summary, 'candidate_count', 0),
+			'projected_total_payout_amount' => arraySafeVal($summary, 'projected_total_payout_amount', 0),
+			'blocked_actions' => arraySafeVal($executionBlocked, 'blocked_actions', array()),
 			'checksum_note' => 'See top-level report_checksum; generated_at is excluded from checksum input.',
 			'checksum_purpose' => 'preview audit comparison only; not payout authorization',
 		);
@@ -505,11 +592,16 @@ class BadpoolGuardCommand extends CConsoleCommand
 	private function finalizeCommandReport($report)
 	{
 		$report = $this->guard->finalizeReport($report);
-		if (arraySafeVal($report, 'command') == 'payout-candidates-preview') {
+		if ($this->isPayoutAuditCommand(arraySafeVal($report, 'command'))) {
 			$report = $this->ensurePayoutPreviewAuditFields($report);
 		}
 		$report['report_checksum'] = BadpoolGuardReport::checksum($report);
 		return $report;
+	}
+
+	private function isPayoutAuditCommand($command)
+	{
+		return in_array($command, array('payout-candidates-preview', 'payout-row-preflight-preview'), true);
 	}
 
 	private function ensurePayoutPreviewAuditFields($report)

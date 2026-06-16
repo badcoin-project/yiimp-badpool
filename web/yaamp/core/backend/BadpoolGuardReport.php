@@ -39,7 +39,7 @@ class BadpoolGuardReport
 
 	private static function ensurePayoutAudit($report)
 	{
-		if (!is_array($report) || self::arrayValue($report, 'command') !== 'payout-candidates-preview') {
+		if (!is_array($report) || !self::isPayoutAuditCommand(self::arrayValue($report, 'command'))) {
 			return $report;
 		}
 		if (!isset($report['summary']) || !is_array($report['summary'])) {
@@ -68,6 +68,11 @@ class BadpoolGuardReport
 		);
 
 		return $report;
+	}
+
+	private static function isPayoutAuditCommand($command)
+	{
+		return in_array($command, array('payout-candidates-preview', 'payout-row-preflight-preview'), true);
 	}
 
 	private static function canonicalizeForChecksum($value, $keyName=null)
