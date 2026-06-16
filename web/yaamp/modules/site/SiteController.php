@@ -1,5 +1,7 @@
 <?php
 
+require_once(dirname(__FILE__).'/../../core/backend/BadpoolShareDeleteGuard.php');
+
 class SiteController extends CommonController
 {
 	public $defaultAction='index';
@@ -1135,7 +1137,7 @@ class SiteController extends CommonController
 			dborun("delete from earnings where coinid=$coin->id");
 		//	dborun("delete from markets where coinid=$coin->id");
 			dborun("delete from orders where coinid=$coin->id");
-			dborun("delete from shares where coinid=$coin->id");
+			badpool_share_delete_guard_skip(__METHOD__, "coinid=".intval($coin->id));
 
 			$coin->enable = false;
 			$coin->installed = false;

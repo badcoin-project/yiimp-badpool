@@ -93,6 +93,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 		$report['summary']['payouts'] = $this->payoutsSummary();
 		$report['summary']['withdraws'] = $this->withdrawsSummary();
 		$report['summary']['shares'] = $this->sharesSummary();
+		$report['summary']['share_delete_guard'] = $this->shareDeleteGuardSummary();
 		return $this->guard->finalizeReport($report);
 	}
 
@@ -102,6 +103,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 		$where = $this->guard->coinWhere('blocks', 'coin_id');
 		$report['summary']['blocks_by_category'] = $this->groupSummary('blocks', 'category', $where);
 		$report['summary']['backend_touch_candidates'] = $this->blockTouchCandidates();
+		$report['summary']['share_delete_guard'] = $this->shareDeleteGuardSummary();
 		return $this->guard->finalizeReport($report);
 	}
 
@@ -141,6 +143,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 		$report['summary']['positive_accounts'] = $this->accountsSummary();
 		$report['summary']['failed_or_empty_tx_payouts'] = $this->failedPayoutsSummary();
 		$report['summary']['withdraws'] = $this->withdrawsSummary();
+		$report['summary']['share_delete_guard'] = $this->shareDeleteGuardSummary();
 		$report['summary']['service_state'] = array(
 			'checked' => false,
 			'message' => 'Repository preview command does not prove production service/process state. L3 must verify backend services remain frozen before any live restoration work.',
@@ -263,6 +266,16 @@ class BadpoolGuardCommand extends CConsoleCommand
 		$row = $this->guard->selectRow("SELECT ".implode(', ', $parts)." FROM shares WHERE ".$where['sql'], $where['params']);
 		$row['filter'] = $where['filter'];
 		return $row;
+	}
+
+	private function shareDeleteGuardSummary()
+	{
+		return array(
+			'guarded' => true,
+			'deletion_available' => false,
+			'message' => 'Share deletion is guarded at the source level and remains disabled by default.',
+			'candidate_preview' => $this->sharesSummary(),
+		);
 	}
 
 	private function blockTouchCandidates()

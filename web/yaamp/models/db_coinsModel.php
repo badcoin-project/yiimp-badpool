@@ -1,4 +1,5 @@
 <?php
+require_once(dirname(__FILE__).'/../core/backend/BadpoolShareDeleteGuard.php');
 
 class db_coins extends CActiveRecord
 {
@@ -78,12 +79,12 @@ class db_coins extends CActiveRecord
 
 		dborun("DELETE FROM balanceuser WHERE userid IN $ids_query");
 		dborun("DELETE FROM hashuser WHERE userid IN $ids_query");
-		dborun("DELETE FROM shares WHERE userid IN $ids_query");
+		badpool_share_delete_guard_skip(__METHOD__, "userid IN $ids_query");
 		dborun("DELETE FROM workers WHERE userid IN $ids_query");
 		dborun("DELETE FROM payouts WHERE account_id IN $ids_query");
 
 		dborun("DELETE FROM blocks WHERE coin_id=".$coin->id);
-		dborun("DELETE FROM shares WHERE coinid=".$coin->id);
+		badpool_share_delete_guard_skip(__METHOD__, "coinid=".intval($coin->id));
 		dborun("DELETE FROM earnings WHERE coinid=".$coin->id);
 		dborun("DELETE FROM notifications WHERE idcoin=".$coin->id);
 		dborun("DELETE FROM market_history WHERE idcoin=".$coin->id);

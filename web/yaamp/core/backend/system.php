@@ -1,5 +1,7 @@
 <?php
 
+require_once(dirname(__FILE__).'/BadpoolShareDeleteGuard.php');
+
 function BackendDoBackup()
 {
 	if (is_readable("/usr/bin/xz")) {
@@ -96,37 +98,11 @@ function marketHistoryPrune($symbol="")
 function consolidateOldShares()
 {
 	$delay = time() - 24*60*60; // drop invalid shares not used anymore (24h graph only)
-	dborun("DELETE FROM shares WHERE time < $delay AND valid = 0");
+	badpool_share_delete_guard_skip(__FUNCTION__, "time < $delay AND valid = 0");
 
 	$t1 = time() - 48*3600;
-	$list = dbolist("SELECT coinid, userid, workerid, algo, AVG(time) AS time, SUM(difficulty) AS difficulty, AVG(share_diff) AS share_diff ".
-		"FROM shares WHERE valid AND time < $t1 AND pid > 0 ".
-		"GROUP BY coinid, userid, workerid, algo ORDER BY coinid, userid");
-	$pruned = 0;
-	foreach ($list as $row) {
-		$share = new db_shares;
-		$share->isNewRecord = true;
-		$share->coinid = $row['coinid'];
-		$share->userid = $row['userid'];
-		$share->workerid = $row['workerid'];
-		$share->algo = $row['algo'];
-		$share->time = (int) $row['time'];
-		$share->difficulty = $row['difficulty'];
-		$share->share_diff = $row['share_diff'];
-		$share->valid = 1;
-		$share->pid = 0;
-		if ($share->save()) {
-			$pruned += dborun("DELETE FROM shares WHERE userid=:userid AND coinid=:coinid AND workerid=:worker AND pid > 0 AND time < $t1", array(
-				':userid' => $row['userid'],
-				':coinid' => $row['coinid'],
-				':worker' => $row['workerid'],
-			));
-		}
-	}
-	if ($pruned) {
-		debuglog("$pruned old shares records were consolidated");
-	}
-	return $pruned;
+	badpool_share_delete_guard_skip(__FUNCTION__, "valid AND time < $t1 AND pid > 0");
+	return 0;
 }
 
 function BackendCleanDatabase()
@@ -138,7 +114,7 @@ function BackendCleanDatabase()
 	dborun("delete from hashstats where time<$delay");
 	dborun("delete from payouts where time<$delay");
 	dborun("delete from rentertxs where time<$delay");
-	dborun("DELETE FROM shares WHERE time<$delay");
+	badpool_share_delete_guard_skip(__FUNCTION__, "time<$delay");
 
 	$delay = time() - 2*24*60*60;
 	dborun("delete from stats where time<$delay");
@@ -147,7 +123,7 @@ function BackendCleanDatabase()
 	dborun("delete from hashrenter where time<$delay");
 	dborun("delete from balanceuser where time<$delay");
 	dborun("delete from exchange where send_time<$delay");
-	dborun("DELETE FROM shares WHERE time<$delay AND coinid NOT IN (select id from coins)");
+	badpool_share_delete_guard_skip(__FUNCTION__, "time<$delay AND coinid NOT IN (select id from coins)");
 
 	consolidateOldShares();
 

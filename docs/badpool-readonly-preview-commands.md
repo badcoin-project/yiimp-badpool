@@ -1,6 +1,6 @@
 # BadPool Read-Only Preview Commands
 
-Patch group A adds a guarded Yii console command for DB-only preview reports. Patch group B adds shared guard context/report plumbing used by the same commands. Patch group C adds a source-level wallet-send hard guard; it does not add execute/apply behavior or any wallet-send activation path.
+Patch group A adds a guarded Yii console command for DB-only preview reports. Patch group B adds shared guard context/report plumbing used by the same commands. Patch group C adds a source-level wallet-send hard guard. Patch group D adds a source-level share-delete hard guard. Neither guard adds execute/apply behavior or any activation path.
 
 ```text
 cd web
@@ -33,7 +33,7 @@ Safety properties:
 - No wallet reads are used by default.
 - No wallet sends are available; send-style wallet RPC methods are refused by the hard guard.
 - No DB mutations are performed.
-- No shares are deleted.
+- No shares are deleted; backend share cleanup is refused by the hard guard.
 - No payout rows are created.
 - No withdraw rows are created.
 - No account balances, earnings, blocks, coins, or payouts are changed.
@@ -43,3 +43,5 @@ Safety properties:
 Backend/payment restoration remains **NO-GO / KEEP FROZEN** until separate guardrails, validation, and explicit approval exist. The `safety-scan` command summarizes risky database conditions, but it does not prove production service/process state unless run on the server with separate L3 runtime inspection.
 
 Future wallet-send enablement must be a separate approved change. It should require explicit command context, coin scope, report checksum validation, production approval, and service-state review before any live send path is considered.
+
+Future share deletion enablement must also be a separate approved change. Historical share evidence is preserved during restoration planning, and backend/payment services must remain frozen unless separately approved.
