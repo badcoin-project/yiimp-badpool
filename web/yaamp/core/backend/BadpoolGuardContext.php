@@ -154,7 +154,7 @@ class BadpoolGuardContext
 	{
 		$report['warnings'] = $this->warnings;
 		$report['errors'] = $this->errors;
-		return $report;
+		return BadpoolGuardReport::finalize($report);
 	}
 
 	public function emit($report)
