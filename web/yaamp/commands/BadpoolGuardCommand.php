@@ -136,7 +136,10 @@ class BadpoolGuardCommand extends CConsoleCommand
 		$report['summary']['projected_total_payout_amount'] = $this->sumColumn($report['items']['candidates'], 'projected_payout_amount');
 		$report['summary']['projected_total_remaining_balance'] = $this->sumColumn($report['items']['candidates'], 'projected_remaining_balance');
 		$report['summary']['audit'] = $this->payoutPreviewAuditSummary($report);
-		return $this->guard->finalizeReport($report);
+		$report = $this->guard->finalizeReport($report);
+		$report = $this->ensurePayoutPreviewAuditFields($report);
+		$report['report_checksum'] = BadpoolGuardReport::checksum($report);
+		return $report;
 	}
 
 	private function safetyScanReport()
@@ -491,6 +494,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 		$report = $this->finalizeCommandReport($report);
 
 		if ($this->guard->getFormat() == 'json') {
+			// Finalization must stay immediately before output so runtime JSON includes checksum/audit fields.
 			echo json_encode($report, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES)."\n";
 			return;
 		}
