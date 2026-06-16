@@ -192,6 +192,19 @@ This implementation has no source-level activation path and does not add execute
 
 Read-only preview commands continue to report `share_deletion=false`. `overview`, `blocks-preview`, and `safety-scan` now include `share_delete_guard` metadata with a guarded status and SELECT-only share candidate summary.
 
+### Patch group E implementation status
+
+Patch group E improves the existing read-only payout candidate preview in `web/yaamp/commands/BadpoolGuardCommand.php`. The `payout-candidates-preview` command now builds payout candidates separately from any execution path and reports account, coin, threshold, fee, projected payout, projected remaining balance, and blocked execution metadata.
+
+Implemented read-only syntax:
+
+```text
+cd /srv/badpool/yiimp-badpool/web
+php yaamp/yiic.php badpoolguard payout-candidates-preview --coin-id=<coin-id>
+```
+
+The preview uses SELECT-only account and coin queries. It does not call `BackendPayments()`, does not call `BackendCoinPayments()`, does not instantiate `WalletRPC`, does not call wallet RPC, does not create payout rows, does not debit accounts, does not retry/delete payouts, and does not send coins. Wallet-send remains blocked by the hard guard. Future payout execution requires a separate explicit approval task with report checksum validation, coin scope, account-debit separation, payout-row approval, and wallet-send approval.
+
 ### Read-only preview commands
 
 ```text
@@ -637,11 +650,10 @@ These must be answered by L3 using read-only live-server checks, not by reposito
 
 ### Patch group E: payout preview and execute separation
 
-- Extract payout candidate calculation from `BackendCoinPayments()`.
-- Add a payout-row execution function that does not send wallets.
-- Add a wallet-send execution function that only accepts approved payout rows/candidate checksums.
-- Extract payout retry/delete into separate preview and execute functions.
-- Ensure account debit and tx recording are consistent and reversible by report.
+- Keep payout candidate calculation separate from `BackendCoinPayments()` execution.
+- Report account, coin, threshold, fee, projected payout, projected remaining balance, and blocked action metadata.
+- Do not add payout-row execution, account debit, wallet RPC, retry/delete, execute/apply flags, or wallet-send behavior in this patch.
+- Leave payout-row execution, wallet-send execution, and retry/delete separation for separately approved future work.
 
 ### Patch group F: structured reports
 
