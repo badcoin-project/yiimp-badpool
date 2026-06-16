@@ -60,6 +60,8 @@ Future payout execution must require a recorded human approval packet before eac
 
 Approval must be reviewed against the emitted report, not inferred from command names, scripts, cron state, or prior successful runs.
 
+The payout-row creation approval package checklist is defined in `docs/badpool-payout-row-approval-package.md`. That package is required before any future payout-row creation implementation or mutation-capable task is proposed, and it does not authorize wallet sends.
+
 ## Stage Separation
 
 Future payout execution must be separated into the following stages. A later stage must not be able to run as a side effect of an earlier stage.
@@ -210,6 +212,8 @@ Verification results should be captured in the same incident or restoration pack
 The preview checksum is only an audit comparison tool. It must not become an automatic authorization token.
 
 Future payout execution still requires a separate PR, separate code review, separate validation, and separate operator approval.
+
+Future payout-row creation also requires the approval package defined in `docs/badpool-payout-row-approval-package.md` before any mutation-capable task is proposed.
 
 The wallet-send hard guard remains active until a later approved task designs a narrowly scoped send path.
 

@@ -1,6 +1,6 @@
 # BadPool Read-Only Preview Commands
 
-Patch group A adds a guarded Yii console command for DB-only preview reports. Patch group B adds shared guard context/report plumbing used by the same commands. Patch group C adds a source-level wallet-send hard guard. Patch group D adds a source-level share-delete hard guard. Patch group E improves read-only payout candidate preview reporting. Patch group F adds deterministic preview checksum metadata. Patch group G defines the future payout execution design. Patch group H adds read-only payout-row preflight scaffolding. Patch group I adds a read-only payout-row dry-run plan preview. These guards and previews do not add execute/apply behavior or any activation path.
+Patch group A adds a guarded Yii console command for DB-only preview reports. Patch group B adds shared guard context/report plumbing used by the same commands. Patch group C adds a source-level wallet-send hard guard. Patch group D adds a source-level share-delete hard guard. Patch group E improves read-only payout candidate preview reporting. Patch group F adds deterministic preview checksum metadata. Patch group G defines the future payout execution design. Patch group H adds read-only payout-row preflight scaffolding. Patch group I adds a read-only payout-row dry-run plan preview. Patch group J defines the payout-row approval package checklist. These guards, previews, and docs do not add execute/apply behavior or any activation path.
 
 ```text
 cd web
@@ -63,3 +63,5 @@ Future share deletion enablement must also be a separate approved change. Histor
 Future payout execution must be a separate approved change. The future design is documented in `docs/badpool-future-payout-execution-design.md`; it keeps payout candidate reports, payout-row creation, account debits, payout retry/delete, and wallet sends as separate stages with report checksum review and explicit production approval.
 
 Future payout-row creation requires a separate approved PR and separate operator action. The preflight and dry-run plan previews added after the design spec are review scaffolding only.
+
+The payout-row approval package checklist is documented in `docs/badpool-payout-row-approval-package.md`. It requires the latest preview report paths and checksums, coin scope, expected counts/totals, guard confirmations, service-state confirmations, STOP conditions, rerun/idempotency rule, and explicit operator approval text before any future payout-row creation implementation is proposed. It does not authorize wallet sends.
