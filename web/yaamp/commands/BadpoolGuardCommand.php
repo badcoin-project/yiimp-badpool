@@ -127,11 +127,14 @@ class BadpoolGuardCommand extends CConsoleCommand
 	private function payoutCandidatesPreviewReport()
 	{
 		$report = $this->guard->baseReport();
-		$threshold = $this->payoutThreshold();
-		$report['summary']['threshold'] = $threshold;
-		$report['items']['candidates'] = $this->payoutCandidates($threshold['minimum_payout']);
+		$candidates = $this->buildReadOnlyPayoutCandidates();
+		$report['summary']['threshold'] = $this->payoutThreshold();
+		$report['summary']['execution_blocked'] = $this->payoutExecutionBlockedMetadata();
+		$report['summary']['preview_limit'] = 200;
+		$report['items']['candidates'] = $candidates;
 		$report['summary']['candidate_count'] = count($report['items']['candidates']);
-		$report['summary']['projected_total_payout_amount'] = $this->sumColumn($report['items']['candidates'], 'projected_amount');
+		$report['summary']['projected_total_payout_amount'] = $this->sumColumn($report['items']['candidates'], 'projected_payout_amount');
+		$report['summary']['projected_total_remaining_balance'] = $this->sumColumn($report['items']['candidates'], 'projected_remaining_balance');
 		return $this->guard->finalizeReport($report);
 	}
 
@@ -402,27 +405,67 @@ class BadpoolGuardCommand extends CConsoleCommand
 		);
 	}
 
-	private function payoutCandidates($minimum)
+	private function buildReadOnlyPayoutCandidates()
 	{
-		if (!$this->guard->tableExists('accounts') || !$this->guard->columnExists('accounts', 'id') || !$this->guard->columnExists('accounts', 'coinid') || !$this->guard->columnExists('accounts', 'balance')) {
+		if (!$this->guard->tableExists('accounts') || !$this->guard->tableExists('coins')) {
+			$this->guard->addWarning('Cannot project payout candidates because accounts or coins table is unavailable.');
+			return array();
+		}
+		if (!$this->guard->columnExists('accounts', 'id') || !$this->guard->columnExists('accounts', 'coinid') || !$this->guard->columnExists('accounts', 'balance')) {
 			$this->guard->addWarning('Cannot project payout candidates because accounts id/coinid/balance columns are incomplete.');
 			return array();
 		}
+		if (!$this->guard->columnExists('coins', 'id')) {
+			$this->guard->addWarning('Cannot project payout candidates because coins.id column is unavailable.');
+			return array();
+		}
 
-		$where = $this->guard->coinWhere('accounts', 'coinid');
-		$username = $this->guard->columnExists('accounts', 'username') ? 'username' : 'NULL AS username';
-		$sql = "SELECT id AS account_id, $username, coinid AS account_coin_id, balance AS projected_amount ".
-			"FROM accounts WHERE ".$where['sql']." AND balance>:minimum ORDER BY balance DESC LIMIT 200";
+		$where = $this->guard->coinWhere('A', 'coinid');
+		$username = $this->guard->columnExists('accounts', 'username') ? 'A.username' : 'NULL';
+		$coinSymbol = $this->guard->columnExists('coins', 'symbol') ? 'C.symbol' : 'NULL';
+		$coinAlgo = $this->guard->columnExists('coins', 'algo') ? 'C.algo' : 'NULL';
+		$payoutMinExpr = $this->guard->columnExists('coins', 'payout_min') ? 'IFNULL(C.payout_min, 0)' : '0';
+		$txFeeExpr = $this->guard->columnExists('coins', 'txfee') ? 'IFNULL(C.txfee, 0)' : '0';
+		$paymentsMinimum = sprintf('%.12f', defined('YAAMP_PAYMENTS_MINI') ? floatval(YAAMP_PAYMENTS_MINI) : 0.0);
+		$thresholdExpr = "GREATEST($paymentsMinimum, $payoutMinExpr, $txFeeExpr)";
+
+		$sql = "SELECT A.id AS account_id, $username AS username, A.coinid AS coin_id, ".
+			"$coinSymbol AS coin_symbol, $coinAlgo AS coin_algo, ".
+			"A.balance AS current_balance, $payoutMinExpr AS payout_min, $txFeeExpr AS txfee, ".
+			"$thresholdExpr AS threshold, A.balance AS projected_payout_amount, ".
+			"0 AS projected_remaining_balance, ".
+			"CASE WHEN A.balance > $thresholdExpr THEN 1 ELSE 0 END AS above_threshold ".
+			"FROM accounts A INNER JOIN coins C ON C.id=A.coinid ".
+			"WHERE ".$where['sql']." AND A.balance > $thresholdExpr ".
+			"ORDER BY A.balance DESC LIMIT 200";
 		$params = $where['params'];
-		$params[':minimum'] = $minimum;
 		$rows = $this->guard->selectAll($sql, $params);
+		$blocked = $this->payoutExecutionBlockedMetadata();
 
 		foreach ($rows as &$row) {
 			$row['username_fingerprint'] = $this->fingerprint(arraySafeVal($row, 'username'));
-			$row['threshold'] = $minimum;
+			$row['above_threshold'] = intval(arraySafeVal($row, 'above_threshold', 0)) === 1;
+			$row['blocked_actions'] = $blocked['blocked_actions'];
+			$row['preview_note'] = 'Candidate only; no payout row, account debit, wallet RPC call, or send is performed.';
 			unset($row['username']);
 		}
 		return $rows;
+	}
+
+	private function payoutExecutionBlockedMetadata()
+	{
+		return array(
+			'status' => 'blocked',
+			'blocked_actions' => array(
+				'payout_row_creation',
+				'account_debit',
+				'wallet_rpc_read',
+				'wallet_send',
+				'payout_retry_delete',
+			),
+			'wallet_rpc_used' => false,
+			'message' => 'Read-only payout preview only. Execution requires a separate approved task.',
+		);
 	}
 
 	private function failedPayoutsSummary()

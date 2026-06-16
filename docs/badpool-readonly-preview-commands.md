@@ -1,6 +1,6 @@
 # BadPool Read-Only Preview Commands
 
-Patch group A adds a guarded Yii console command for DB-only preview reports. Patch group B adds shared guard context/report plumbing used by the same commands. Patch group C adds a source-level wallet-send hard guard. Patch group D adds a source-level share-delete hard guard. Neither guard adds execute/apply behavior or any activation path.
+Patch group A adds a guarded Yii console command for DB-only preview reports. Patch group B adds shared guard context/report plumbing used by the same commands. Patch group C adds a source-level wallet-send hard guard. Patch group D adds a source-level share-delete hard guard. Patch group E improves read-only payout candidate preview reporting. These guards and previews do not add execute/apply behavior or any activation path.
 
 ```text
 cd web
@@ -26,6 +26,8 @@ php yaamp/yiic.php badpoolguard overview --all-coins-preview
 
 These commands are read-only. They use SELECT-only database queries and are for review before any L3/live apply work.
 
+`payout-candidates-preview` reports account/coin payout candidates, threshold inputs, projected payout amounts, projected remaining balances, and blocked execution metadata. It does not create payout rows, does not debit accounts, does not call wallet RPC, and does not send coins.
+
 The shared guard context centralizes option parsing, coin scope validation, dangerous-option refusal, safety metadata, JSON/text rendering, and SELECT-only query helpers. No execute/apply mode exists yet.
 
 Safety properties:
@@ -45,3 +47,5 @@ Backend/payment restoration remains **NO-GO / KEEP FROZEN** until separate guard
 Future wallet-send enablement must be a separate approved change. It should require explicit command context, coin scope, report checksum validation, production approval, and service-state review before any live send path is considered.
 
 Future share deletion enablement must also be a separate approved change. Historical share evidence is preserved during restoration planning, and backend/payment services must remain frozen unless separately approved.
+
+Future payout execution must be a separate approved change. It should keep payout candidate reports, payout-row creation, account debits, payout retry/delete, and wallet sends as separate stages with report checksum validation and explicit production approval.
