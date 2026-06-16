@@ -54,4 +54,4 @@ Future wallet-send enablement must be a separate approved change. It should requ
 
 Future share deletion enablement must also be a separate approved change. Historical share evidence is preserved during restoration planning, and backend/payment services must remain frozen unless separately approved.
 
-Future payout execution must be a separate approved change. It should keep payout candidate reports, payout-row creation, account debits, payout retry/delete, and wallet sends as separate stages with report checksum validation and explicit production approval.
+Future payout execution must be a separate approved change. The future design is documented in `docs/badpool-future-payout-execution-design.md`; it keeps payout candidate reports, payout-row creation, account debits, payout retry/delete, and wallet sends as separate stages with report checksum review and explicit production approval.

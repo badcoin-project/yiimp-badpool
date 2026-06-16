@@ -217,6 +217,14 @@ Patch group F adds deterministic checksum metadata for read-only preview reports
 
 `payout-candidates-preview` also includes `summary.audit` fields for command, coin id, coin symbol/algo, candidate count, projected total payout amount, and blocked actions. It still does not create payout rows, debit accounts, call wallet RPC, send coins, add execute/apply flags, or change production payment behavior.
 
+### Patch group G implementation status
+
+Patch group G is documented in `docs/badpool-future-payout-execution-design.md`. It is a specification-only step for future payout execution review and adds no execution capability.
+
+The design requires future payout work to remain one coin at a time and one stage at a time. Candidate preview, payout row creation, account debit, wallet send, and post-send verification must be separately approved, logged, and verified. The preview checksum remains an audit comparison input only, not automatic authorization.
+
+Wallet-send and share-delete hard guards remain active. Any future payout execution implementation still requires a separate PR, separate code review, separate validation, and separate operator approval.
+
 ### Read-only preview commands
 
 ```text
