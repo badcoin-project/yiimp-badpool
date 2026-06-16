@@ -72,6 +72,10 @@ It must not create payout rows, debit accounts, create withdraw rows, call walle
 
 ### 2. Payout Row Creation
 
+Current scaffolding may report payout-row preflight readiness in read-only mode. That preflight report can list the selected coin, required preview checksum input, candidate count, projected payout total, payout threshold, backup status, mutation-log status, stage status, and blocked actions.
+
+The preflight report does not create payout rows, debit accounts, call wallet RPC, authorize execution, or perform any database mutation. Future payout-row creation still requires a separate approved PR and operator action.
+
 This future stage may only create payout-intent rows after approval for a specific preview report and coin. It must not debit accounts and must not call wallet code.
 
 The mutation log must record every row that would be or was created, including account ID, coin ID, amount, fee fields, status fields, and an idempotency key derived from deterministic non-secret inputs.
