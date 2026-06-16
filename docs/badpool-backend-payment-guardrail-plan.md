@@ -141,6 +141,7 @@ php yaamp/yiic.php badpoolguard earnings-preview --coin-id=<coin-id>
 php yaamp/yiic.php badpoolguard account-credit-preview --coin-id=<coin-id>
 php yaamp/yiic.php badpoolguard payout-candidates-preview --coin-id=<coin-id>
 php yaamp/yiic.php badpoolguard payout-row-preflight-preview --coin-id=<coin-id>
+php yaamp/yiic.php badpoolguard payout-row-dryrun-plan --coin-id=<coin-id>
 php yaamp/yiic.php badpoolguard safety-scan --coin-id=<coin-id>
 ```
 
@@ -238,6 +239,19 @@ php yaamp/yiic.php badpoolguard payout-row-preflight-preview --coin-id=<coin-id>
 The preflight preview reports selected coin, required preview checksum input, candidate count, projected payout total, payout threshold used, backup status, mutation-log status, stage status, and blocked action metadata. It does not create payout rows, debit accounts, call wallet RPC, authorize execution, or change production payment behavior.
 
 Future payout-row creation still requires a separate approved PR, separate validation, and separate operator action.
+
+### Patch group I implementation status
+
+Patch group I adds a read-only payout-row dry-run plan preview to `web/yaamp/commands/BadpoolGuardCommand.php`:
+
+```text
+cd /srv/badpool/yiimp-badpool/web
+php yaamp/yiic.php badpoolguard payout-row-dryrun-plan --coin-id=<coin-id>
+```
+
+The dry-run plan reports selected coin, coin symbol/algo, candidate count, projected payout total, threshold used, required source preview checksum input, proposed payout-row stage name, proposed mutation-log and backup/snapshot status, idempotency/rerun status, blocked row creation, blocked account debit, blocked wallet send, and a blocked post-execution verification checklist.
+
+This plan is read-only. It does not create payout rows, debit accounts, call wallet RPC, write logs, write backups, authorize execution, or change production payment behavior. Future payout-row creation still requires a separate approved PR, separate validation, and separate operator action.
 
 ### Read-only preview commands
 
@@ -702,6 +716,14 @@ These must be answered by L3 using read-only live-server checks, not by reposito
 - Add a read-only payout-row preflight preview section or command.
 - Report selected coin, required preview checksum input, candidate count, projected payout total, payout threshold used, backup status, mutation-log status, stage status, and blocked action metadata.
 - Do not add payout-row creation, account debit, wallet RPC calls, retry/delete behavior, activation flags, service changes, or backend loop restoration.
+- Future payout-row creation remains a separate approved PR and operator action.
+
+### Patch group I: payout-row dry-run plan preview
+
+- Add a read-only payout-row dry-run plan command.
+- Require explicit coin scope and refuse all-coin scope.
+- Report selected coin, coin symbol/algo, candidate count, projected payout total, threshold used, required source preview checksum input, proposed stage name, proposed mutation-log and backup/snapshot status, idempotency/rerun status, blocked row creation, blocked account debit, blocked wallet send, and blocked post-execution verification checklist.
+- Do not create payout rows, debit accounts, call wallet RPC, write logs, write backups, retry/delete payouts, add activation flags, change services, or restore backend loops.
 - Future payout-row creation remains a separate approved PR and operator action.
 
 ## Non-goals for this plan
