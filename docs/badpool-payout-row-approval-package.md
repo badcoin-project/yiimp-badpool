@@ -8,6 +8,8 @@ This package is documentation and review scaffolding only. It does not authorize
 
 An approval package for future payout-row creation must contain all of the following items for one coin only:
 
+- Latest `payable-source-reconciliation-preview` JSON path.
+- Latest `payable-source-reconciliation-preview` top-level `report_checksum.value`.
 - Latest `payout-candidates-preview` JSON path.
 - Latest `payout-candidates-preview` top-level `report_checksum.value`.
 - Latest `payout-row-preflight-preview` JSON path.
@@ -26,6 +28,7 @@ An approval package for future payout-row creation must contain all of the follo
 - Expected account debit total.
 - STOP conditions reviewed and accepted.
 - Rerun/idempotency rule reviewed and accepted.
+- Confirmation that payable source reconciliation supports payout-row review rather than account-credit/backlog review.
 - Confirmation that the wallet-send guard remains active.
 - Confirmation that the share-delete guard remains active.
 - Confirmation that `badpool-blocks.service` remains inactive/disabled.
@@ -48,6 +51,7 @@ I approve preparation of a future payout-row creation implementation proposal fo
 The approval package must name STOP conditions before any future implementation task begins. At minimum, stop if:
 
 - Any required report path or checksum is missing.
+- Payable source reconciliation indicates account-credit or backlog processing is the next required stage.
 - Coin ID or algorithm differs across the candidate, preflight, and dry-run plan reports.
 - Candidate count differs across reports.
 - Projected total payout amount differs across reports.
@@ -86,6 +90,9 @@ Repository commit:
 Operator:
 Reviewer:
 
+payable-source-reconciliation-preview JSON path:
+payable-source-reconciliation-preview report_checksum.value:
+
 payout-candidates-preview JSON path:
 payout-candidates-preview report_checksum.value:
 
@@ -122,6 +129,7 @@ This package does not authorize wallet sends: yes/no
 
 STOP conditions reviewed:
 Rerun/idempotency rule reviewed:
+Payable source reconciliation supports payout-row review:
 
 Explicit operator approval text:
 ```

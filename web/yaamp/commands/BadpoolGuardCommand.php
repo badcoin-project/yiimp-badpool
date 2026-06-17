@@ -14,6 +14,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 		'payout-candidates-preview',
 		'payout-row-preflight-preview',
 		'payout-row-dryrun-plan',
+		'payable-source-reconciliation-preview',
 		'safety-scan',
 		'guard-context',
 	);
@@ -61,6 +62,9 @@ class BadpoolGuardCommand extends CConsoleCommand
 			case 'payout-row-dryrun-plan':
 				$report = $this->payoutRowDryRunPlanReport();
 				break;
+			case 'payable-source-reconciliation-preview':
+				$report = $this->payableSourceReconciliationPreviewReport();
+				break;
 			case 'safety-scan':
 				$report = $this->safetyScanReport();
 				break;
@@ -87,6 +91,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 			"       php yaamp/yiic.php badpoolguard payout-candidates-preview --coin-id=<id> [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard payout-row-preflight-preview --coin-id=<id> [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard payout-row-dryrun-plan --coin-id=<id> [--format=json|text]\n".
+			"       php yaamp/yiic.php badpoolguard payable-source-reconciliation-preview --coin-id=<id> [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard safety-scan --coin-id=<id> [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard guard-context --coin-id=<id> [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard overview --all-coins-preview [--format=json|text]\n\n".
@@ -204,6 +209,42 @@ class BadpoolGuardCommand extends CConsoleCommand
 		$report['summary']['projected_total_remaining_balance'] = $projectedRemaining;
 		$report['summary']['payout_row_dryrun_plan'] = $this->payoutRowDryRunPlanSummary($threshold, $candidateCount, $projectedTotal);
 		$report['summary']['audit'] = $this->payoutPreviewAuditSummary($report);
+		$report['items']['candidate_preview'] = $candidates;
+
+		$report = $this->guard->finalizeReport($report);
+		$report = $this->ensurePayoutPreviewAuditFields($report);
+		$report['report_checksum'] = BadpoolGuardReport::checksum($report);
+		return $report;
+	}
+
+	private function payableSourceReconciliationPreviewReport()
+	{
+		if ($this->guard->isAllCoinsPreview()) {
+			$this->guard->addError('payable-source-reconciliation-preview requires --coin-id and refuses all-coin scope.');
+			return $this->guard->refusalReport();
+		}
+
+		$report = $this->guard->baseReport();
+		$scope = $this->guard->getScope();
+		$coin = arraySafeVal($scope, 'coin', array());
+		$candidates = $this->buildReadOnlyPayoutCandidates();
+		$accountSummary = $this->payableAccountBalanceSummary($candidates);
+		$earningsSummary = $this->payableEarningsByStatusSummary();
+		$blockSummary = $this->payableBlocksByCategorySummary();
+		$assessment = $this->payableSourceAssessment($accountSummary, $earningsSummary, $blockSummary);
+
+		$report['summary']['coin'] = array(
+			'coin_id' => arraySafeVal($scope, 'coin_id'),
+			'symbol' => arraySafeVal($coin, 'symbol'),
+			'algo' => arraySafeVal($coin, 'algo'),
+		);
+		$report['summary']['account_balances'] = $accountSummary;
+		$report['summary']['earnings_by_status'] = $earningsSummary;
+		$report['summary']['blocks_by_category'] = $blockSummary;
+		$report['summary']['payable_source_state'] = $assessment['state'];
+		$report['summary']['next_required_stage'] = $assessment['next_required_stage'];
+		$report['summary']['execution_blocked'] = $this->payableSourceBlockedMetadata();
+		$report['summary']['audit'] = $this->payableSourceAuditSummary($report);
 		$report['items']['candidate_preview'] = $candidates;
 
 		$report = $this->guard->finalizeReport($report);
@@ -668,6 +709,248 @@ class BadpoolGuardCommand extends CConsoleCommand
 		);
 	}
 
+	private function payableAccountBalanceSummary($candidates)
+	{
+		$candidateCount = count($candidates);
+		$candidateTotal = $this->sumColumn($candidates, 'projected_payout_amount');
+
+		if (!$this->guard->tableExists('accounts')) {
+			$summary = $this->guard->missingTable('accounts');
+			$summary['payout_candidate_count'] = $candidateCount;
+			$summary['projected_payout_candidate_total'] = $candidateTotal;
+			return $summary;
+		}
+		if (!$this->guard->columnExists('accounts', 'coinid') || !$this->guard->columnExists('accounts', 'balance')) {
+			return array(
+				'error' => 'accounts.coinid or accounts.balance column is missing',
+				'payout_candidate_count' => $candidateCount,
+				'projected_payout_candidate_total' => $candidateTotal,
+			);
+		}
+
+		$where = $this->guard->coinWhere('accounts', 'coinid');
+		$row = $this->guard->selectRow(
+			"SELECT COUNT(*) AS account_count, ".
+			"SUM(CASE WHEN balance > 0 THEN 1 ELSE 0 END) AS positive_account_count, ".
+			"SUM(CASE WHEN balance > 0 THEN balance ELSE 0 END) AS total_positive_account_balance, ".
+			"MAX(balance) AS max_account_balance ".
+			"FROM accounts WHERE ".$where['sql'],
+			$where['params']
+		);
+		$row['payout_candidate_count'] = $candidateCount;
+		$row['projected_payout_candidate_total'] = $candidateTotal;
+		$row['note'] = 'Payout candidates require already credited positive account balances.';
+		return $row;
+	}
+
+	private function payableEarningsByStatusSummary()
+	{
+		if (!$this->guard->tableExists('earnings')) {
+			return $this->guard->missingTable('earnings');
+		}
+		if (!$this->guard->columnExists('earnings', 'status')) {
+			return array('error' => 'earnings.status column is missing');
+		}
+
+		$where = $this->payableEarningsWhere();
+		$parts = array(
+			$this->guard->qcol('status').' AS status',
+			'COUNT(*) AS row_count',
+		);
+		if ($this->guard->columnExists('earnings', 'amount')) {
+			$parts[] = 'SUM('.$this->guard->qcol('amount').') AS amount_sum';
+		}
+		if ($this->guard->columnExists('earnings', 'create_time')) {
+			$parts[] = 'MIN('.$this->guard->qcol('create_time').') AS min_create_time';
+			$parts[] = 'MAX('.$this->guard->qcol('create_time').') AS max_create_time';
+		}
+
+		$sql = 'SELECT '.implode(', ', $parts).' FROM earnings WHERE '.$where['sql'].
+			' GROUP BY '.$this->guard->qcol('status').' ORDER BY '.$this->guard->qcol('status');
+		return array(
+			'filter' => $where['filter'],
+			'rows' => $this->guard->selectAll($sql, $where['params']),
+		);
+	}
+
+	private function payableEarningsWhere()
+	{
+		$scope = $this->guard->getScope();
+		if ($this->guard->columnExists('earnings', 'coinid')) {
+			return $this->guard->coinWhere('earnings', 'coinid');
+		}
+		if ($this->guard->columnExists('earnings', 'algo') && isset($scope['coin']['algo'])) {
+			return array(
+				'sql' => $this->guard->qcol('algo').'=:algo',
+				'params' => array(':algo' => $scope['coin']['algo']),
+				'filter' => 'algo',
+			);
+		}
+
+		$this->guard->addWarning('Cannot coin-scope earnings because neither earnings.coinid nor earnings.algo is available.');
+		return array('sql' => '1=0', 'params' => array(), 'filter' => 'unavailable');
+	}
+
+	private function payableBlocksByCategorySummary()
+	{
+		if (!$this->guard->tableExists('blocks')) {
+			return $this->guard->missingTable('blocks');
+		}
+		if (!$this->guard->columnExists('blocks', 'category')) {
+			return array('error' => 'blocks.category column is missing');
+		}
+
+		$where = $this->payableBlocksWhere();
+		$parts = array(
+			$this->guard->qcol('category').' AS category',
+			'COUNT(*) AS block_count',
+		);
+		if ($this->guard->columnExists('blocks', 'amount')) {
+			$parts[] = 'SUM('.$this->guard->qcol('amount').') AS amount_sum';
+		}
+		if ($this->guard->columnExists('blocks', 'height')) {
+			$parts[] = 'MIN('.$this->guard->qcol('height').') AS min_height';
+			$parts[] = 'MAX('.$this->guard->qcol('height').') AS max_height';
+		}
+		if ($this->guard->columnExists('blocks', 'time')) {
+			$parts[] = 'MIN('.$this->guard->qcol('time').') AS min_time';
+			$parts[] = 'MAX('.$this->guard->qcol('time').') AS max_time';
+		}
+
+		$sql = 'SELECT '.implode(', ', $parts).' FROM blocks WHERE '.$where['sql'].
+			' GROUP BY '.$this->guard->qcol('category').' ORDER BY '.$this->guard->qcol('category');
+		$rows = $this->guard->selectAll($sql, $where['params']);
+		return array(
+			'filter' => $where['filter'],
+			'rows' => $rows,
+		);
+	}
+
+	private function payableBlocksWhere()
+	{
+		$scope = $this->guard->getScope();
+		if ($this->guard->columnExists('blocks', 'coin_id')) {
+			return $this->guard->coinWhere('blocks', 'coin_id');
+		}
+		if ($this->guard->columnExists('blocks', 'algo') && isset($scope['coin']['algo'])) {
+			return array(
+				'sql' => $this->guard->qcol('algo').'=:algo',
+				'params' => array(':algo' => $scope['coin']['algo']),
+				'filter' => 'algo',
+			);
+		}
+
+		$this->guard->addWarning('Cannot coin-scope blocks because neither blocks.coin_id nor blocks.algo is available.');
+		return array('sql' => '1=0', 'params' => array(), 'filter' => 'unavailable');
+	}
+
+	private function payableSourceAssessment($accountSummary, $earningsSummary, $blockSummary)
+	{
+		$positiveBalance = floatval(arraySafeVal($accountSummary, 'total_positive_account_balance', 0));
+		$payoutCandidates = intval(arraySafeVal($accountSummary, 'payout_candidate_count', 0));
+		$earningsRows = is_array($earningsSummary) && isset($earningsSummary['rows']) ? $earningsSummary['rows'] : array();
+		$totalEarningsRows = $this->sumRows($earningsRows, 'row_count');
+		$creditReadyEarnings = $this->sumRowsByValue($earningsRows, 'status', '1', 'row_count');
+		$uncreditedEarnings = $this->sumRowsByValues($earningsRows, 'status', array('0', '1'), 'row_count');
+		$blockRows = is_array($blockSummary) && isset($blockSummary['rows']) ? $blockSummary['rows'] : array();
+		$accountingBlockRows = $this->sumRowsByValues($blockRows, 'category', array('new', 'generate', 'immature', 'mature'), 'block_count');
+		$indeterminate = $this->summaryHasError($accountSummary) || $this->summaryHasError($earningsSummary) || $this->summaryHasError($blockSummary);
+
+		$state = array(
+			'already_credited_to_accounts' => $positiveBalance > 0,
+			'payout_candidates_ready' => $payoutCandidates > 0,
+			'present_in_earnings_but_not_credited' => $uncreditedEarnings > 0,
+			'present_in_mature_or_new_blocks_needing_accounting' => $accountingBlockRows > 0,
+			'absent' => !$indeterminate && $positiveBalance <= 0 && $totalEarningsRows <= 0 && $accountingBlockRows <= 0,
+			'indeterminate' => $indeterminate,
+			'evidence_counts' => array(
+				'positive_account_balance_sum' => $positiveBalance,
+				'payout_candidate_count' => $payoutCandidates,
+				'earnings_row_count' => $totalEarningsRows,
+				'credit_ready_earning_rows' => $creditReadyEarnings,
+				'uncredited_earning_rows' => $uncreditedEarnings,
+				'accounting_block_rows' => $accountingBlockRows,
+			),
+		);
+
+		return array(
+			'state' => $state,
+			'next_required_stage' => $this->payableNextRequiredStage($state),
+		);
+	}
+
+	private function payableNextRequiredStage($state)
+	{
+		if (arraySafeVal($state, 'indeterminate')) {
+			return 'indeterminate: review schema warnings and run targeted read-only previews before choosing a next stage';
+		}
+		if (arraySafeVal($state, 'payout_candidates_ready')) {
+			return 'payout candidates exist from credited balances; payout-row creation remains disabled and requires the approval package';
+		}
+		if (arraySafeVal($state, 'already_credited_to_accounts')) {
+			return 'credited account balances exist but no payout candidates are above threshold; payout rows should not be created until candidates exist';
+		}
+		$counts = arraySafeVal($state, 'evidence_counts', array());
+		if (intval(arraySafeVal($counts, 'credit_ready_earning_rows', 0)) > 0) {
+			return 'account-credit-preview needed; no payout rows should be created until account balances exist';
+		}
+		if (arraySafeVal($state, 'present_in_earnings_but_not_credited')) {
+			return 'earnings-preview and account-credit-preview needed; backend accounting remains frozen';
+		}
+		if (arraySafeVal($state, 'present_in_mature_or_new_blocks_needing_accounting')) {
+			return 'blocks-preview and earnings-preview needed; backend block accounting remains frozen';
+		}
+		if (arraySafeVal($state, 'absent')) {
+			return 'no payable source data detected by this DB-only reconciliation preview';
+		}
+		return 'indeterminate: no safe next stage selected by this read-only preview';
+	}
+
+	private function payableSourceBlockedMetadata()
+	{
+		return array(
+			'status' => 'blocked',
+			'blocked_actions' => array(
+				'payout_row_creation',
+				'account_debit',
+				'wallet_rpc_read',
+				'wallet_send',
+				'earnings_mutation',
+				'block_mutation',
+				'coin_mutation',
+				'share_deletion',
+				'payout_retry_delete',
+				'service_or_cron_changes',
+			),
+			'wallet_rpc_used' => false,
+			'message' => 'Read-only payable-source reconciliation only. No payout rows, account debits, backend accounting, wallet calls, or service actions are performed.',
+		);
+	}
+
+	private function payableSourceAuditSummary($report)
+	{
+		$scope = $this->guard->getScope();
+		$coin = arraySafeVal($scope, 'coin', array());
+		$summary = arraySafeVal($report, 'summary', array());
+		$accountSummary = arraySafeVal($summary, 'account_balances', array());
+		$sourceState = arraySafeVal($summary, 'payable_source_state', array());
+		$executionBlocked = arraySafeVal($summary, 'execution_blocked', array());
+		return array(
+			'command' => arraySafeVal($report, 'command'),
+			'coin_id' => arraySafeVal($scope, 'coin_id'),
+			'coin_symbol' => arraySafeVal($coin, 'symbol'),
+			'coin_algo' => arraySafeVal($coin, 'algo'),
+			'positive_account_count' => intval(arraySafeVal($accountSummary, 'positive_account_count', 0)),
+			'total_positive_account_balance' => floatval(arraySafeVal($accountSummary, 'total_positive_account_balance', 0)),
+			'payout_candidate_count' => intval(arraySafeVal($accountSummary, 'payout_candidate_count', 0)),
+			'projected_payout_candidate_total' => floatval(arraySafeVal($accountSummary, 'projected_payout_candidate_total', 0)),
+			'payable_source_state' => $sourceState,
+			'blocked_actions' => arraySafeVal($executionBlocked, 'blocked_actions', array()),
+			'checksum_note' => 'See top-level report_checksum; generated_at is excluded from checksum input.',
+			'checksum_purpose' => 'preview audit comparison only; not payout authorization',
+		);
+	}
+
 	private function payoutPreviewAuditSummary($report)
 	{
 		$scope = $this->guard->getScope();
@@ -712,7 +995,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 
 	private function isPayoutAuditCommand($command)
 	{
-		return in_array($command, array('payout-candidates-preview', 'payout-row-preflight-preview', 'payout-row-dryrun-plan'), true);
+		return in_array($command, array('payout-candidates-preview', 'payout-row-preflight-preview', 'payout-row-dryrun-plan', 'payable-source-reconciliation-preview'), true);
 	}
 
 	private function ensurePayoutPreviewAuditFields($report)
@@ -816,6 +1099,64 @@ class BadpoolGuardCommand extends CConsoleCommand
 			$total += floatval(arraySafeVal($row, $column, 0));
 		}
 		return $total;
+	}
+
+	private function sumRows($rows, $column)
+	{
+		if (!is_array($rows)) {
+			return 0;
+		}
+		$total = 0;
+		foreach ($rows as $row) {
+			if (is_array($row)) {
+				$total += intval(arraySafeVal($row, $column, 0));
+			}
+		}
+		return $total;
+	}
+
+	private function sumRowsByValue($rows, $keyColumn, $keyValue, $sumColumn)
+	{
+		return $this->sumRowsByValues($rows, $keyColumn, array($keyValue), $sumColumn);
+	}
+
+	private function sumRowsByValues($rows, $keyColumn, $keyValues, $sumColumn)
+	{
+		if (!is_array($rows)) {
+			return 0;
+		}
+		$allowed = array();
+		foreach ($keyValues as $value) {
+			$allowed[(string)$value] = true;
+		}
+
+		$total = 0;
+		foreach ($rows as $row) {
+			if (!is_array($row)) {
+				continue;
+			}
+			$value = (string)arraySafeVal($row, $keyColumn, '');
+			if (isset($allowed[$value])) {
+				$total += intval(arraySafeVal($row, $sumColumn, 0));
+			}
+		}
+		return $total;
+	}
+
+	private function summaryHasError($value)
+	{
+		if (!is_array($value)) {
+			return false;
+		}
+		if (isset($value['error'])) {
+			return true;
+		}
+		foreach ($value as $item) {
+			if ($this->summaryHasError($item)) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	private function fingerprint($value)

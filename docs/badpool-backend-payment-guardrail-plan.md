@@ -142,6 +142,7 @@ php yaamp/yiic.php badpoolguard account-credit-preview --coin-id=<coin-id>
 php yaamp/yiic.php badpoolguard payout-candidates-preview --coin-id=<coin-id>
 php yaamp/yiic.php badpoolguard payout-row-preflight-preview --coin-id=<coin-id>
 php yaamp/yiic.php badpoolguard payout-row-dryrun-plan --coin-id=<coin-id>
+php yaamp/yiic.php badpoolguard payable-source-reconciliation-preview --coin-id=<coin-id>
 php yaamp/yiic.php badpoolguard safety-scan --coin-id=<coin-id>
 ```
 
@@ -260,6 +261,21 @@ Patch group J is documented in `docs/badpool-payout-row-approval-package.md`. It
 The package requires the latest candidate, preflight, and dry-run plan report paths and checksums; coin ID and algorithm; candidate count; projected payout total; threshold used; operator approval text; backup and mutation-log paths; expected payout-row count; expected account debit total; STOP conditions; rerun/idempotency rule; active wallet-send and share-delete guards; inactive/disabled backend services; separate stage confirmation; and an explicit statement that the package does not authorize wallet sends.
 
 This is documentation-only and adds no payout-row creation capability.
+
+### Patch group K implementation status
+
+Patch group K adds a read-only payable source reconciliation preview to `web/yaamp/commands/BadpoolGuardCommand.php`:
+
+```text
+cd /srv/badpool/yiimp-badpool/web
+php yaamp/yiic.php badpoolguard payable-source-reconciliation-preview --coin-id=<coin-id> --format=json
+```
+
+Payout candidates require credited account balances. A zero candidate count does not prove there is no unpaid miner source data; it only means no already-credited balances currently meet payout candidate rules.
+
+The reconciliation preview reports coin identity, positive account balances, payout candidate readiness, earnings grouped by status, blocks grouped by category, a payable-source state assessment, next required stage text, blocked action metadata, audit metadata, and a report checksum. It is SELECT-only and does not create payout rows, debit accounts, call wallet RPC, mutate earnings/blocks/coins, delete shares, or restore backend services.
+
+Use this preview to decide whether the next safe review is account-credit/backlog processing or payout-row approval work. Payout-row creation still requires a separate approved PR and operator action.
 
 ### Read-only preview commands
 
@@ -742,6 +758,14 @@ These must be answered by L3 using read-only live-server checks, not by reposito
 - Require confirmation that wallet-send and share-delete guards remain active, `badpool-blocks.service` and `badpool-loop2.service` remain inactive/disabled, and payout-row creation, account debit, wallet send, and post-send verification remain separate stages.
 - State explicitly that the package does not authorize wallet sends.
 - Do not add code, runtime behavior, service behavior, or deployment behavior.
+
+### Patch group K: payable source reconciliation preview
+
+- Add a read-only command that bridges blocks, earnings, account credit readiness, account balances, and payout candidate readiness.
+- Require explicit coin scope and refuse all-coin scope.
+- Report whether payable data appears already credited to accounts, present in earnings but not credited, present in block data needing accounting, absent, or indeterminate.
+- Report next required stage text only, such as account-credit preview needed, backend block accounting still frozen, or no payout rows should be created until account balances exist.
+- Do not add payout-row creation, account debit, wallet RPC calls, earnings/block/coin mutation, share deletion, retry/delete behavior, service changes, or backend loop restoration.
 
 ## Non-goals for this plan
 
