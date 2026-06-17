@@ -76,6 +76,8 @@ Payout candidates are derived from already credited account balances. A zero pay
 
 If payable source data exists in earnings or block backlog before account balances are credited, operators must run `account-credit-transition-preview` and resolve the account-credit/backlog review path before payout-row approval work resumes. That preview is audit scaffolding only; it does not credit accounts, alter earnings or blocks, or authorize a future credit stage.
 
+When status 0 earnings are present, operators must run `earnings-credit-readiness-preview` before any future account-credit approval package. Status 0 rows are source backlog until block category, block linkage, account/user linkage, amount validity, and duplicate-risk checks are reviewed. The preview does not change earnings status, credit accounts, or authorize a future credit stage.
+
 ### 2. Payout Row Creation
 
 Current scaffolding may report payout-row preflight readiness in read-only mode. That preflight report can list the selected coin, required preview checksum input, candidate count, projected payout total, payout threshold, backup status, mutation-log status, stage status, and blocked actions.

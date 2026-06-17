@@ -12,6 +12,8 @@ An approval package for future payout-row creation must contain all of the follo
 - Latest `payable-source-reconciliation-preview` top-level `report_checksum.value`.
 - Latest `account-credit-transition-preview` JSON path when payable source data is not yet credited to account balances.
 - Latest `account-credit-transition-preview` top-level `report_checksum.value` when that preview is required.
+- Latest `earnings-credit-readiness-preview` JSON path when status 0 or indeterminate earnings remain in scope.
+- Latest `earnings-credit-readiness-preview` top-level `report_checksum.value` when that preview is required.
 - Latest `payout-candidates-preview` JSON path.
 - Latest `payout-candidates-preview` top-level `report_checksum.value`.
 - Latest `payout-row-preflight-preview` JSON path.
@@ -32,6 +34,7 @@ An approval package for future payout-row creation must contain all of the follo
 - Rerun/idempotency rule reviewed and accepted.
 - Confirmation that payable source reconciliation supports payout-row review rather than account-credit/backlog review.
 - Confirmation that account-credit transition preview does not require unresolved account-credit/backlog work.
+- Confirmation that earnings credit-readiness preview has no unresolved not-ready or indeterminate blockers.
 - Confirmation that the wallet-send guard remains active.
 - Confirmation that the share-delete guard remains active.
 - Confirmation that `badpool-blocks.service` remains inactive/disabled.
@@ -56,6 +59,7 @@ The approval package must name STOP conditions before any future implementation 
 - Any required report path or checksum is missing.
 - Payable source reconciliation indicates account-credit or backlog processing is the next required stage.
 - Account-credit transition preview indicates unresolved earnings credit readiness or block accounting inspection is still required.
+- Earnings credit-readiness preview reports not-ready rows, indeterminate rows, immature/new block backlog, orphan risk, missing linkage, duplicate uncertainty, or schema limitations that have not been separately resolved.
 - Coin ID or algorithm differs across the candidate, preflight, and dry-run plan reports.
 - Candidate count differs across reports.
 - Projected total payout amount differs across reports.
@@ -100,6 +104,10 @@ payable-source-reconciliation-preview report_checksum.value:
 account-credit-transition-preview JSON path:
 account-credit-transition-preview report_checksum.value:
 account-credit/backlog work resolved before payout-row review: yes/no
+
+earnings-credit-readiness-preview JSON path:
+earnings-credit-readiness-preview report_checksum.value:
+earnings readiness blockers resolved before payout-row review: yes/no
 
 payout-candidates-preview JSON path:
 payout-candidates-preview report_checksum.value:
