@@ -17,6 +17,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 		'payable-source-reconciliation-preview',
 		'account-credit-transition-preview',
 		'earnings-credit-readiness-preview',
+		'block-category-maturity-preview',
 		'safety-scan',
 		'guard-context',
 	);
@@ -73,6 +74,9 @@ class BadpoolGuardCommand extends CConsoleCommand
 			case 'earnings-credit-readiness-preview':
 				$report = $this->earningsCreditReadinessPreviewReport();
 				break;
+			case 'block-category-maturity-preview':
+				$report = $this->blockCategoryMaturityPreviewReport();
+				break;
 			case 'safety-scan':
 				$report = $this->safetyScanReport();
 				break;
@@ -102,6 +106,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 			"       php yaamp/yiic.php badpoolguard payable-source-reconciliation-preview --coin-id=<id> [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard account-credit-transition-preview --coin-id=<id> [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard earnings-credit-readiness-preview --coin-id=<id> [--format=json|text]\n".
+			"       php yaamp/yiic.php badpoolguard block-category-maturity-preview --coin-id=<id> [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard safety-scan --coin-id=<id> [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard guard-context --coin-id=<id> [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard overview --all-coins-preview [--format=json|text]\n\n".
@@ -326,6 +331,43 @@ class BadpoolGuardCommand extends CConsoleCommand
 		$report['summary']['proposed_future_stages'] = $this->earningsCreditReadinessStages();
 		$report['summary']['execution_blocked'] = $this->earningsCreditReadinessBlockedMetadata();
 		$report['summary']['audit'] = $this->earningsCreditReadinessAuditSummary($report);
+
+		$report = $this->guard->finalizeReport($report);
+		$report = $this->ensurePayoutPreviewAuditFields($report);
+		$report['report_checksum'] = BadpoolGuardReport::checksum($report);
+		return $report;
+	}
+
+	private function blockCategoryMaturityPreviewReport()
+	{
+		if ($this->guard->isAllCoinsPreview()) {
+			$this->guard->addError('block-category-maturity-preview requires --coin-id and refuses all-coin scope.');
+			return $this->guard->refusalReport();
+		}
+
+		$report = $this->guard->baseReport();
+		$scope = $this->guard->getScope();
+		$coin = arraySafeVal($scope, 'coin', array());
+		$coinReference = $this->blockCategoryMaturityCoinReference();
+		$linkedEarnings = $this->blockCategoryMaturityLinkedEarningsSummary($coinReference);
+		$staleIndicators = $this->blockCategoryMaturityStaleIndicators($coinReference);
+		$classification = $this->blockCategoryMaturityClassification($linkedEarnings, $staleIndicators, $coinReference);
+
+		$report['summary']['coin'] = array(
+			'coin_id' => arraySafeVal($scope, 'coin_id'),
+			'symbol' => arraySafeVal($coin, 'symbol'),
+			'algo' => arraySafeVal($coin, 'algo'),
+		);
+		$report['summary']['freeze_assumptions'] = $this->blockCategoryMaturityFreezeAssumptions();
+		$report['summary']['coin_maturity_reference'] = $coinReference;
+		$report['summary']['blocks_by_category'] = $this->payableBlocksByCategorySummary();
+		$report['summary']['linked_earnings_blocks'] = $linkedEarnings;
+		$report['summary']['frozen_stale_category_indicators'] = $staleIndicators;
+		$report['summary']['conservative_classification'] = $classification;
+		$report['summary']['blockers'] = $this->blockCategoryMaturityBlockers($classification, $coinReference, $staleIndicators);
+		$report['summary']['proposed_future_stages'] = $this->blockCategoryMaturityStages();
+		$report['summary']['execution_blocked'] = $this->blockCategoryMaturityBlockedMetadata();
+		$report['summary']['audit'] = $this->blockCategoryMaturityAuditSummary($report);
 
 		$report = $this->guard->finalizeReport($report);
 		$report = $this->ensurePayoutPreviewAuditFields($report);
@@ -1688,6 +1730,493 @@ class BadpoolGuardCommand extends CConsoleCommand
 			intval(arraySafeVal($previousCredit, 'status_0_1_rows_with_cleared_match', 0)) > 0;
 	}
 
+	private function blockCategoryMaturityFreezeAssumptions()
+	{
+		return array(
+			'backend_block_accounting_services_invoked' => false,
+			'systemd_state_checked' => false,
+			'systemd_state_changed' => false,
+			'stale_category_suspicion_source' => 'database preview only',
+			'message' => 'This command does not check or change service state. It only reports DB evidence that categories may be frozen or stale while backend block/accounting services remain outside this preview.',
+		);
+	}
+
+	private function blockCategoryMaturityCoinReference()
+	{
+		if (!$this->guard->tableExists('coins')) {
+			return $this->guard->missingTable('coins');
+		}
+
+		$scope = $this->guard->getScope();
+		$columns = array(
+			'id', 'symbol', 'symbol2', 'name', 'algo', 'block_height', 'target_height',
+			'mature_blocks', 'block_time', 'cleared', 'immature', 'available', 'balance',
+			'minted', 'reward', 'lastblock', 'last_block', 'confirmations',
+		);
+		$row = $this->guard->selectRow(
+			'SELECT '.$this->guard->selectColumns('coins', $columns).' FROM coins WHERE '.$this->guard->qcol('id').'=:coin_id',
+			array(':coin_id' => arraySafeVal($scope, 'coin_id'))
+		);
+		if (!$row) {
+			return array('error' => 'selected coin is unavailable');
+		}
+
+		$currentHeight = $this->blockCategoryMaturityNumericInput($row, array('block_height', 'target_height'));
+		$matureBlocks = $this->blockCategoryMaturityNumericInput($row, array('mature_blocks'));
+		$blockTime = $this->blockCategoryMaturityNumericInput($row, array('block_time'));
+		$missing = array();
+		if ($currentHeight['value'] === null) {
+			$missing[] = 'current_height';
+		}
+		if ($matureBlocks['value'] === null) {
+			$missing[] = 'mature_blocks';
+		}
+		if ($blockTime['value'] === null) {
+			$missing[] = 'block_time';
+		}
+
+		return array(
+			'coin_fields' => $row,
+			'derived_maturity_inputs' => array(
+				'current_height' => $currentHeight['value'],
+				'current_height_source' => $currentHeight['source'],
+				'current_height_numeric' => $currentHeight['value'] !== null,
+				'mature_blocks' => $matureBlocks['value'],
+				'mature_blocks_source' => $matureBlocks['source'],
+				'mature_blocks_numeric' => $matureBlocks['value'] !== null,
+				'block_time' => $blockTime['value'],
+				'block_time_source' => $blockTime['source'],
+				'block_time_numeric' => $blockTime['value'] !== null,
+				'missing_maturity_source_fields' => $missing,
+			),
+		);
+	}
+
+	private function blockCategoryMaturityLinkedEarningsSummary($coinReference)
+	{
+		if (!$this->guard->tableExists('earnings')) {
+			return $this->guard->missingTable('earnings');
+		}
+		if (!$this->guard->tableExists('blocks')) {
+			return $this->guard->missingTable('blocks');
+		}
+
+		$schema = $this->blockCategoryMaturitySchema();
+		if (!$schema['can_join_earnings_blocks']) {
+			return array(
+				'status' => 'indeterminate',
+				'error' => 'earnings.blockid or blocks.id linkage is unavailable',
+				'schema' => $schema,
+			);
+		}
+		if (!$schema['earnings_has_status']) {
+			return array('error' => 'earnings.status column is missing');
+		}
+
+		$where = $this->earningsCreditReadinessWhere('E');
+		$params = $where['params'];
+		$heightInputs = $this->blockCategoryMaturityHeightInputs($coinReference);
+		if ($heightInputs['can_determine']) {
+			$params[':current_height'] = $heightInputs['current_height'];
+			$params[':mature_blocks'] = $heightInputs['mature_blocks'];
+		}
+
+		$amount = $schema['earnings_has_amount'] ? 'SUM(E.'.$this->guard->qcol('amount').')' : 'NULL';
+		$summaryParts = array(
+			'COUNT(*) AS earnings_row_count',
+			"$amount AS earnings_amount_sum",
+			'SUM(CASE WHEN B.'.$this->guard->qcol('id').' IS NOT NULL THEN 1 ELSE 0 END) AS earnings_with_matching_block',
+			'SUM(CASE WHEN B.'.$this->guard->qcol('id').' IS NULL THEN 1 ELSE 0 END) AS earnings_without_matching_block',
+			'COUNT(DISTINCT B.'.$this->guard->qcol('id').') AS linked_block_count',
+		);
+		if ($schema['blocks_has_height']) {
+			$height = 'B.'.$this->guard->qcol('height');
+			$summaryParts[] = "MIN($height) AS min_block_height";
+			$summaryParts[] = "MAX($height) AS max_block_height";
+			if ($heightInputs['can_determine']) {
+				$summaryParts[] = "MIN(:current_height - $height) AS min_height_delta";
+				$summaryParts[] = "MAX(:current_height - $height) AS max_height_delta";
+				$summaryParts[] = "SUM(CASE WHEN (:current_height - $height) >= :mature_blocks THEN 1 ELSE 0 END) AS earning_rows_potentially_mature_by_height";
+				$summaryParts[] = "COUNT(DISTINCT CASE WHEN (:current_height - $height) >= :mature_blocks THEN B.".$this->guard->qcol('id').' ELSE NULL END) AS blocks_potentially_mature_by_height';
+			}
+		}
+		if ($schema['blocks_has_time']) {
+			$time = 'B.'.$this->guard->qcol('time');
+			$summaryParts[] = "MIN($time) AS min_block_time";
+			$summaryParts[] = "MAX($time) AS max_block_time";
+		}
+
+		$sql = 'SELECT '.implode(', ', $summaryParts).
+			' FROM earnings E LEFT JOIN blocks B ON B.'.$this->guard->qcol('id').'=E.'.$this->guard->qcol('blockid').
+			' WHERE '.$where['sql'].' AND E.'.$this->guard->qcol('status').' IN (0, 1)';
+		$summary = $this->guard->selectRow($sql, $params);
+
+		$byCategory = array();
+		if ($schema['blocks_has_category']) {
+			$categoryParts = array(
+				'B.'.$this->guard->qcol('category').' AS category',
+				'COUNT(*) AS earnings_row_count',
+				"$amount AS earnings_amount_sum",
+				'COUNT(DISTINCT B.'.$this->guard->qcol('id').') AS block_count',
+			);
+			if ($schema['blocks_has_height']) {
+				$height = 'B.'.$this->guard->qcol('height');
+				$categoryParts[] = "MIN($height) AS min_block_height";
+				$categoryParts[] = "MAX($height) AS max_block_height";
+				if ($heightInputs['can_determine']) {
+					$categoryParts[] = "MIN(:current_height - $height) AS min_height_delta";
+					$categoryParts[] = "MAX(:current_height - $height) AS max_height_delta";
+					$categoryParts[] = "SUM(CASE WHEN (:current_height - $height) >= :mature_blocks THEN 1 ELSE 0 END) AS earning_rows_potentially_mature_by_height";
+					$categoryParts[] = "COUNT(DISTINCT CASE WHEN (:current_height - $height) >= :mature_blocks THEN B.".$this->guard->qcol('id').' ELSE NULL END) AS blocks_potentially_mature_by_height';
+				}
+			}
+			if ($schema['blocks_has_time']) {
+				$time = 'B.'.$this->guard->qcol('time');
+				$categoryParts[] = "MIN($time) AS min_block_time";
+				$categoryParts[] = "MAX($time) AS max_block_time";
+			}
+
+			$categorySql = 'SELECT '.implode(', ', $categoryParts).
+				' FROM earnings E INNER JOIN blocks B ON B.'.$this->guard->qcol('id').'=E.'.$this->guard->qcol('blockid').
+				' WHERE '.$where['sql'].' AND E.'.$this->guard->qcol('status').' IN (0, 1)'.
+				' GROUP BY B.'.$this->guard->qcol('category').' ORDER BY B.'.$this->guard->qcol('category');
+			$byCategory = $this->guard->selectAll($categorySql, $params);
+		}
+
+		return array(
+			'filter' => $where['filter'],
+			'maturity_determination' => $heightInputs,
+			'summary' => $summary,
+			'by_category' => $byCategory,
+		);
+	}
+
+	private function blockCategoryMaturityStaleIndicators($coinReference)
+	{
+		$schema = $this->blockCategoryMaturitySchema();
+		if (!$this->guard->tableExists('blocks')) {
+			return $this->guard->missingTable('blocks');
+		}
+		if (!$schema['blocks_has_category']) {
+			return array('error' => 'blocks.category column is missing');
+		}
+
+		$where = $this->blockCategoryMaturityBlocksWhere('B');
+		$heightInputs = $this->blockCategoryMaturityHeightInputs($coinReference);
+		$timeCutoff = $this->blockCategoryMaturityOldTimeCutoff($coinReference);
+		$missing = arraySafeVal(arraySafeVal($coinReference, 'derived_maturity_inputs', array()), 'missing_maturity_source_fields', array());
+
+		$indicators = array(
+			'missing_maturity_source_fields' => $missing,
+			'old_time_reference_source' => arraySafeVal($timeCutoff, 'reference_source'),
+			'old_time_reference_time' => arraySafeVal($timeCutoff, 'reference_time'),
+			'old_time_threshold_seconds' => arraySafeVal($timeCutoff, 'threshold_seconds'),
+			'old_time_cutoff' => arraySafeVal($timeCutoff, 'cutoff_time'),
+			'immature_blocks_with_old_block_time' => array('status' => 'not_evaluated'),
+			'immature_blocks_far_below_current_height' => array('status' => 'not_evaluated'),
+			'new_blocks_with_old_block_time' => array('status' => 'not_evaluated'),
+			'generate_blocks_represented_in_earnings' => $this->blockCategoryMaturityLinkedCategoryAggregate('generate'),
+			'orphan_blocks_linked_to_earnings' => $this->blockCategoryMaturityLinkedCategoryAggregate('orphan'),
+		);
+
+		if ($timeCutoff['can_determine'] && $schema['blocks_has_time']) {
+			$params = $where['params'];
+			$params[':old_cutoff'] = $timeCutoff['cutoff_time'];
+			$indicators['immature_blocks_with_old_block_time'] = $this->blockCategoryMaturityBlockAggregate(
+				$where['sql'].' AND B.'.$this->guard->qcol('category')."='immature' AND B.".$this->guard->qcol('time').'<:old_cutoff',
+				$params
+			);
+			$indicators['new_blocks_with_old_block_time'] = $this->blockCategoryMaturityBlockAggregate(
+				$where['sql'].' AND B.'.$this->guard->qcol('category')."='new' AND B.".$this->guard->qcol('time').'<:old_cutoff',
+				$params
+			);
+		}
+
+		if ($heightInputs['can_determine'] && $schema['blocks_has_height']) {
+			$params = $where['params'];
+			$params[':current_height'] = $heightInputs['current_height'];
+			$params[':mature_blocks'] = $heightInputs['mature_blocks'];
+			$indicators['immature_blocks_far_below_current_height'] = $this->blockCategoryMaturityBlockAggregate(
+				$where['sql'].' AND B.'.$this->guard->qcol('category')."='immature' AND (:current_height - B.".$this->guard->qcol('height').') >= :mature_blocks',
+				$params
+			);
+		}
+
+		return $indicators;
+	}
+
+	private function blockCategoryMaturityClassification($linkedEarnings, $staleIndicators, $coinReference)
+	{
+		$heightInputs = $this->blockCategoryMaturityHeightInputs($coinReference);
+		$linkedImmature = $this->blockCategoryMaturityLinkedBlockCount($linkedEarnings, 'immature');
+		$linkedNew = $this->blockCategoryMaturityLinkedBlockCount($linkedEarnings, 'new');
+		$linkedOrphan = $this->blockCategoryMaturityLinkedBlockCount($linkedEarnings, 'orphan');
+		$farBelow = intval(arraySafeVal(arraySafeVal($staleIndicators, 'immature_blocks_far_below_current_height', array()), 'block_count', 0));
+		$oldImmature = intval(arraySafeVal(arraySafeVal($staleIndicators, 'immature_blocks_with_old_block_time', array()), 'block_count', 0));
+		$orphanLinked = intval(arraySafeVal(arraySafeVal(arraySafeVal($staleIndicators, 'orphan_blocks_linked_to_earnings', array()), 'summary', array()), 'block_count', 0));
+		$missing = arraySafeVal(arraySafeVal($coinReference, 'derived_maturity_inputs', array()), 'missing_maturity_source_fields', array());
+
+		$potentiallyMature = $heightInputs['can_determine'] ? $farBelow : 0;
+		$likelyStale = max($farBelow, $oldImmature);
+		$stillUnknown = $heightInputs['can_determine'] ? max(0, $linkedImmature - $potentiallyMature) + $linkedNew : $linkedImmature + $linkedNew;
+		$indeterminate = empty($missing) ? 0 : $linkedImmature + $linkedNew;
+
+		return array(
+			'likely_stale_immature_category_count' => $likelyStale,
+			'potentially_mature_but_untransitioned_count' => $potentiallyMature,
+			'still_immature_or_unknown_count' => $stillUnknown,
+			'orphan_risk_count' => max($linkedOrphan, $orphanLinked),
+			'indeterminate_count' => $indeterminate,
+			'classification_note' => 'Classification is conservative and DB-only. It does not validate chain state, service state, or category transition safety.',
+		);
+	}
+
+	private function blockCategoryMaturityBlockers($classification, $coinReference, $staleIndicators)
+	{
+		$inputs = arraySafeVal($coinReference, 'derived_maturity_inputs', array());
+		return array(
+			'backend_updater_frozen' => array(
+				'present' => true,
+				'message' => 'Backend block/accounting services are not invoked by this preview and must remain separately verified.',
+			),
+			'missing_or_null_mature_blocks' => array(
+				'present' => !arraySafeVal($inputs, 'mature_blocks_numeric', false),
+				'message' => 'mature_blocks is required before height-based maturity can be trusted.',
+			),
+			'missing_current_height' => array(
+				'present' => !arraySafeVal($inputs, 'current_height_numeric', false),
+				'message' => 'Current coin height is required before height-based maturity can be trusted.',
+			),
+			'orphan_category_risk' => array(
+				'present' => intval(arraySafeVal($classification, 'orphan_risk_count', 0)) > 0,
+				'message' => 'Orphan-linked rows must not proceed without separate repair review.',
+			),
+			'category_transition_not_validated' => array(
+				'present' => true,
+				'message' => 'This preview does not validate or perform block category/status transition logic.',
+			),
+			'account_credit_still_blocked' => array(
+				'present' => true,
+				'message' => 'Account-credit remains blocked until a separate approved transition and readiness recheck exist.',
+			),
+			'old_time_source_missing' => array(
+				'present' => arraySafeVal($staleIndicators, 'old_time_threshold_seconds') === null,
+				'message' => 'Old-time stale category checks require numeric mature_blocks and block_time values.',
+			),
+		);
+	}
+
+	private function blockCategoryMaturityStages()
+	{
+		return array(
+			array('stage' => 'verify_maturity_threshold_source', 'status' => 'blocked', 'message' => 'Confirm mature_blocks and any maturity policy source in a separate approved review.'),
+			array('stage' => 'verify_current_chain_height_source', 'status' => 'blocked', 'message' => 'Confirm current height source without using this preview as proof of chain state.'),
+			array('stage' => 'inspect_backend_block_category_transition_logic', 'status' => 'blocked', 'message' => 'Review category transition logic separately before any future transition task.'),
+			array('stage' => 'prepare_block_category_transition_approval_package', 'status' => 'blocked_not_run', 'message' => 'Approval package preparation is future review work only.'),
+			array('stage' => 'block_category_status_transition_mutation', 'status' => 'blocked', 'message' => 'No category or earnings status mutation path is added by this preview.'),
+			array('stage' => 'post_transition_earnings_credit_readiness_recheck', 'status' => 'blocked_not_run', 'message' => 'Rerun earnings credit-readiness only after a separately approved transition.'),
+			array('stage' => 'account_credit_approval_package', 'status' => 'blocked_not_run', 'message' => 'Account-credit approval remains future work after readiness is rechecked.'),
+		);
+	}
+
+	private function blockCategoryMaturityBlockedMetadata()
+	{
+		return array(
+			'status' => 'blocked',
+			'blocked_actions' => array(
+				'backend_accounting_processing',
+				'block_category_mutation',
+				'earnings_status_mutation',
+				'account_credit_mutation',
+				'block_mutation',
+				'earnings_mutation',
+				'coin_mutation',
+				'payout_row_creation',
+				'account_debit',
+				'wallet_rpc_read',
+				'wallet_send',
+				'share_deletion',
+				'payout_retry_delete',
+				'service_or_cron_changes',
+			),
+			'wallet_rpc_used' => false,
+			'message' => 'Read-only block category maturity preview only. It does not invoke backend accounting, mature blocks, change categories, change earnings, credit accounts, create payout rows, call wallets, delete shares, or change services.',
+		);
+	}
+
+	private function blockCategoryMaturityAuditSummary($report)
+	{
+		$scope = $this->guard->getScope();
+		$coin = arraySafeVal($scope, 'coin', array());
+		$summary = arraySafeVal($report, 'summary', array());
+		$classification = arraySafeVal($summary, 'conservative_classification', array());
+		$executionBlocked = arraySafeVal($summary, 'execution_blocked', array());
+		return array(
+			'command' => arraySafeVal($report, 'command'),
+			'coin_id' => arraySafeVal($scope, 'coin_id'),
+			'coin_symbol' => arraySafeVal($coin, 'symbol'),
+			'coin_algo' => arraySafeVal($coin, 'algo'),
+			'likely_stale_immature_category_count' => intval(arraySafeVal($classification, 'likely_stale_immature_category_count', 0)),
+			'potentially_mature_but_untransitioned_count' => intval(arraySafeVal($classification, 'potentially_mature_but_untransitioned_count', 0)),
+			'still_immature_or_unknown_count' => intval(arraySafeVal($classification, 'still_immature_or_unknown_count', 0)),
+			'orphan_risk_count' => intval(arraySafeVal($classification, 'orphan_risk_count', 0)),
+			'indeterminate_count' => intval(arraySafeVal($classification, 'indeterminate_count', 0)),
+			'blocked_actions' => arraySafeVal($executionBlocked, 'blocked_actions', array()),
+			'checksum_note' => 'See top-level report_checksum; generated_at is excluded from checksum input.',
+			'checksum_purpose' => 'preview audit comparison only; not payout authorization',
+		);
+	}
+
+	private function blockCategoryMaturityBlocksWhere($alias)
+	{
+		$scope = $this->guard->getScope();
+		$prefix = $alias ? $alias.'.' : '';
+		if ($this->guard->columnExists('blocks', 'coin_id')) {
+			return array(
+				'sql' => $prefix.$this->guard->qcol('coin_id').'=:coin_id',
+				'params' => array(':coin_id' => arraySafeVal($scope, 'coin_id')),
+				'filter' => 'coin_id',
+			);
+		}
+		if ($this->guard->columnExists('blocks', 'algo') && isset($scope['coin']['algo'])) {
+			return array(
+				'sql' => $prefix.$this->guard->qcol('algo').'=:algo',
+				'params' => array(':algo' => $scope['coin']['algo']),
+				'filter' => 'algo',
+			);
+		}
+
+		$this->guard->addWarning('Cannot coin-scope block maturity preview because neither blocks.coin_id nor blocks.algo is available.');
+		return array('sql' => '1=0', 'params' => array(), 'filter' => 'unavailable');
+	}
+
+	private function blockCategoryMaturitySchema()
+	{
+		return array(
+			'earnings_has_status' => $this->guard->columnExists('earnings', 'status'),
+			'earnings_has_amount' => $this->guard->columnExists('earnings', 'amount'),
+			'earnings_has_blockid' => $this->guard->columnExists('earnings', 'blockid'),
+			'blocks_has_id' => $this->guard->columnExists('blocks', 'id'),
+			'blocks_has_category' => $this->guard->columnExists('blocks', 'category'),
+			'blocks_has_amount' => $this->guard->columnExists('blocks', 'amount'),
+			'blocks_has_height' => $this->guard->columnExists('blocks', 'height'),
+			'blocks_has_time' => $this->guard->columnExists('blocks', 'time'),
+			'can_join_earnings_blocks' => $this->guard->tableExists('earnings') && $this->guard->tableExists('blocks') &&
+				$this->guard->columnExists('earnings', 'blockid') && $this->guard->columnExists('blocks', 'id'),
+		);
+	}
+
+	private function blockCategoryMaturityBlockAggregate($whereSql, $params)
+	{
+		$schema = $this->blockCategoryMaturitySchema();
+		$parts = array('COUNT(*) AS block_count');
+		if ($schema['blocks_has_amount']) {
+			$parts[] = 'SUM(B.'.$this->guard->qcol('amount').') AS amount_sum';
+		}
+		if ($schema['blocks_has_height']) {
+			$height = 'B.'.$this->guard->qcol('height');
+			$parts[] = "MIN($height) AS min_height";
+			$parts[] = "MAX($height) AS max_height";
+		}
+		if ($schema['blocks_has_time']) {
+			$time = 'B.'.$this->guard->qcol('time');
+			$parts[] = "MIN($time) AS min_time";
+			$parts[] = "MAX($time) AS max_time";
+		}
+		return $this->guard->selectRow('SELECT '.implode(', ', $parts).' FROM blocks B WHERE '.$whereSql, $params);
+	}
+
+	private function blockCategoryMaturityLinkedCategoryAggregate($category)
+	{
+		$schema = $this->blockCategoryMaturitySchema();
+		if (!$schema['can_join_earnings_blocks'] || !$schema['blocks_has_category'] || !$schema['earnings_has_status']) {
+			return array('status' => 'indeterminate', 'error' => 'linked earnings/block category inspection is unavailable');
+		}
+
+		$where = $this->earningsCreditReadinessWhere('E');
+		$params = $where['params'];
+		$params[':category'] = $category;
+		$amount = $schema['earnings_has_amount'] ? 'SUM(E.'.$this->guard->qcol('amount').')' : 'NULL';
+		$sql = 'SELECT COUNT(*) AS earnings_row_count, '.$amount.' AS earnings_amount_sum, '.
+			'COUNT(DISTINCT B.'.$this->guard->qcol('id').') AS block_count '.
+			'FROM earnings E INNER JOIN blocks B ON B.'.$this->guard->qcol('id').'=E.'.$this->guard->qcol('blockid').
+			' WHERE '.$where['sql'].' AND E.'.$this->guard->qcol('status').' IN (0, 1)'.
+			' AND B.'.$this->guard->qcol('category').'=:category';
+		return array(
+			'filter' => $where['filter'],
+			'category' => $category,
+			'summary' => $this->guard->selectRow($sql, $params),
+		);
+	}
+
+	private function blockCategoryMaturityHeightInputs($coinReference)
+	{
+		$inputs = arraySafeVal($coinReference, 'derived_maturity_inputs', array());
+		$currentHeight = arraySafeVal($inputs, 'current_height');
+		$matureBlocks = arraySafeVal($inputs, 'mature_blocks');
+		$canDetermine = $currentHeight !== null && $matureBlocks !== null;
+		return array(
+			'can_determine' => $canDetermine,
+			'current_height' => $currentHeight,
+			'current_height_source' => arraySafeVal($inputs, 'current_height_source'),
+			'mature_blocks' => $matureBlocks,
+			'mature_blocks_source' => arraySafeVal($inputs, 'mature_blocks_source'),
+			'message' => $canDetermine ? 'Height-based maturity can be approximated from DB fields.' : 'Height-based maturity cannot be determined from available DB fields.',
+		);
+	}
+
+	private function blockCategoryMaturityOldTimeCutoff($coinReference)
+	{
+		$inputs = arraySafeVal($coinReference, 'derived_maturity_inputs', array());
+		$matureBlocks = arraySafeVal($inputs, 'mature_blocks');
+		$blockTime = arraySafeVal($inputs, 'block_time');
+		if ($matureBlocks === null || $blockTime === null || $matureBlocks <= 0 || $blockTime <= 0) {
+			return array('can_determine' => false, 'reference_source' => null, 'reference_time' => null, 'threshold_seconds' => null, 'cutoff_time' => null);
+		}
+		if (!$this->guard->tableExists('blocks') || !$this->guard->columnExists('blocks', 'time')) {
+			return array('can_determine' => false, 'reference_source' => null, 'reference_time' => null, 'threshold_seconds' => null, 'cutoff_time' => null);
+		}
+
+		$where = $this->blockCategoryMaturityBlocksWhere('B');
+		$reference = $this->guard->selectRow(
+			'SELECT MAX(B.'.$this->guard->qcol('time').') AS reference_time FROM blocks B WHERE '.$where['sql'],
+			$where['params']
+		);
+		$referenceTime = arraySafeVal($reference, 'reference_time');
+		if (!is_numeric($referenceTime)) {
+			return array('can_determine' => false, 'reference_source' => 'max_selected_block_time', 'reference_time' => null, 'threshold_seconds' => null, 'cutoff_time' => null);
+		}
+		$threshold = intval($matureBlocks * $blockTime);
+		return array(
+			'can_determine' => true,
+			'reference_source' => 'max_selected_block_time',
+			'reference_time' => floatval($referenceTime),
+			'threshold_seconds' => $threshold,
+			'cutoff_time' => floatval($referenceTime) - $threshold,
+		);
+	}
+
+	private function blockCategoryMaturityLinkedBlockCount($linkedEarnings, $category)
+	{
+		$rows = arraySafeVal($linkedEarnings, 'by_category', array());
+		foreach ($rows as $row) {
+			if (arraySafeVal($row, 'category') == $category) {
+				return intval(arraySafeVal($row, 'block_count', 0));
+			}
+		}
+		return 0;
+	}
+
+	private function blockCategoryMaturityNumericInput($row, $columns)
+	{
+		foreach ($columns as $column) {
+			if (array_key_exists($column, $row) && is_numeric($row[$column])) {
+				return array('value' => floatval($row[$column]), 'source' => $column);
+			}
+		}
+		return array('value' => null, 'source' => null);
+	}
+
 	private function payoutPreviewAuditSummary($report)
 	{
 		$scope = $this->guard->getScope();
@@ -1732,7 +2261,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 
 	private function isPayoutAuditCommand($command)
 	{
-		return in_array($command, array('payout-candidates-preview', 'payout-row-preflight-preview', 'payout-row-dryrun-plan', 'payable-source-reconciliation-preview', 'account-credit-transition-preview', 'earnings-credit-readiness-preview'), true);
+		return in_array($command, array('payout-candidates-preview', 'payout-row-preflight-preview', 'payout-row-dryrun-plan', 'payable-source-reconciliation-preview', 'account-credit-transition-preview', 'earnings-credit-readiness-preview', 'block-category-maturity-preview'), true);
 	}
 
 	private function ensurePayoutPreviewAuditFields($report)
