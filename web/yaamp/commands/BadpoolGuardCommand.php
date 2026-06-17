@@ -18,6 +18,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 		'account-credit-transition-preview',
 		'earnings-credit-readiness-preview',
 		'block-category-maturity-preview',
+		'earnings-block-reconciliation-preview',
 		'safety-scan',
 		'guard-context',
 	);
@@ -77,6 +78,9 @@ class BadpoolGuardCommand extends CConsoleCommand
 			case 'block-category-maturity-preview':
 				$report = $this->blockCategoryMaturityPreviewReport();
 				break;
+			case 'earnings-block-reconciliation-preview':
+				$report = $this->earningsBlockReconciliationPreviewReport();
+				break;
 			case 'safety-scan':
 				$report = $this->safetyScanReport();
 				break;
@@ -107,6 +111,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 			"       php yaamp/yiic.php badpoolguard account-credit-transition-preview --coin-id=<id> [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard earnings-credit-readiness-preview --coin-id=<id> [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard block-category-maturity-preview --coin-id=<id> [--format=json|text]\n".
+			"       php yaamp/yiic.php badpoolguard earnings-block-reconciliation-preview --coin-id=<id> [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard safety-scan --coin-id=<id> [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard guard-context --coin-id=<id> [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard overview --all-coins-preview [--format=json|text]\n\n".
@@ -368,6 +373,45 @@ class BadpoolGuardCommand extends CConsoleCommand
 		$report['summary']['proposed_future_stages'] = $this->blockCategoryMaturityStages();
 		$report['summary']['execution_blocked'] = $this->blockCategoryMaturityBlockedMetadata();
 		$report['summary']['audit'] = $this->blockCategoryMaturityAuditSummary($report);
+
+		$report = $this->guard->finalizeReport($report);
+		$report = $this->ensurePayoutPreviewAuditFields($report);
+		$report['report_checksum'] = BadpoolGuardReport::checksum($report);
+		return $report;
+	}
+
+	private function earningsBlockReconciliationPreviewReport()
+	{
+		if ($this->guard->isAllCoinsPreview()) {
+			$this->guard->addError('earnings-block-reconciliation-preview requires --coin-id and refuses all-coin scope.');
+			return $this->guard->refusalReport();
+		}
+
+		$report = $this->guard->baseReport();
+		$scope = $this->guard->getScope();
+		$coin = arraySafeVal($scope, 'coin', array());
+		$rowTotals = $this->earningsBlockReconciliationRowTotals();
+		$blockLinkage = $this->earningsBlockReconciliationBlockLinkage();
+		$rowsPerBlock = $this->earningsBlockReconciliationRowsPerBlock();
+		$linkedBlocks = $this->earningsBlockReconciliationLinkedBlocks();
+		$explanation = $this->earningsBlockReconciliationDifferenceExplanation($rowTotals, $blockLinkage, $rowsPerBlock);
+		$classification = $this->earningsBlockReconciliationClassification($blockLinkage, $rowsPerBlock, $linkedBlocks);
+
+		$report['summary']['coin'] = array(
+			'coin_id' => arraySafeVal($scope, 'coin_id'),
+			'symbol' => arraySafeVal($coin, 'symbol'),
+			'algo' => arraySafeVal($coin, 'algo'),
+		);
+		$report['summary']['earnings_row_totals'] = $rowTotals;
+		$report['summary']['block_linkage'] = $blockLinkage;
+		$report['summary']['rows_per_block_distribution'] = $rowsPerBlock;
+		$report['summary']['linked_blocks'] = $linkedBlocks;
+		$report['summary']['row_count_difference_explanation'] = $explanation;
+		$report['summary']['reconciliation_classification'] = $classification;
+		$report['summary']['blockers'] = $this->earningsBlockReconciliationBlockers($classification, $explanation);
+		$report['summary']['proposed_future_stages'] = $this->earningsBlockReconciliationStages();
+		$report['summary']['execution_blocked'] = $this->earningsBlockReconciliationBlockedMetadata();
+		$report['summary']['audit'] = $this->earningsBlockReconciliationAuditSummary($report);
 
 		$report = $this->guard->finalizeReport($report);
 		$report = $this->ensurePayoutPreviewAuditFields($report);
@@ -2217,6 +2261,361 @@ class BadpoolGuardCommand extends CConsoleCommand
 		return array('value' => null, 'source' => null);
 	}
 
+	private function earningsBlockReconciliationRowTotals()
+	{
+		if (!$this->guard->tableExists('earnings')) {
+			return $this->guard->missingTable('earnings');
+		}
+		$schema = $this->earningsBlockReconciliationSchema();
+		if (!$schema['earnings_has_status']) {
+			return array('error' => 'earnings.status column is missing');
+		}
+
+		$where = $this->earningsCreditReadinessWhere('E');
+		$parts = array(
+			'E.'.$this->guard->qcol('status').' AS status',
+			'COUNT(*) AS row_count',
+		);
+		if ($schema['earnings_has_amount']) {
+			$parts[] = 'SUM(E.'.$this->guard->qcol('amount').') AS amount_sum';
+		}
+		if ($schema['earnings_has_blockid']) {
+			$parts[] = 'COUNT(DISTINCT E.'.$this->guard->qcol('blockid').') AS distinct_blockid_count';
+		}
+
+		$sql = 'SELECT '.implode(', ', $parts).
+			' FROM earnings E WHERE '.$where['sql'].' AND E.'.$this->guard->qcol('status').' IN (0, 1)'.
+			' GROUP BY E.'.$this->guard->qcol('status').' ORDER BY E.'.$this->guard->qcol('status');
+		$rows = $this->guard->selectAll($sql, $where['params']);
+
+		return array(
+			'filter' => $where['filter'],
+			'rows' => $rows,
+			'totals' => array(
+				'row_count' => $this->sumRows($rows, 'row_count'),
+				'amount_sum' => $this->sumRows($rows, 'amount_sum'),
+				'distinct_blockid_count' => $this->sumRows($rows, 'distinct_blockid_count'),
+			),
+			'note' => 'Earnings rows are miner/account rows. They are not the same unit as block rows.',
+		);
+	}
+
+	private function earningsBlockReconciliationBlockLinkage()
+	{
+		if (!$this->guard->tableExists('earnings')) {
+			return $this->guard->missingTable('earnings');
+		}
+		$schema = $this->earningsBlockReconciliationSchema();
+		if (!$schema['earnings_has_status']) {
+			return array('error' => 'earnings.status column is missing');
+		}
+		if (!$schema['earnings_has_blockid']) {
+			return array('status' => 'indeterminate', 'error' => 'earnings.blockid column is missing', 'schema' => $schema);
+		}
+
+		$where = $this->earningsCreditReadinessWhere('E');
+		$blockid = 'E.'.$this->guard->qcol('blockid');
+		$parts = array(
+			'COUNT(*) AS inspected_earnings_rows',
+			"SUM(CASE WHEN $blockid IS NOT NULL AND $blockid > 0 THEN 1 ELSE 0 END) AS earnings_rows_with_blockid",
+			"SUM(CASE WHEN $blockid IS NULL OR $blockid <= 0 THEN 1 ELSE 0 END) AS earnings_rows_without_blockid",
+			"COUNT(DISTINCT $blockid) AS distinct_blockid_count",
+		);
+		$join = '';
+		if ($schema['can_join_earnings_blocks']) {
+			$join = ' LEFT JOIN blocks B ON B.'.$this->guard->qcol('id').'=E.'.$this->guard->qcol('blockid');
+			$parts[] = 'SUM(CASE WHEN B.'.$this->guard->qcol('id').' IS NOT NULL THEN 1 ELSE 0 END) AS earnings_rows_with_matching_block';
+			$parts[] = 'SUM(CASE WHEN B.'.$this->guard->qcol('id').' IS NULL THEN 1 ELSE 0 END) AS earnings_rows_without_matching_block';
+			$parts[] = "SUM(CASE WHEN $blockid IS NOT NULL AND $blockid > 0 AND B.".$this->guard->qcol('id').' IS NULL THEN 1 ELSE 0 END) AS earnings_rows_with_blockid_without_matching_block';
+			$parts[] = 'COUNT(DISTINCT B.'.$this->guard->qcol('id').') AS distinct_linked_block_count';
+		} else {
+			$parts[] = 'NULL AS earnings_rows_with_matching_block';
+			$parts[] = 'NULL AS earnings_rows_without_matching_block';
+			$parts[] = 'NULL AS earnings_rows_with_blockid_without_matching_block';
+			$parts[] = 'NULL AS distinct_linked_block_count';
+		}
+
+		$sql = 'SELECT '.implode(', ', $parts).' FROM earnings E'.$join.
+			' WHERE '.$where['sql'].' AND E.'.$this->guard->qcol('status').' IN (0, 1)';
+
+		return array(
+			'filter' => $where['filter'],
+			'schema' => $schema,
+			'summary' => $this->guard->selectRow($sql, $where['params']),
+			'note' => 'Rows without blockid or without a matching block remain informational blockers.',
+		);
+	}
+
+	private function earningsBlockReconciliationRowsPerBlock()
+	{
+		if (!$this->guard->tableExists('earnings')) {
+			return $this->guard->missingTable('earnings');
+		}
+		$schema = $this->earningsBlockReconciliationSchema();
+		if (!$schema['earnings_has_status'] || !$schema['earnings_has_blockid']) {
+			return array('status' => 'indeterminate', 'error' => 'earnings.status and earnings.blockid are required');
+		}
+
+		$where = $this->earningsCreditReadinessWhere('E');
+		$blockid = 'E.'.$this->guard->qcol('blockid');
+		$sql = 'SELECT '.
+			'COUNT(*) AS grouped_blockid_count, '.
+			'SUM(CASE WHEN D.row_count=1 THEN 1 ELSE 0 END) AS one_earning_row_per_block_count, '.
+			'SUM(CASE WHEN D.row_count=2 THEN 1 ELSE 0 END) AS two_earning_rows_per_block_count, '.
+			'SUM(CASE WHEN D.row_count>=3 THEN 1 ELSE 0 END) AS three_plus_earning_rows_per_block_count, '.
+			'MAX(D.row_count) AS max_earnings_rows_linked_to_one_block, '.
+			'SUM(CASE WHEN D.row_count>1 THEN D.row_count ELSE 0 END) AS earnings_rows_in_multirow_blocks, '.
+			'SUM(CASE WHEN D.row_count>1 THEN D.row_count - 1 ELSE 0 END) AS additional_earnings_rows_beyond_one_per_block '.
+			'FROM ('.
+				'SELECT '.$blockid.' AS blockid, COUNT(*) AS row_count FROM earnings E '.
+				'WHERE '.$where['sql'].' AND E.'.$this->guard->qcol('status').' IN (0, 1) '.
+				"AND $blockid IS NOT NULL AND $blockid > 0 ".
+				'GROUP BY '.$blockid.
+			') D';
+		$summary = $this->guard->selectRow($sql, $where['params']);
+
+		return array(
+			'filter' => $where['filter'],
+			'summary' => $summary,
+			'note' => 'A single block can have multiple earnings rows, so earnings row counts can exceed linked block counts.',
+		);
+	}
+
+	private function earningsBlockReconciliationLinkedBlocks()
+	{
+		if (!$this->guard->tableExists('earnings')) {
+			return $this->guard->missingTable('earnings');
+		}
+		if (!$this->guard->tableExists('blocks')) {
+			return $this->guard->missingTable('blocks');
+		}
+		$schema = $this->earningsBlockReconciliationSchema();
+		if (!$schema['can_join_earnings_blocks']) {
+			return array('status' => 'indeterminate', 'error' => 'earnings/block join columns are unavailable', 'schema' => $schema);
+		}
+		if (!$schema['blocks_has_category']) {
+			return array('status' => 'indeterminate', 'error' => 'blocks.category column is missing', 'schema' => $schema);
+		}
+
+		$where = $this->earningsCreditReadinessWhere('E');
+		$parts = array(
+			'B.'.$this->guard->qcol('category').' AS category',
+			'COUNT(DISTINCT B.'.$this->guard->qcol('id').') AS block_count',
+			'COUNT(*) AS linked_earnings_row_count',
+		);
+		if ($schema['earnings_has_amount']) {
+			$parts[] = 'SUM(E.'.$this->guard->qcol('amount').') AS linked_earnings_amount';
+		}
+		if ($schema['blocks_has_height']) {
+			$height = 'B.'.$this->guard->qcol('height');
+			$parts[] = "MIN($height) AS min_height";
+			$parts[] = "MAX($height) AS max_height";
+		}
+		if ($schema['blocks_has_time']) {
+			$time = 'B.'.$this->guard->qcol('time');
+			$parts[] = "MIN($time) AS min_time";
+			$parts[] = "MAX($time) AS max_time";
+		}
+
+		$sql = 'SELECT '.implode(', ', $parts).
+			' FROM earnings E INNER JOIN blocks B ON B.'.$this->guard->qcol('id').'=E.'.$this->guard->qcol('blockid').
+			' WHERE '.$where['sql'].' AND E.'.$this->guard->qcol('status').' IN (0, 1)'.
+			' GROUP BY B.'.$this->guard->qcol('category').' ORDER BY B.'.$this->guard->qcol('category');
+
+		return array(
+			'filter' => $where['filter'],
+			'rows' => $this->guard->selectAll($sql, $where['params']),
+			'note' => 'Linked block rows are reported by category because category state gates later maturity/account-credit review.',
+		);
+	}
+
+	private function earningsBlockReconciliationDifferenceExplanation($rowTotals, $blockLinkage, $rowsPerBlock)
+	{
+		$linkSummary = arraySafeVal($blockLinkage, 'summary', array());
+		$histogram = arraySafeVal($rowsPerBlock, 'summary', array());
+		$earningsRows = intval(arraySafeVal($linkSummary, 'inspected_earnings_rows', 0));
+		$linkedBlocks = intval(arraySafeVal($linkSummary, 'distinct_linked_block_count', 0));
+		$withoutBlockid = intval(arraySafeVal($linkSummary, 'earnings_rows_without_blockid', 0));
+		$withBlockidWithoutMatch = intval(arraySafeVal($linkSummary, 'earnings_rows_with_blockid_without_matching_block', 0));
+		$additionalRows = intval(arraySafeVal($histogram, 'additional_earnings_rows_beyond_one_per_block', 0));
+		$multirowBlockGroups = intval(arraySafeVal($histogram, 'two_earning_rows_per_block_count', 0)) + intval(arraySafeVal($histogram, 'three_plus_earning_rows_per_block_count', 0));
+		$schema = $this->earningsBlockReconciliationSchema();
+		$limitations = array();
+		if (!$schema['earnings_has_blockid']) {
+			$limitations[] = 'earnings.blockid unavailable';
+		}
+		if (!$schema['can_join_earnings_blocks']) {
+			$limitations[] = 'earnings/block join unavailable';
+		}
+		if (!$schema['blocks_has_category']) {
+			$limitations[] = 'blocks.category unavailable';
+		}
+
+		return array(
+			'earnings_rows_are_not_block_rows' => true,
+			'earnings_row_count' => $earningsRows,
+			'linked_block_count' => $linkedBlocks,
+			'row_minus_linked_block_count' => max(0, $earningsRows - $linkedBlocks),
+			'multiple_earnings_rows_per_block' => $additionalRows > 0,
+			'earnings_rows_explained_by_multirow_blocks' => intval(arraySafeVal($histogram, 'earnings_rows_in_multirow_blocks', 0)),
+			'additional_earnings_rows_beyond_one_per_block' => $additionalRows,
+			'duplicate_blockid_groups' => $multirowBlockGroups,
+			'missing_block_links' => ($withoutBlockid + $withBlockidWithoutMatch) > 0,
+			'earnings_rows_without_blockid' => $withoutBlockid,
+			'earnings_rows_with_blockid_without_matching_block' => $withBlockidWithoutMatch,
+			'category_status_filters' => array(
+				'earnings_status_filter' => 'status in 0,1',
+				'coin_scope_filter' => arraySafeVal($blockLinkage, 'filter'),
+				'linked_block_filter' => 'matching blocks only for category distribution',
+			),
+			'schema_limitations' => $limitations,
+			'note' => 'A smaller linked block count can be expected when multiple earnings rows point at the same blockid.',
+		);
+	}
+
+	private function earningsBlockReconciliationClassification($blockLinkage, $rowsPerBlock, $linkedBlocks)
+	{
+		$linkSummary = arraySafeVal($blockLinkage, 'summary', array());
+		$histogram = arraySafeVal($rowsPerBlock, 'summary', array());
+		$missingLinkage = intval(arraySafeVal($linkSummary, 'earnings_rows_without_blockid', 0)) +
+			intval(arraySafeVal($linkSummary, 'earnings_rows_with_blockid_without_matching_block', 0));
+		$linkedBlockCount = intval(arraySafeVal($linkSummary, 'distinct_linked_block_count', 0));
+		$schema = $this->earningsBlockReconciliationSchema();
+		$schemaLimited = !$schema['earnings_has_blockid'] || !$schema['can_join_earnings_blocks'] || !$schema['blocks_has_category'];
+
+		return array(
+			'earnings_rows_explained_by_multirow_blocks' => intval(arraySafeVal($histogram, 'earnings_rows_in_multirow_blocks', 0)),
+			'additional_earnings_rows_beyond_one_per_block' => intval(arraySafeVal($histogram, 'additional_earnings_rows_beyond_one_per_block', 0)),
+			'earnings_rows_missing_block_linkage' => $missingLinkage,
+			'linked_blocks_count' => $linkedBlockCount,
+			'linked_blocks_immature_count' => $this->earningsBlockReconciliationCategoryBlockCount($linkedBlocks, 'immature'),
+			'linked_blocks_orphan_count' => $this->earningsBlockReconciliationCategoryBlockCount($linkedBlocks, 'orphan'),
+			'indeterminate_count' => $schemaLimited ? intval(arraySafeVal($linkSummary, 'inspected_earnings_rows', 0)) : $missingLinkage,
+			'classification_note' => 'Classification reconciles row units only. It does not approve category changes, account credit, or payout rows.',
+		);
+	}
+
+	private function earningsBlockReconciliationBlockers($classification, $explanation)
+	{
+		return array(
+			'payout_rows_remain_blocked' => array(
+				'present' => true,
+				'message' => 'Payout rows require credited account balances and remain blocked by this informational preview.',
+			),
+			'account_credit_remains_blocked' => array(
+				'present' => true,
+				'message' => 'Account credit requires separate maturity/category readiness review and approval.',
+			),
+			'maturity_category_transition_remains_blocked' => array(
+				'present' => true,
+				'message' => 'This preview reconciles earnings rows to blocks but does not validate or perform category/status transition logic.',
+			),
+			'multirow_blocks_require_review' => array(
+				'present' => intval(arraySafeVal($classification, 'additional_earnings_rows_beyond_one_per_block', 0)) > 0,
+				'message' => 'Multiple earnings rows per block explain row-count differences and must be reviewed before later stages.',
+			),
+			'missing_block_linkage_requires_review' => array(
+				'present' => intval(arraySafeVal($classification, 'earnings_rows_missing_block_linkage', 0)) > 0,
+				'message' => 'Rows without block linkage or matching blocks remain blockers.',
+			),
+			'schema_limitation_requires_review' => array(
+				'present' => !empty(arraySafeVal($explanation, 'schema_limitations', array())),
+				'message' => 'Missing schema fields make reconciliation incomplete.',
+			),
+			'informational_only' => array(
+				'present' => true,
+				'message' => 'Reconciliation is read-only evidence gathering only.',
+			),
+		);
+	}
+
+	private function earningsBlockReconciliationStages()
+	{
+		return array(
+			array('stage' => 'inspect_per_block_earnings_grouping', 'status' => 'blocked_not_run', 'message' => 'Review row-per-block grouping before any later transition task.'),
+			array('stage' => 'verify_maturity_threshold_current_height_source', 'status' => 'blocked', 'message' => 'Maturity threshold and current height source must be verified separately.'),
+			array('stage' => 'prepare_category_transition_approval_package', 'status' => 'blocked_not_run', 'message' => 'Category transition approval remains future work.'),
+			array('stage' => 'rerun_earnings_credit_readiness_preview', 'status' => 'blocked_not_run', 'message' => 'Rerun readiness after any separately approved category review or transition.'),
+			array('stage' => 'prepare_account_credit_approval_package', 'status' => 'blocked_not_run', 'message' => 'Account-credit approval remains future work after readiness is resolved.'),
+		);
+	}
+
+	private function earningsBlockReconciliationBlockedMetadata()
+	{
+		return array(
+			'status' => 'blocked',
+			'blocked_actions' => array(
+				'backend_accounting_processing',
+				'block_category_mutation',
+				'earnings_status_mutation',
+				'account_credit_mutation',
+				'account_balance_mutation',
+				'block_mutation',
+				'earnings_mutation',
+				'coin_mutation',
+				'payout_row_creation',
+				'account_debit',
+				'wallet_rpc_read',
+				'wallet_send',
+				'share_deletion',
+				'payout_retry_delete',
+				'service_or_cron_changes',
+			),
+			'wallet_rpc_used' => false,
+			'message' => 'Read-only earnings/block reconciliation only. It does not run backend accounting, change categories, change earnings, credit accounts, create payout rows, call wallets, delete shares, or change services.',
+		);
+	}
+
+	private function earningsBlockReconciliationAuditSummary($report)
+	{
+		$scope = $this->guard->getScope();
+		$coin = arraySafeVal($scope, 'coin', array());
+		$summary = arraySafeVal($report, 'summary', array());
+		$classification = arraySafeVal($summary, 'reconciliation_classification', array());
+		$executionBlocked = arraySafeVal($summary, 'execution_blocked', array());
+		return array(
+			'command' => arraySafeVal($report, 'command'),
+			'coin_id' => arraySafeVal($scope, 'coin_id'),
+			'coin_symbol' => arraySafeVal($coin, 'symbol'),
+			'coin_algo' => arraySafeVal($coin, 'algo'),
+			'linked_blocks_count' => intval(arraySafeVal($classification, 'linked_blocks_count', 0)),
+			'linked_blocks_immature_count' => intval(arraySafeVal($classification, 'linked_blocks_immature_count', 0)),
+			'linked_blocks_orphan_count' => intval(arraySafeVal($classification, 'linked_blocks_orphan_count', 0)),
+			'earnings_rows_missing_block_linkage' => intval(arraySafeVal($classification, 'earnings_rows_missing_block_linkage', 0)),
+			'additional_earnings_rows_beyond_one_per_block' => intval(arraySafeVal($classification, 'additional_earnings_rows_beyond_one_per_block', 0)),
+			'indeterminate_count' => intval(arraySafeVal($classification, 'indeterminate_count', 0)),
+			'blocked_actions' => arraySafeVal($executionBlocked, 'blocked_actions', array()),
+			'checksum_note' => 'See top-level report_checksum; generated_at is excluded from checksum input.',
+			'checksum_purpose' => 'preview audit comparison only; not payout authorization',
+		);
+	}
+
+	private function earningsBlockReconciliationSchema()
+	{
+		return array(
+			'earnings_has_status' => $this->guard->columnExists('earnings', 'status'),
+			'earnings_has_amount' => $this->guard->columnExists('earnings', 'amount'),
+			'earnings_has_blockid' => $this->guard->columnExists('earnings', 'blockid'),
+			'blocks_has_id' => $this->guard->columnExists('blocks', 'id'),
+			'blocks_has_category' => $this->guard->columnExists('blocks', 'category'),
+			'blocks_has_height' => $this->guard->columnExists('blocks', 'height'),
+			'blocks_has_time' => $this->guard->columnExists('blocks', 'time'),
+			'can_join_earnings_blocks' => $this->guard->tableExists('earnings') && $this->guard->tableExists('blocks') &&
+				$this->guard->columnExists('earnings', 'blockid') && $this->guard->columnExists('blocks', 'id'),
+		);
+	}
+
+	private function earningsBlockReconciliationCategoryBlockCount($linkedBlocks, $category)
+	{
+		$rows = arraySafeVal($linkedBlocks, 'rows', array());
+		foreach ($rows as $row) {
+			if (arraySafeVal($row, 'category') == $category) {
+				return intval(arraySafeVal($row, 'block_count', 0));
+			}
+		}
+		return 0;
+	}
+
 	private function payoutPreviewAuditSummary($report)
 	{
 		$scope = $this->guard->getScope();
@@ -2261,7 +2660,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 
 	private function isPayoutAuditCommand($command)
 	{
-		return in_array($command, array('payout-candidates-preview', 'payout-row-preflight-preview', 'payout-row-dryrun-plan', 'payable-source-reconciliation-preview', 'account-credit-transition-preview', 'earnings-credit-readiness-preview', 'block-category-maturity-preview'), true);
+		return in_array($command, array('payout-candidates-preview', 'payout-row-preflight-preview', 'payout-row-dryrun-plan', 'payable-source-reconciliation-preview', 'account-credit-transition-preview', 'earnings-credit-readiness-preview', 'block-category-maturity-preview', 'earnings-block-reconciliation-preview'), true);
 	}
 
 	private function ensurePayoutPreviewAuditFields($report)
