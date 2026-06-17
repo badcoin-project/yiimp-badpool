@@ -72,6 +72,8 @@ The preview stage remains read-only. It reports candidate accounts, thresholds, 
 
 It must not create payout rows, debit accounts, create withdraw rows, call wallet code, send coins, retry failed payouts, delete payout rows, or modify backend accounting tables.
 
+Payout candidates are derived from already credited account balances. A zero payout candidate count is not proof that unpaid miner source data is absent. Before payout-row creation is considered, operators should review payable source reconciliation across blocks, earnings, account credit readiness, account balances, and payout candidate readiness.
+
 ### 2. Payout Row Creation
 
 Current scaffolding may report payout-row preflight readiness in read-only mode. That preflight report can list the selected coin, required preview checksum input, candidate count, projected payout total, payout threshold, backup status, mutation-log status, stage status, and blocked actions.
@@ -83,6 +85,8 @@ Current scaffolding may also report a read-only payout-row dry-run plan. That pl
 The dry-run plan does not create rows, debit accounts, call wallet RPC, write logs, write backups, authorize execution, or perform any database mutation.
 
 This future stage may only create payout-intent rows after approval for a specific preview report and coin. It must not debit accounts and must not call wallet code.
+
+If payable source reconciliation indicates earnings or block backlog exists but account balances are not credited, the next stage is account-credit/backlog review, not payout-row creation.
 
 The mutation log must record every row that would be or was created, including account ID, coin ID, amount, fee fields, status fields, and an idempotency key derived from deterministic non-secret inputs.
 
