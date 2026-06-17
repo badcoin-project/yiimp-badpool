@@ -82,6 +82,8 @@ When immature or new block categories remain in the payable source path, operato
 
 When earnings row counts differ from linked block counts, operators must run `earnings-block-reconciliation-preview` before any future category/status transition or account-credit approval package. Earnings rows and block rows are different units, and one block can have multiple earnings rows. The preview reconciles row grouping and linkage only; it does not change blocks, earnings, accounts, payouts, wallets, shares, services, or cron.
 
+Before any future category/status transition or account-credit approval package, operators must run `maturity-source-verification-preview` to confirm which DB fields are usable as maturity threshold and current-height inputs. DB-only previews must not assume chain height if `coins.block_height` is stale, missing, null, or non-numeric. The preview does not call daemon RPC, mature blocks, change categories, change earnings status, credit accounts, or authorize a future transition stage.
+
 ### 2. Payout Row Creation
 
 Current scaffolding may report payout-row preflight readiness in read-only mode. That preflight report can list the selected coin, required preview checksum input, candidate count, projected payout total, payout threshold, backup status, mutation-log status, stage status, and blocked actions.
