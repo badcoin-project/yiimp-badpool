@@ -146,6 +146,7 @@ php yaamp/yiic.php badpoolguard payable-source-reconciliation-preview --coin-id=
 php yaamp/yiic.php badpoolguard account-credit-transition-preview --coin-id=<coin-id>
 php yaamp/yiic.php badpoolguard earnings-credit-readiness-preview --coin-id=<coin-id>
 php yaamp/yiic.php badpoolguard block-category-maturity-preview --coin-id=<coin-id>
+php yaamp/yiic.php badpoolguard earnings-block-reconciliation-preview --coin-id=<coin-id>
 php yaamp/yiic.php badpoolguard safety-scan --coin-id=<coin-id>
 ```
 
@@ -324,6 +325,23 @@ Immature or new block categories may be stale while backend block/accounting upd
 The preview is SELECT-only. It does not run backend accounting, mature blocks, change block categories, change earnings status, credit accounts, change coins, create payout rows, call wallet RPC, delete shares, or restore backend services.
 
 Any future block category/status transition remains a separate approved PR, separate validation step, and separate operator action. Account-credit and payout-row work remain blocked until category/maturity questions are separately resolved and rechecked.
+
+### Patch group O implementation status
+
+Patch group O adds a read-only earnings-to-block maturity reconciliation preview to `web/yaamp/commands/BadpoolGuardCommand.php`:
+
+```text
+cd /srv/badpool/yiimp-badpool/web
+php yaamp/yiic.php badpoolguard earnings-block-reconciliation-preview --coin-id=<coin-id> --format=json
+```
+
+Earnings rows and block rows are different accounting units. One block can have multiple earnings rows, so a larger earnings row count can reconcile to a smaller distinct linked block count.
+
+The reconciliation preview reports coin identity, status 0 and status 1 earnings totals, block linkage, row-per-block distribution, linked block category distribution, row-count difference explanations, reconciliation classification, blockers, proposed future stages, blocked action metadata, audit metadata, and a report checksum.
+
+The preview is SELECT-only. It does not run backend accounting, change block categories, change earnings status, credit accounts, change coins, create payout rows, call wallet RPC, delete shares, or restore backend services.
+
+Any future category/status or account-credit transition remains blocked until earnings-row and block-row differences are reconciled and separately approved.
 
 ### Read-only preview commands
 
@@ -841,6 +859,16 @@ These must be answered by L3 using read-only live-server checks, not by reposito
 - State that immature/new categories can be stale DB state, but that the preview does not prove chain state or service state.
 - Do not run backend accounting, mature blocks, change block categories, change earnings status, credit accounts, mutate coins, create payout rows, call wallet RPC, delete shares, retry/delete payouts, change services, or restore backend loops.
 - Future block category/status transition remains a separate approved PR and operator action.
+
+### Patch group O: earnings-to-block maturity reconciliation preview
+
+- Add a read-only command that reconciles status 0/status 1 earnings rows to linked block rows.
+- Require explicit coin scope and refuse all-coin scope.
+- Report earnings row totals, amount sums, distinct blockid counts, block linkage, row-per-block distribution, linked block category distribution, row-count difference explanation, reconciliation classification, blockers, future stages, audit metadata, and checksum metadata.
+- Explain that earnings rows and block rows are different units, and one block can have multiple earnings rows.
+- State that row-count differences must be reconciled before any category/status or account-credit transition.
+- Do not run backend accounting, change block categories, change earnings status, credit accounts, mutate blocks/earnings/accounts/coins, create payout rows, call wallet RPC, delete shares, retry/delete payouts, change services, or restore backend loops.
+- Future category/status and account-credit transition remains a separate approved PR and operator action.
 
 ## Non-goals for this plan
 

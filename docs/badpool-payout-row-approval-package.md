@@ -16,6 +16,8 @@ An approval package for future payout-row creation must contain all of the follo
 - Latest `earnings-credit-readiness-preview` top-level `report_checksum.value` when that preview is required.
 - Latest `block-category-maturity-preview` JSON path when immature/new block categories remain in scope.
 - Latest `block-category-maturity-preview` top-level `report_checksum.value` when that preview is required.
+- Latest `earnings-block-reconciliation-preview` JSON path when earnings row counts differ from linked block counts.
+- Latest `earnings-block-reconciliation-preview` top-level `report_checksum.value` when that preview is required.
 - Latest `payout-candidates-preview` JSON path.
 - Latest `payout-candidates-preview` top-level `report_checksum.value`.
 - Latest `payout-row-preflight-preview` JSON path.
@@ -38,6 +40,7 @@ An approval package for future payout-row creation must contain all of the follo
 - Confirmation that account-credit transition preview does not require unresolved account-credit/backlog work.
 - Confirmation that earnings credit-readiness preview has no unresolved not-ready or indeterminate blockers.
 - Confirmation that block category maturity preview has no unresolved stale, indeterminate, orphan-risk, missing maturity-source, or missing current-height blockers.
+- Confirmation that earnings-block reconciliation preview has no unresolved missing linkage, schema limitation, or unexplained row-count difference blockers.
 - Confirmation that the wallet-send guard remains active.
 - Confirmation that the share-delete guard remains active.
 - Confirmation that `badpool-blocks.service` remains inactive/disabled.
@@ -64,6 +67,7 @@ The approval package must name STOP conditions before any future implementation 
 - Account-credit transition preview indicates unresolved earnings credit readiness or block accounting inspection is still required.
 - Earnings credit-readiness preview reports not-ready rows, indeterminate rows, immature/new block backlog, orphan risk, missing linkage, duplicate uncertainty, or schema limitations that have not been separately resolved.
 - Block category maturity preview reports stale or potentially mature but untransitioned categories, indeterminate maturity, orphan risk, missing maturity-source fields, missing current height, or unvalidated category transition logic that has not been separately resolved.
+- Earnings-block reconciliation preview reports missing block linkage, schema limitations, unexplained row-count differences, or multirow block grouping that has not been separately reviewed.
 - Coin ID or algorithm differs across the candidate, preflight, and dry-run plan reports.
 - Candidate count differs across reports.
 - Projected total payout amount differs across reports.
@@ -116,6 +120,10 @@ earnings readiness blockers resolved before payout-row review: yes/no
 block-category-maturity-preview JSON path:
 block-category-maturity-preview report_checksum.value:
 block category/maturity blockers resolved before payout-row review: yes/no
+
+earnings-block-reconciliation-preview JSON path:
+earnings-block-reconciliation-preview report_checksum.value:
+earnings/block reconciliation blockers resolved before payout-row review: yes/no
 
 payout-candidates-preview JSON path:
 payout-candidates-preview report_checksum.value:
