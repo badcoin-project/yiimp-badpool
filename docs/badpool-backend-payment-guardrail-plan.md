@@ -144,6 +144,7 @@ php yaamp/yiic.php badpoolguard payout-row-preflight-preview --coin-id=<coin-id>
 php yaamp/yiic.php badpoolguard payout-row-dryrun-plan --coin-id=<coin-id>
 php yaamp/yiic.php badpoolguard payable-source-reconciliation-preview --coin-id=<coin-id>
 php yaamp/yiic.php badpoolguard account-credit-transition-preview --coin-id=<coin-id>
+php yaamp/yiic.php badpoolguard earnings-credit-readiness-preview --coin-id=<coin-id>
 php yaamp/yiic.php badpoolguard safety-scan --coin-id=<coin-id>
 ```
 
@@ -290,6 +291,21 @@ php yaamp/yiic.php badpoolguard account-credit-transition-preview --coin-id=<coi
 Payout rows require positive credited account balances. Payable source data may exist in earnings or block backlog before account balances are credited, so a zero payout candidate count is not enough to approve payout-row creation.
 
 The transition preview reports coin identity, current account balance state, earnings grouped by status, uncredited and credit-ready earnings totals when distinguishable, block categories needing accounting inspection, proposed future transition stages, blocked action metadata, audit metadata, and a report checksum. It is SELECT-only and does not credit accounts, change earnings or blocks, create payout rows, call wallet RPC, delete shares, or restore backend services.
+
+Any future account-credit mutation remains a separate approved PR, separate validation step, and separate operator action.
+
+### Patch group M implementation status
+
+Patch group M adds a read-only earnings credit-readiness inspection preview to `web/yaamp/commands/BadpoolGuardCommand.php`:
+
+```text
+cd /srv/badpool/yiimp-badpool/web
+php yaamp/yiic.php badpoolguard earnings-credit-readiness-preview --coin-id=<coin-id> --format=json
+```
+
+Status 0 earnings are payable source backlog, not automatically credit-ready. Credit-readiness requires block/category/linkage inspection before any future account-credit mutation can be considered.
+
+The readiness preview reports coin identity, earnings grouped by status, status 0 and status 1 readiness signals, account/user and block linkage, block categories, amount polarity, duplicate-risk hints, readiness classification totals, blockers, proposed future stages, audit metadata, and a report checksum. It is SELECT-only and does not change earnings status, credit accounts, change blocks or coins, create payout rows, call wallet RPC, delete shares, or restore backend services.
 
 Any future account-credit mutation remains a separate approved PR, separate validation step, and separate operator action.
 
@@ -789,6 +805,15 @@ These must be answered by L3 using read-only live-server checks, not by reposito
 - Require explicit coin scope and refuse all-coin scope.
 - Report account count, positive account count, total positive balance, earnings grouped by status, uncredited and credit-ready earnings totals, block categories needing accounting inspection, future transition stages, blocked action metadata, audit metadata, and checksum metadata.
 - State why payout rows remain blocked until positive credited account balances exist.
+- Do not add account credit mutation, earnings/block/coin mutation, payout-row creation, account debit, wallet RPC calls, share deletion, retry/delete behavior, service changes, or backend loop restoration.
+- Future account-credit mutation remains a separate approved PR and operator action.
+
+### Patch group M: earnings credit-readiness inspection preview
+
+- Add a read-only command that explains why status 0 earnings and related block backlog are not automatically credit-ready.
+- Require explicit coin scope and refuse all-coin scope.
+- Report earnings grouped by status, status 0 and status 1 readiness signals, account/user presence, coin/algo scope match, block linkage, matching block categories, amount positive/non-positive counts, duplicate-risk hints, readiness classification totals, blockers, future stages, audit metadata, and checksum metadata.
+- Report blockers such as immature/new block backlog, orphan risk, status not credit-ready, missing linkage, duplicate or previous-credit uncertainty, and schema limitations.
 - Do not add account credit mutation, earnings/block/coin mutation, payout-row creation, account debit, wallet RPC calls, share deletion, retry/delete behavior, service changes, or backend loop restoration.
 - Future account-credit mutation remains a separate approved PR and operator action.
 

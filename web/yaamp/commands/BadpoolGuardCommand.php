@@ -16,6 +16,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 		'payout-row-dryrun-plan',
 		'payable-source-reconciliation-preview',
 		'account-credit-transition-preview',
+		'earnings-credit-readiness-preview',
 		'safety-scan',
 		'guard-context',
 	);
@@ -69,6 +70,9 @@ class BadpoolGuardCommand extends CConsoleCommand
 			case 'account-credit-transition-preview':
 				$report = $this->accountCreditTransitionPreviewReport();
 				break;
+			case 'earnings-credit-readiness-preview':
+				$report = $this->earningsCreditReadinessPreviewReport();
+				break;
 			case 'safety-scan':
 				$report = $this->safetyScanReport();
 				break;
@@ -97,6 +101,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 			"       php yaamp/yiic.php badpoolguard payout-row-dryrun-plan --coin-id=<id> [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard payable-source-reconciliation-preview --coin-id=<id> [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard account-credit-transition-preview --coin-id=<id> [--format=json|text]\n".
+			"       php yaamp/yiic.php badpoolguard earnings-credit-readiness-preview --coin-id=<id> [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard safety-scan --coin-id=<id> [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard guard-context --coin-id=<id> [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard overview --all-coins-preview [--format=json|text]\n\n".
@@ -284,6 +289,43 @@ class BadpoolGuardCommand extends CConsoleCommand
 		$report['summary']['payout_rows_blocked_reason'] = $this->accountCreditPayoutRowsBlockedReason($accountState);
 		$report['summary']['execution_blocked'] = $this->accountCreditTransitionBlockedMetadata();
 		$report['summary']['audit'] = $this->accountCreditTransitionAuditSummary($report);
+
+		$report = $this->guard->finalizeReport($report);
+		$report = $this->ensurePayoutPreviewAuditFields($report);
+		$report['report_checksum'] = BadpoolGuardReport::checksum($report);
+		return $report;
+	}
+
+	private function earningsCreditReadinessPreviewReport()
+	{
+		if ($this->guard->isAllCoinsPreview()) {
+			$this->guard->addError('earnings-credit-readiness-preview requires --coin-id and refuses all-coin scope.');
+			return $this->guard->refusalReport();
+		}
+
+		$report = $this->guard->baseReport();
+		$scope = $this->guard->getScope();
+		$coin = arraySafeVal($scope, 'coin', array());
+		$earningsSummary = $this->payableEarningsByStatusSummary();
+		$readinessSignals = $this->earningsCreditReadinessSignals();
+		$blockLinkage = $this->earningsCreditReadinessBlockLinkageSummary();
+		$duplicateRisk = $this->earningsCreditReadinessDuplicateRiskSummary();
+		$classification = $this->earningsCreditReadinessClassification();
+
+		$report['summary']['coin'] = array(
+			'coin_id' => arraySafeVal($scope, 'coin_id'),
+			'symbol' => arraySafeVal($coin, 'symbol'),
+			'algo' => arraySafeVal($coin, 'algo'),
+		);
+		$report['summary']['earnings_by_status'] = $earningsSummary;
+		$report['summary']['status_0_1_readiness_signals'] = $readinessSignals;
+		$report['summary']['block_linkage'] = $blockLinkage;
+		$report['summary']['duplicate_risk'] = $duplicateRisk;
+		$report['summary']['credit_readiness_classification'] = $classification;
+		$report['summary']['readiness_blockers'] = $this->earningsCreditReadinessBlockers($classification, $readinessSignals, $blockLinkage, $duplicateRisk);
+		$report['summary']['proposed_future_stages'] = $this->earningsCreditReadinessStages();
+		$report['summary']['execution_blocked'] = $this->earningsCreditReadinessBlockedMetadata();
+		$report['summary']['audit'] = $this->earningsCreditReadinessAuditSummary($report);
 
 		$report = $this->guard->finalizeReport($report);
 		$report = $this->ensurePayoutPreviewAuditFields($report);
@@ -1142,6 +1184,510 @@ class BadpoolGuardCommand extends CConsoleCommand
 		);
 	}
 
+	private function earningsCreditReadinessSignals()
+	{
+		if (!$this->guard->tableExists('earnings')) {
+			return $this->guard->missingTable('earnings');
+		}
+		if (!$this->guard->columnExists('earnings', 'status')) {
+			return array('error' => 'earnings.status column is missing');
+		}
+
+		$where = $this->earningsCreditReadinessWhere('E');
+		$schema = $this->earningsCreditReadinessSchema();
+		$joins = '';
+		$parts = array(
+			'E.'.$this->guard->qcol('status').' AS status',
+			'COUNT(*) AS row_count',
+		);
+
+		if ($schema['has_amount']) {
+			$amount = 'E.'.$this->guard->qcol('amount');
+			$parts[] = "SUM($amount) AS amount_sum";
+			$parts[] = "SUM(CASE WHEN $amount > 0 THEN 1 ELSE 0 END) AS positive_amount_count";
+			$parts[] = "SUM(CASE WHEN $amount <= 0 OR $amount IS NULL THEN 1 ELSE 0 END) AS non_positive_amount_count";
+		}
+		if ($schema['has_create_time']) {
+			$createTime = 'E.'.$this->guard->qcol('create_time');
+			$parts[] = "MIN($createTime) AS min_create_time";
+			$parts[] = "MAX($createTime) AS max_create_time";
+		}
+		if ($schema['has_mature_time']) {
+			$matureTime = 'E.'.$this->guard->qcol('mature_time');
+			$parts[] = "MIN($matureTime) AS min_mature_time";
+			$parts[] = "MAX($matureTime) AS max_mature_time";
+		}
+		if ($schema['has_userid']) {
+			$userid = 'E.'.$this->guard->qcol('userid');
+			$parts[] = "SUM(CASE WHEN $userid IS NOT NULL AND $userid > 0 THEN 1 ELSE 0 END) AS user_id_present_count";
+			$parts[] = "SUM(CASE WHEN $userid IS NULL OR $userid <= 0 THEN 1 ELSE 0 END) AS user_id_missing_count";
+		}
+		if ($schema['can_join_accounts']) {
+			$joins .= ' LEFT JOIN accounts A ON A.'.$this->guard->qcol('id').'=E.'.$this->guard->qcol('userid');
+			$parts[] = 'SUM(CASE WHEN A.'.$this->guard->qcol('id').' IS NOT NULL THEN 1 ELSE 0 END) AS matching_account_count';
+			$parts[] = 'SUM(CASE WHEN A.'.$this->guard->qcol('id').' IS NULL THEN 1 ELSE 0 END) AS missing_account_count';
+		}
+		if ($schema['has_coinid']) {
+			$coinid = 'E.'.$this->guard->qcol('coinid');
+			$parts[] = "SUM(CASE WHEN $coinid=:coin_id THEN 1 ELSE 0 END) AS coin_id_match_count";
+			$parts[] = "SUM(CASE WHEN $coinid!=:coin_id OR $coinid IS NULL THEN 1 ELSE 0 END) AS coin_id_mismatch_count";
+		} elseif ($schema['has_algo']) {
+			$algo = 'E.'.$this->guard->qcol('algo');
+			$parts[] = "SUM(CASE WHEN $algo=:algo THEN 1 ELSE 0 END) AS algo_match_count";
+			$parts[] = "SUM(CASE WHEN $algo!=:algo OR $algo IS NULL THEN 1 ELSE 0 END) AS algo_mismatch_count";
+		}
+		if ($schema['has_blockid']) {
+			$blockid = 'E.'.$this->guard->qcol('blockid');
+			$parts[] = "SUM(CASE WHEN $blockid IS NOT NULL AND $blockid > 0 THEN 1 ELSE 0 END) AS block_id_present_count";
+			$parts[] = "SUM(CASE WHEN $blockid IS NULL OR $blockid <= 0 THEN 1 ELSE 0 END) AS block_id_missing_count";
+		}
+		if ($schema['can_join_blocks']) {
+			$joins .= ' LEFT JOIN blocks B ON B.'.$this->guard->qcol('id').'=E.'.$this->guard->qcol('blockid');
+			$parts[] = 'SUM(CASE WHEN B.'.$this->guard->qcol('id').' IS NOT NULL THEN 1 ELSE 0 END) AS matching_block_count';
+			$parts[] = 'SUM(CASE WHEN B.'.$this->guard->qcol('id').' IS NULL THEN 1 ELSE 0 END) AS missing_block_count';
+			if ($schema['blocks_has_category']) {
+				$category = 'B.'.$this->guard->qcol('category');
+				foreach (array('generate', 'new', 'immature', 'orphan') as $value) {
+					$parts[] = "SUM(CASE WHEN $category='$value' THEN 1 ELSE 0 END) AS block_category_".$value."_count";
+				}
+			}
+			if ($schema['blocks_has_height']) {
+				$height = 'B.'.$this->guard->qcol('height');
+				$parts[] = "MIN($height) AS min_block_height";
+				$parts[] = "MAX($height) AS max_block_height";
+			}
+			if ($schema['blocks_has_time']) {
+				$time = 'B.'.$this->guard->qcol('time');
+				$parts[] = "MIN($time) AS min_block_time";
+				$parts[] = "MAX($time) AS max_block_time";
+			}
+		}
+
+		$sql = 'SELECT '.implode(', ', $parts).' FROM earnings E'.$joins.
+			' WHERE '.$where['sql'].' AND E.'.$this->guard->qcol('status').' IN (0, 1)'.
+			' GROUP BY E.'.$this->guard->qcol('status').' ORDER BY E.'.$this->guard->qcol('status');
+
+		return array(
+			'filter' => $where['filter'],
+			'schema' => $schema,
+			'rows' => $this->guard->selectAll($sql, $where['params']),
+			'note' => 'Status 0 rows are source backlog for inspection, not automatically credit-ready.',
+		);
+	}
+
+	private function earningsCreditReadinessBlockLinkageSummary()
+	{
+		if (!$this->guard->tableExists('earnings')) {
+			return $this->guard->missingTable('earnings');
+		}
+		if (!$this->guard->columnExists('earnings', 'status')) {
+			return array('error' => 'earnings.status column is missing');
+		}
+
+		$schema = $this->earningsCreditReadinessSchema();
+		if (!$schema['can_join_blocks']) {
+			return array(
+				'status' => 'indeterminate',
+				'error' => 'earnings.blockid or blocks.id linkage is unavailable',
+				'schema' => $schema,
+			);
+		}
+
+		$where = $this->earningsCreditReadinessWhere('E');
+		$amountSum = $schema['has_amount'] ? 'SUM(E.'.$this->guard->qcol('amount').')' : 'NULL';
+		$orphanAmount = ($schema['has_amount'] && $schema['blocks_has_category'])
+			? "SUM(CASE WHEN B.".$this->guard->qcol('category')."='orphan' THEN E.".$this->guard->qcol('amount')." ELSE 0 END)"
+			: 'NULL';
+		$parts = array(
+			'COUNT(*) AS inspected_earning_rows',
+			'SUM(CASE WHEN B.'.$this->guard->qcol('id').' IS NOT NULL THEN 1 ELSE 0 END) AS earnings_with_matching_block',
+			'SUM(CASE WHEN B.'.$this->guard->qcol('id').' IS NULL THEN 1 ELSE 0 END) AS earnings_without_matching_block',
+			"$amountSum AS inspected_amount_sum",
+			"$orphanAmount AS orphan_linked_amount",
+		);
+		if ($schema['blocks_has_category']) {
+			$category = 'B.'.$this->guard->qcol('category');
+			foreach (array('generate', 'new', 'immature', 'orphan') as $value) {
+				$parts[] = "SUM(CASE WHEN $category='$value' THEN 1 ELSE 0 END) AS category_".$value."_count";
+			}
+		}
+		if ($schema['blocks_has_height']) {
+			$height = 'B.'.$this->guard->qcol('height');
+			$parts[] = "MIN($height) AS min_block_height";
+			$parts[] = "MAX($height) AS max_block_height";
+		}
+		if ($schema['blocks_has_time']) {
+			$time = 'B.'.$this->guard->qcol('time');
+			$parts[] = "MIN($time) AS min_block_time";
+			$parts[] = "MAX($time) AS max_block_time";
+		}
+
+		$sql = 'SELECT '.implode(', ', $parts).
+			' FROM earnings E LEFT JOIN blocks B ON B.'.$this->guard->qcol('id').'=E.'.$this->guard->qcol('blockid').
+			' WHERE '.$where['sql'].' AND E.'.$this->guard->qcol('status').' IN (0, 1)';
+		$summary = $this->guard->selectRow($sql, $where['params']);
+		$categories = array();
+		if ($schema['blocks_has_category']) {
+			$categorySql = 'SELECT B.'.$this->guard->qcol('category').' AS category, COUNT(*) AS row_count, '.$amountSum.' AS amount_sum '.
+				'FROM earnings E INNER JOIN blocks B ON B.'.$this->guard->qcol('id').'=E.'.$this->guard->qcol('blockid').
+				' WHERE '.$where['sql'].' AND E.'.$this->guard->qcol('status').' IN (0, 1)'.
+				' GROUP BY B.'.$this->guard->qcol('category').' ORDER BY B.'.$this->guard->qcol('category');
+			$categories = $this->guard->selectAll($categorySql, $where['params']);
+		}
+
+		return array(
+			'filter' => $where['filter'],
+			'summary' => $summary,
+			'matching_block_categories' => $categories,
+		);
+	}
+
+	private function earningsCreditReadinessDuplicateRiskSummary()
+	{
+		if (!$this->guard->tableExists('earnings') || !$this->guard->columnExists('earnings', 'status')) {
+			return array('status' => 'indeterminate', 'error' => 'earnings table or earnings.status is unavailable');
+		}
+
+		$schema = $this->earningsCreditReadinessSchema();
+		$required = array('has_userid', 'has_blockid', 'has_coinid');
+		foreach ($required as $key) {
+			if (!$schema[$key]) {
+				return array(
+					'status' => 'indeterminate',
+					'error' => 'duplicate-risk grouping requires earnings userid, blockid, and coinid columns',
+					'schema' => $schema,
+				);
+			}
+		}
+
+		$where = $this->earningsCreditReadinessWhere('E');
+		$groupColumns = array(
+			'E.'.$this->guard->qcol('status'),
+			'E.'.$this->guard->qcol('userid'),
+			'E.'.$this->guard->qcol('blockid'),
+			'E.'.$this->guard->qcol('coinid'),
+		);
+		if ($schema['has_amount']) {
+			$groupColumns[] = 'E.'.$this->guard->qcol('amount');
+		}
+
+		$sql = 'SELECT COUNT(*) AS duplicate_group_count, SUM(row_count) AS duplicate_row_count FROM ('.
+			'SELECT '.implode(', ', $groupColumns).', COUNT(*) AS row_count FROM earnings E '.
+			'WHERE '.$where['sql'].' AND E.'.$this->guard->qcol('status').' IN (0, 1) '.
+			'GROUP BY '.implode(', ', $groupColumns).' HAVING COUNT(*) > 1'.
+			') D';
+		$duplicates = $this->guard->selectRow($sql, $where['params']);
+
+		$previousCredit = array('status_0_1_rows_with_cleared_match' => null, 'matched_amount' => null);
+		if ($schema['has_amount']) {
+			$amount = 'E.'.$this->guard->qcol('amount');
+			$previousCreditSql = 'SELECT '.
+				'SUM(CASE WHEN EXISTS ('.
+					'SELECT 1 FROM earnings C WHERE C.'.$this->guard->qcol('status').'=2 '.
+					'AND C.'.$this->guard->qcol('userid').'=E.'.$this->guard->qcol('userid').' '.
+					'AND C.'.$this->guard->qcol('blockid').'=E.'.$this->guard->qcol('blockid').' '.
+					'AND C.'.$this->guard->qcol('coinid').'=E.'.$this->guard->qcol('coinid').' '.
+					'AND C.'.$this->guard->qcol('amount').'=E.'.$this->guard->qcol('amount').
+				') THEN 1 ELSE 0 END) AS status_0_1_rows_with_cleared_match, '.
+				'SUM(CASE WHEN EXISTS ('.
+					'SELECT 1 FROM earnings C WHERE C.'.$this->guard->qcol('status').'=2 '.
+					'AND C.'.$this->guard->qcol('userid').'=E.'.$this->guard->qcol('userid').' '.
+					'AND C.'.$this->guard->qcol('blockid').'=E.'.$this->guard->qcol('blockid').' '.
+					'AND C.'.$this->guard->qcol('coinid').'=E.'.$this->guard->qcol('coinid').' '.
+					'AND C.'.$this->guard->qcol('amount').'=E.'.$this->guard->qcol('amount').
+				') THEN '.$amount.' ELSE 0 END) AS matched_amount '.
+				'FROM earnings E WHERE '.$where['sql'].' AND E.'.$this->guard->qcol('status').' IN (0, 1)';
+			$previousCredit = $this->guard->selectRow($previousCreditSql, $where['params']);
+		}
+
+		return array(
+			'status' => 'inspected',
+			'duplicate_groups' => $duplicates,
+			'previous_credit_uncertainty' => $previousCredit,
+			'note' => 'Duplicate-risk indicators are read-only hints for operator review; they do not prove or authorize crediting.',
+		);
+	}
+
+	private function earningsCreditReadinessClassification()
+	{
+		if (!$this->guard->tableExists('earnings')) {
+			return $this->guard->missingTable('earnings');
+		}
+		if (!$this->guard->columnExists('earnings', 'status')) {
+			return array('error' => 'earnings.status column is missing');
+		}
+
+		$schema = $this->earningsCreditReadinessSchema();
+		$where = $this->earningsCreditReadinessWhere('E');
+		$joins = '';
+		$ready = array('E.'.$this->guard->qcol('status').'=1');
+		$notReady = array('E.'.$this->guard->qcol('status').'=0');
+		$indeterminate = array();
+
+		if ($schema['has_amount']) {
+			$amount = 'E.'.$this->guard->qcol('amount');
+			$ready[] = "$amount > 0";
+			$notReady[] = "$amount <= 0";
+		} else {
+			$indeterminate[] = 'amount column unavailable';
+		}
+		if ($schema['has_userid']) {
+			$userid = 'E.'.$this->guard->qcol('userid');
+			$ready[] = "$userid IS NOT NULL";
+			$ready[] = "$userid > 0";
+			$indeterminate[] = 'missing user/account linkage requires review';
+		} else {
+			$indeterminate[] = 'userid column unavailable';
+		}
+		if ($schema['can_join_accounts']) {
+			$joins .= ' LEFT JOIN accounts A ON A.'.$this->guard->qcol('id').'=E.'.$this->guard->qcol('userid');
+			$ready[] = 'A.'.$this->guard->qcol('id').' IS NOT NULL';
+		} else {
+			$indeterminate[] = 'account record join unavailable';
+		}
+		if ($schema['has_coinid']) {
+			$ready[] = 'E.'.$this->guard->qcol('coinid').'=:coin_id';
+		} elseif ($schema['has_algo']) {
+			$ready[] = 'E.'.$this->guard->qcol('algo').'=:algo';
+		} else {
+			$indeterminate[] = 'coin or algo scope column unavailable';
+		}
+		if ($schema['has_blockid']) {
+			$blockid = 'E.'.$this->guard->qcol('blockid');
+			$ready[] = "$blockid IS NOT NULL";
+			$ready[] = "$blockid > 0";
+		} else {
+			$indeterminate[] = 'block linkage column unavailable';
+		}
+		if ($schema['can_join_blocks']) {
+			$joins .= ' LEFT JOIN blocks B ON B.'.$this->guard->qcol('id').'=E.'.$this->guard->qcol('blockid');
+			$ready[] = 'B.'.$this->guard->qcol('id').' IS NOT NULL';
+			if ($schema['blocks_has_category']) {
+				$category = 'B.'.$this->guard->qcol('category');
+				$ready[] = "$category='generate'";
+				$notReady[] = "$category IN ('new', 'immature', 'orphan')";
+			} else {
+				$indeterminate[] = 'block category unavailable';
+			}
+		} else {
+			$indeterminate[] = 'block record join unavailable';
+		}
+
+		$classExpr = "CASE WHEN (".implode(' OR ', $notReady).") THEN 'not_ready' ".
+			"WHEN (".implode(' AND ', $ready).") THEN 'ready_to_credit' ".
+			"ELSE 'indeterminate' END";
+		$amountExpr = $schema['has_amount'] ? 'SUM(amount)' : 'NULL';
+		$sql = "SELECT readiness_class, COUNT(*) AS row_count, $amountExpr AS amount_sum FROM (".
+			"SELECT $classExpr AS readiness_class, ".($schema['has_amount'] ? 'E.'.$this->guard->qcol('amount').' AS amount' : 'NULL AS amount').
+			" FROM earnings E".$joins.
+			' WHERE '.$where['sql'].' AND E.'.$this->guard->qcol('status').' IN (0, 1)'.
+			') R GROUP BY readiness_class ORDER BY readiness_class';
+		$rows = $this->guard->selectAll($sql, $where['params']);
+
+		return $this->earningsCreditReadinessClassificationTotals($rows, $indeterminate);
+	}
+
+	private function earningsCreditReadinessClassificationTotals($rows, $indeterminateReasons)
+	{
+		$result = array(
+			'ready_to_credit_count' => 0,
+			'ready_to_credit_amount' => 0.0,
+			'not_ready_count' => 0,
+			'not_ready_amount' => 0.0,
+			'indeterminate_count' => 0,
+			'indeterminate_amount' => 0.0,
+			'rows' => $rows,
+			'indeterminate_reason_hints' => array_values(array_unique($indeterminateReasons)),
+			'note' => 'Classification is conservative and read-only. Status 0 rows are not treated as credit-ready.',
+		);
+		foreach ($rows as $row) {
+			$class = arraySafeVal($row, 'readiness_class');
+			$count = intval(arraySafeVal($row, 'row_count', 0));
+			$amount = floatval(arraySafeVal($row, 'amount_sum', 0));
+			if ($class == 'ready_to_credit') {
+				$result['ready_to_credit_count'] = $count;
+				$result['ready_to_credit_amount'] = $amount;
+			} elseif ($class == 'not_ready') {
+				$result['not_ready_count'] = $count;
+				$result['not_ready_amount'] = $amount;
+			} elseif ($class == 'indeterminate') {
+				$result['indeterminate_count'] = $count;
+				$result['indeterminate_amount'] = $amount;
+			}
+		}
+		return $result;
+	}
+
+	private function earningsCreditReadinessBlockers($classification, $signals, $blockLinkage, $duplicateRisk)
+	{
+		$indeterminateHints = arraySafeVal($classification, 'indeterminate_reason_hints', array());
+		$blockers = array(
+			'status_not_credit_ready' => array(
+				'present' => intval(arraySafeVal($classification, 'not_ready_count', 0)) > 0,
+				'message' => 'Status 0 rows and rows with unsafe block categories are not credit-ready in this preview.',
+			),
+			'immature_or_new_block_backlog' => array(
+				'present' => $this->earningsCreditReadinessCategoryCount($blockLinkage, array('new', 'immature')) > 0,
+				'message' => 'New or immature block-linked rows require block accounting inspection before crediting.',
+			),
+			'orphan_risk' => array(
+				'present' => $this->earningsCreditReadinessCategoryCount($blockLinkage, array('orphan')) > 0,
+				'message' => 'Orphan-linked earnings must not be credited without separate repair review.',
+			),
+			'missing_linkage' => array(
+				'present' => $this->earningsCreditReadinessMissingLinkagePresent($signals, $blockLinkage),
+				'message' => 'Missing account, block id, or block record linkage prevents automatic readiness.',
+			),
+			'duplicate_previous_credit_uncertainty' => array(
+				'present' => $this->earningsCreditReadinessDuplicateRiskPresent($duplicateRisk),
+				'message' => 'Duplicate groups or prior cleared matches require operator review before crediting.',
+			),
+			'schema_limitation' => array(
+				'present' => !empty($indeterminateHints) || $this->summaryHasError($signals) || $this->summaryHasError($blockLinkage) || $this->summaryHasError($duplicateRisk),
+				'message' => 'Schema limitations make at least one readiness signal indeterminate.',
+			),
+		);
+		return $blockers;
+	}
+
+	private function earningsCreditReadinessStages()
+	{
+		return array(
+			array('stage' => 'resolve_block_accounting_categories', 'status' => 'blocked', 'message' => 'Resolve generate/new/immature/orphan source categories in a separate approved review.'),
+			array('stage' => 'verify_non_orphan_mature_earnings', 'status' => 'blocked', 'message' => 'Verify linked earnings are non-orphan and mature before any credit package.'),
+			array('stage' => 'prepare_account_credit_approval_package', 'status' => 'blocked_not_run', 'message' => 'Approval package preparation is future review work only.'),
+			array('stage' => 'account_credit_mutation', 'status' => 'blocked', 'message' => 'No account-credit mutation path is added by this preview.'),
+			array('stage' => 'post_credit_verification', 'status' => 'blocked_not_run', 'message' => 'Verification can only happen after a separately approved credit stage.'),
+			array('stage' => 'payout_candidate_regeneration', 'status' => 'blocked_not_run', 'message' => 'Payout candidates should be regenerated only after credited balances exist.'),
+		);
+	}
+
+	private function earningsCreditReadinessBlockedMetadata()
+	{
+		return array(
+			'status' => 'blocked',
+			'blocked_actions' => array(
+				'backend_accounting_processing',
+				'account_credit_mutation',
+				'earnings_mutation',
+				'block_mutation',
+				'coin_mutation',
+				'payout_row_creation',
+				'account_debit',
+				'wallet_rpc_read',
+				'wallet_send',
+				'share_deletion',
+				'payout_retry_delete',
+				'service_or_cron_changes',
+			),
+			'wallet_rpc_used' => false,
+			'message' => 'Read-only earnings credit-readiness preview only. It reports blockers and does not change earnings, accounts, blocks, payouts, wallets, shares, services, or cron state.',
+		);
+	}
+
+	private function earningsCreditReadinessAuditSummary($report)
+	{
+		$scope = $this->guard->getScope();
+		$coin = arraySafeVal($scope, 'coin', array());
+		$summary = arraySafeVal($report, 'summary', array());
+		$classification = arraySafeVal($summary, 'credit_readiness_classification', array());
+		$executionBlocked = arraySafeVal($summary, 'execution_blocked', array());
+		return array(
+			'command' => arraySafeVal($report, 'command'),
+			'coin_id' => arraySafeVal($scope, 'coin_id'),
+			'coin_symbol' => arraySafeVal($coin, 'symbol'),
+			'coin_algo' => arraySafeVal($coin, 'algo'),
+			'ready_to_credit_count' => intval(arraySafeVal($classification, 'ready_to_credit_count', 0)),
+			'ready_to_credit_amount' => floatval(arraySafeVal($classification, 'ready_to_credit_amount', 0)),
+			'not_ready_count' => intval(arraySafeVal($classification, 'not_ready_count', 0)),
+			'not_ready_amount' => floatval(arraySafeVal($classification, 'not_ready_amount', 0)),
+			'indeterminate_count' => intval(arraySafeVal($classification, 'indeterminate_count', 0)),
+			'indeterminate_amount' => floatval(arraySafeVal($classification, 'indeterminate_amount', 0)),
+			'blocked_actions' => arraySafeVal($executionBlocked, 'blocked_actions', array()),
+			'checksum_note' => 'See top-level report_checksum; generated_at is excluded from checksum input.',
+			'checksum_purpose' => 'preview audit comparison only; not payout authorization',
+		);
+	}
+
+	private function earningsCreditReadinessWhere($alias)
+	{
+		$scope = $this->guard->getScope();
+		$prefix = $alias ? $alias.'.' : '';
+		if ($this->guard->columnExists('earnings', 'coinid')) {
+			return array(
+				'sql' => $prefix.$this->guard->qcol('coinid').'=:coin_id',
+				'params' => array(':coin_id' => arraySafeVal($scope, 'coin_id')),
+				'filter' => 'coin_id',
+			);
+		}
+		if ($this->guard->columnExists('earnings', 'algo') && isset($scope['coin']['algo'])) {
+			return array(
+				'sql' => $prefix.$this->guard->qcol('algo').'=:algo',
+				'params' => array(':algo' => $scope['coin']['algo']),
+				'filter' => 'algo',
+			);
+		}
+
+		$this->guard->addWarning('Cannot coin-scope earnings readiness because neither earnings.coinid nor earnings.algo is available.');
+		return array('sql' => '1=0', 'params' => array(), 'filter' => 'unavailable');
+	}
+
+	private function earningsCreditReadinessSchema()
+	{
+		return array(
+			'has_status' => $this->guard->columnExists('earnings', 'status'),
+			'has_amount' => $this->guard->columnExists('earnings', 'amount'),
+			'has_create_time' => $this->guard->columnExists('earnings', 'create_time'),
+			'has_mature_time' => $this->guard->columnExists('earnings', 'mature_time'),
+			'has_userid' => $this->guard->columnExists('earnings', 'userid'),
+			'has_coinid' => $this->guard->columnExists('earnings', 'coinid'),
+			'has_algo' => $this->guard->columnExists('earnings', 'algo'),
+			'has_blockid' => $this->guard->columnExists('earnings', 'blockid'),
+			'has_accounts_table' => $this->guard->tableExists('accounts'),
+			'accounts_has_id' => $this->guard->columnExists('accounts', 'id'),
+			'has_blocks_table' => $this->guard->tableExists('blocks'),
+			'blocks_has_id' => $this->guard->columnExists('blocks', 'id'),
+			'blocks_has_category' => $this->guard->columnExists('blocks', 'category'),
+			'blocks_has_height' => $this->guard->columnExists('blocks', 'height'),
+			'blocks_has_time' => $this->guard->columnExists('blocks', 'time'),
+			'can_join_accounts' => $this->guard->tableExists('accounts') && $this->guard->columnExists('accounts', 'id') && $this->guard->columnExists('earnings', 'userid'),
+			'can_join_blocks' => $this->guard->tableExists('blocks') && $this->guard->columnExists('blocks', 'id') && $this->guard->columnExists('earnings', 'blockid'),
+		);
+	}
+
+	private function earningsCreditReadinessCategoryCount($blockLinkage, $categories)
+	{
+		$summary = arraySafeVal($blockLinkage, 'summary', array());
+		$total = 0;
+		foreach ($categories as $category) {
+			$total += intval(arraySafeVal($summary, 'category_'.$category.'_count', 0));
+		}
+		return $total;
+	}
+
+	private function earningsCreditReadinessMissingLinkagePresent($signals, $blockLinkage)
+	{
+		$rows = arraySafeVal($signals, 'rows', array());
+		foreach ($rows as $row) {
+			if (intval(arraySafeVal($row, 'user_id_missing_count', 0)) > 0 ||
+				intval(arraySafeVal($row, 'missing_account_count', 0)) > 0 ||
+				intval(arraySafeVal($row, 'block_id_missing_count', 0)) > 0 ||
+				intval(arraySafeVal($row, 'missing_block_count', 0)) > 0) {
+				return true;
+			}
+		}
+		$summary = arraySafeVal($blockLinkage, 'summary', array());
+		return intval(arraySafeVal($summary, 'earnings_without_matching_block', 0)) > 0;
+	}
+
+	private function earningsCreditReadinessDuplicateRiskPresent($duplicateRisk)
+	{
+		$duplicates = arraySafeVal($duplicateRisk, 'duplicate_groups', array());
+		$previousCredit = arraySafeVal($duplicateRisk, 'previous_credit_uncertainty', array());
+		return intval(arraySafeVal($duplicates, 'duplicate_group_count', 0)) > 0 ||
+			intval(arraySafeVal($previousCredit, 'status_0_1_rows_with_cleared_match', 0)) > 0;
+	}
+
 	private function payoutPreviewAuditSummary($report)
 	{
 		$scope = $this->guard->getScope();
@@ -1186,7 +1732,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 
 	private function isPayoutAuditCommand($command)
 	{
-		return in_array($command, array('payout-candidates-preview', 'payout-row-preflight-preview', 'payout-row-dryrun-plan', 'payable-source-reconciliation-preview', 'account-credit-transition-preview'), true);
+		return in_array($command, array('payout-candidates-preview', 'payout-row-preflight-preview', 'payout-row-dryrun-plan', 'payable-source-reconciliation-preview', 'account-credit-transition-preview', 'earnings-credit-readiness-preview'), true);
 	}
 
 	private function ensurePayoutPreviewAuditFields($report)
