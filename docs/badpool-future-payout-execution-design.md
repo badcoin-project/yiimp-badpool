@@ -78,6 +78,8 @@ If payable source data exists in earnings or block backlog before account balanc
 
 When status 0 earnings are present, operators must run `earnings-credit-readiness-preview` before any future account-credit approval package. Status 0 rows are source backlog until block category, block linkage, account/user linkage, amount validity, and duplicate-risk checks are reviewed. The preview does not change earnings status, credit accounts, or authorize a future credit stage.
 
+When immature or new block categories remain in the payable source path, operators must run `block-category-maturity-preview` before any future category/status transition or account-credit approval package. Backend updaters may be frozen, so database categories can be stale until maturity sources, current height sources, and transition logic are separately verified. The preview does not mature blocks, change block categories, change earnings status, credit accounts, or authorize a future transition stage.
+
 ### 2. Payout Row Creation
 
 Current scaffolding may report payout-row preflight readiness in read-only mode. That preflight report can list the selected coin, required preview checksum input, candidate count, projected payout total, payout threshold, backup status, mutation-log status, stage status, and blocked actions.

@@ -145,6 +145,7 @@ php yaamp/yiic.php badpoolguard payout-row-dryrun-plan --coin-id=<coin-id>
 php yaamp/yiic.php badpoolguard payable-source-reconciliation-preview --coin-id=<coin-id>
 php yaamp/yiic.php badpoolguard account-credit-transition-preview --coin-id=<coin-id>
 php yaamp/yiic.php badpoolguard earnings-credit-readiness-preview --coin-id=<coin-id>
+php yaamp/yiic.php badpoolguard block-category-maturity-preview --coin-id=<coin-id>
 php yaamp/yiic.php badpoolguard safety-scan --coin-id=<coin-id>
 ```
 
@@ -308,6 +309,21 @@ Status 0 earnings are payable source backlog, not automatically credit-ready. Cr
 The readiness preview reports coin identity, earnings grouped by status, status 0 and status 1 readiness signals, account/user and block linkage, block categories, amount polarity, duplicate-risk hints, readiness classification totals, blockers, proposed future stages, audit metadata, and a report checksum. It is SELECT-only and does not change earnings status, credit accounts, change blocks or coins, create payout rows, call wallet RPC, delete shares, or restore backend services.
 
 Any future account-credit mutation remains a separate approved PR, separate validation step, and separate operator action.
+
+### Patch group N implementation status
+
+Patch group N adds a read-only frozen block category and maturity-state inspection preview to `web/yaamp/commands/BadpoolGuardCommand.php`:
+
+```text
+cd /srv/badpool/yiimp-badpool/web
+php yaamp/yiic.php badpoolguard block-category-maturity-preview --coin-id=<coin-id> --format=json
+```
+
+Immature or new block categories may be stale while backend block/accounting updaters remain frozen. This preview reports service/update freeze assumptions, coin maturity reference fields, blocks grouped by category, status 0 and status 1 earnings linked to blocks, height/time maturity signals where derivable, stale/frozen indicators, conservative classification totals, blockers, proposed future stages, audit metadata, and a report checksum.
+
+The preview is SELECT-only. It does not run backend accounting, mature blocks, change block categories, change earnings status, credit accounts, change coins, create payout rows, call wallet RPC, delete shares, or restore backend services.
+
+Any future block category/status transition remains a separate approved PR, separate validation step, and separate operator action. Account-credit and payout-row work remain blocked until category/maturity questions are separately resolved and rechecked.
 
 ### Read-only preview commands
 
@@ -816,6 +832,15 @@ These must be answered by L3 using read-only live-server checks, not by reposito
 - Report blockers such as immature/new block backlog, orphan risk, status not credit-ready, missing linkage, duplicate or previous-credit uncertainty, and schema limitations.
 - Do not add account credit mutation, earnings/block/coin mutation, payout-row creation, account debit, wallet RPC calls, share deletion, retry/delete behavior, service changes, or backend loop restoration.
 - Future account-credit mutation remains a separate approved PR and operator action.
+
+### Patch group N: frozen block category and maturity-state preview
+
+- Add a read-only command that inspects whether block categories and maturity state appear frozen or stale while backend updaters remain frozen.
+- Require explicit coin scope and refuse all-coin scope.
+- Report service/update freeze assumptions, coin height and maturity reference fields, blocks grouped by category, status 0/status 1 earnings linked to blocks, height/time maturity signals where derivable, stale category indicators, conservative classification totals, blockers, future stages, audit metadata, and checksum metadata.
+- State that immature/new categories can be stale DB state, but that the preview does not prove chain state or service state.
+- Do not run backend accounting, mature blocks, change block categories, change earnings status, credit accounts, mutate coins, create payout rows, call wallet RPC, delete shares, retry/delete payouts, change services, or restore backend loops.
+- Future block category/status transition remains a separate approved PR and operator action.
 
 ## Non-goals for this plan
 

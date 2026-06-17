@@ -1,6 +1,6 @@
 # BadPool Read-Only Preview Commands
 
-Patch group A adds a guarded Yii console command for DB-only preview reports. Patch group B adds shared guard context/report plumbing used by the same commands. Patch group C adds a source-level wallet-send hard guard. Patch group D adds a source-level share-delete hard guard. Patch group E improves read-only payout candidate preview reporting. Patch group F adds deterministic preview checksum metadata. Patch group G defines the future payout execution design. Patch group H adds read-only payout-row preflight scaffolding. Patch group I adds a read-only payout-row dry-run plan preview. Patch group J defines the payout-row approval package checklist. Patch group K adds a read-only payable source reconciliation preview. Patch group L adds a read-only account-credit transition preview for earnings/block backlog review. Patch group M adds a read-only earnings credit-readiness inspection preview. These guards, previews, and docs do not add execute/apply behavior or any activation path.
+Patch group A adds a guarded Yii console command for DB-only preview reports. Patch group B adds shared guard context/report plumbing used by the same commands. Patch group C adds a source-level wallet-send hard guard. Patch group D adds a source-level share-delete hard guard. Patch group E improves read-only payout candidate preview reporting. Patch group F adds deterministic preview checksum metadata. Patch group G defines the future payout execution design. Patch group H adds read-only payout-row preflight scaffolding. Patch group I adds a read-only payout-row dry-run plan preview. Patch group J defines the payout-row approval package checklist. Patch group K adds a read-only payable source reconciliation preview. Patch group L adds a read-only account-credit transition preview for earnings/block backlog review. Patch group M adds a read-only earnings credit-readiness inspection preview. Patch group N adds a read-only block category maturity preview. These guards, previews, and docs do not add execute/apply behavior or any activation path.
 
 ```text
 cd web
@@ -14,6 +14,7 @@ php yaamp/yiic.php badpoolguard payout-row-dryrun-plan --coin-id=<coin-id>
 php yaamp/yiic.php badpoolguard payable-source-reconciliation-preview --coin-id=<coin-id>
 php yaamp/yiic.php badpoolguard account-credit-transition-preview --coin-id=<coin-id>
 php yaamp/yiic.php badpoolguard earnings-credit-readiness-preview --coin-id=<coin-id>
+php yaamp/yiic.php badpoolguard block-category-maturity-preview --coin-id=<coin-id>
 php yaamp/yiic.php badpoolguard safety-scan --coin-id=<coin-id>
 php yaamp/yiic.php badpoolguard guard-context --coin-id=<coin-id>
 ```
@@ -45,6 +46,8 @@ Payout candidates require already credited positive account balances. A zero can
 
 `earnings-credit-readiness-preview` explains why status 0 earnings are payable source backlog, not automatically credit-ready. It reports earnings grouped by status, status 0 and status 1 readiness signals, account/user and block linkage, block categories, amount polarity, duplicate-risk hints, readiness classification totals, blockers, proposed future stages, audit metadata, and checksum metadata. It is read-only; it does not change earnings status, credit accounts, modify blocks, create payout rows, authorize execution, or perform any database mutation.
 
+`block-category-maturity-preview` inspects whether immature or new block categories may be stale while backend updaters are frozen. It reports service/update freeze assumptions, coin maturity reference fields, blocks grouped by category, status 0 and status 1 earnings linked to blocks, height/time maturity signals where derivable, stale/frozen indicators, conservative classification totals, blockers, proposed future stages, audit metadata, and checksum metadata. It is read-only; it does not mature blocks, change block categories, change earnings status, credit accounts, create payout rows, authorize execution, or perform any database mutation.
+
 Each rendered preview report includes a top-level `report_checksum` object. The checksum excludes volatile `generated_at` metadata and is intended only for comparing repeated preview reports during review. It is not payout authorization and does not enable execution.
 
 `BadpoolGuardCommand` finalizes reports immediately before output, and JSON output is emitted only after checksum and payout audit metadata are attached.
@@ -74,5 +77,7 @@ Future share deletion enablement must also be a separate approved change. Histor
 Future payout execution must be a separate approved change. The future design is documented in `docs/badpool-future-payout-execution-design.md`; it keeps payout candidate reports, payout-row creation, account debits, payout retry/delete, and wallet sends as separate stages with report checksum review and explicit production approval.
 
 Future payout-row creation requires a separate approved PR and separate operator action. The reconciliation, preflight, and dry-run plan previews added after the design spec are review scaffolding only.
+
+Future block category or maturity-state transition work requires a separate approved PR and separate operator action. Immature/new categories may be stale while backend updaters remain frozen, but the preview only reports database evidence and required checks; it does not approve category changes, earnings status changes, account-credit work, or payout-row creation.
 
 The payout-row approval package checklist is documented in `docs/badpool-payout-row-approval-package.md`. It requires the latest preview report paths and checksums, coin scope, expected counts/totals, guard confirmations, service-state confirmations, STOP conditions, rerun/idempotency rule, and explicit operator approval text before any future payout-row creation implementation is proposed. It does not authorize wallet sends.
