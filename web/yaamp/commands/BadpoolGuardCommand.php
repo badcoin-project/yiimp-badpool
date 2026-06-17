@@ -15,6 +15,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 		'payout-row-preflight-preview',
 		'payout-row-dryrun-plan',
 		'payable-source-reconciliation-preview',
+		'account-credit-transition-preview',
 		'safety-scan',
 		'guard-context',
 	);
@@ -65,6 +66,9 @@ class BadpoolGuardCommand extends CConsoleCommand
 			case 'payable-source-reconciliation-preview':
 				$report = $this->payableSourceReconciliationPreviewReport();
 				break;
+			case 'account-credit-transition-preview':
+				$report = $this->accountCreditTransitionPreviewReport();
+				break;
 			case 'safety-scan':
 				$report = $this->safetyScanReport();
 				break;
@@ -92,6 +96,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 			"       php yaamp/yiic.php badpoolguard payout-row-preflight-preview --coin-id=<id> [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard payout-row-dryrun-plan --coin-id=<id> [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard payable-source-reconciliation-preview --coin-id=<id> [--format=json|text]\n".
+			"       php yaamp/yiic.php badpoolguard account-credit-transition-preview --coin-id=<id> [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard safety-scan --coin-id=<id> [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard guard-context --coin-id=<id> [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard overview --all-coins-preview [--format=json|text]\n\n".
@@ -246,6 +251,39 @@ class BadpoolGuardCommand extends CConsoleCommand
 		$report['summary']['execution_blocked'] = $this->payableSourceBlockedMetadata();
 		$report['summary']['audit'] = $this->payableSourceAuditSummary($report);
 		$report['items']['candidate_preview'] = $candidates;
+
+		$report = $this->guard->finalizeReport($report);
+		$report = $this->ensurePayoutPreviewAuditFields($report);
+		$report['report_checksum'] = BadpoolGuardReport::checksum($report);
+		return $report;
+	}
+
+	private function accountCreditTransitionPreviewReport()
+	{
+		if ($this->guard->isAllCoinsPreview()) {
+			$this->guard->addError('account-credit-transition-preview requires --coin-id and refuses all-coin scope.');
+			return $this->guard->refusalReport();
+		}
+
+		$report = $this->guard->baseReport();
+		$scope = $this->guard->getScope();
+		$coin = arraySafeVal($scope, 'coin', array());
+		$accountState = $this->accountCreditTransitionAccountState();
+		$earningsState = $this->accountCreditTransitionEarningsState();
+		$blockState = $this->accountCreditTransitionBlockState();
+
+		$report['summary']['coin'] = array(
+			'coin_id' => arraySafeVal($scope, 'coin_id'),
+			'symbol' => arraySafeVal($coin, 'symbol'),
+			'algo' => arraySafeVal($coin, 'algo'),
+		);
+		$report['summary']['account_balance_state'] = $accountState;
+		$report['summary']['earnings_transition_state'] = $earningsState;
+		$report['summary']['block_accounting_backlog_state'] = $blockState;
+		$report['summary']['proposed_future_transition_stages'] = $this->accountCreditTransitionStages();
+		$report['summary']['payout_rows_blocked_reason'] = $this->accountCreditPayoutRowsBlockedReason($accountState);
+		$report['summary']['execution_blocked'] = $this->accountCreditTransitionBlockedMetadata();
+		$report['summary']['audit'] = $this->accountCreditTransitionAuditSummary($report);
 
 		$report = $this->guard->finalizeReport($report);
 		$report = $this->ensurePayoutPreviewAuditFields($report);
@@ -951,6 +989,159 @@ class BadpoolGuardCommand extends CConsoleCommand
 		);
 	}
 
+	private function accountCreditTransitionAccountState()
+	{
+		$summary = $this->payableAccountBalanceSummary(array());
+		unset($summary['payout_candidate_count']);
+		unset($summary['projected_payout_candidate_total']);
+		$summary['note'] = 'Payout rows require positive credited account balances. This command only reports the current state.';
+		return $summary;
+	}
+
+	private function accountCreditTransitionEarningsState()
+	{
+		$summary = $this->payableEarningsByStatusSummary();
+		$rows = is_array($summary) && isset($summary['rows']) ? $summary['rows'] : array();
+		$statusZeroRows = $this->sumRowsByValue($rows, 'status', '0', 'row_count');
+		$statusOneRows = $this->sumRowsByValue($rows, 'status', '1', 'row_count');
+		$statusZeroAmount = $this->sumRowsFloatByValues($rows, 'status', array('0'), 'amount_sum');
+		$statusOneAmount = $this->sumRowsFloatByValues($rows, 'status', array('1'), 'amount_sum');
+
+		return array(
+			'earnings_by_status' => $summary,
+			'uncredited_statuses_considered' => array(0, 1),
+			'uncredited_earnings_rows' => $statusZeroRows + $statusOneRows,
+			'uncredited_earnings_amount' => $statusZeroAmount + $statusOneAmount,
+			'credit_ready_rows' => $statusOneRows,
+			'credit_ready_amount' => $statusOneAmount,
+			'not_ready_rows' => $statusZeroRows,
+			'not_ready_amount' => $statusZeroAmount,
+			'account_credit_stage_status' => array(
+				'status' => 'blocked_not_run',
+				'credits_accounts' => false,
+				'message' => 'Account-credit mutation is not available in this preview.',
+			),
+			'status_note' => 'Existing account-credit preview projects from status=1 rows when distinguishable; status=0 rows remain source backlog for separate inspection.',
+		);
+	}
+
+	private function accountCreditTransitionBlockState()
+	{
+		$summary = $this->payableBlocksByCategorySummary();
+		$rows = is_array($summary) && isset($summary['rows']) ? $summary['rows'] : array();
+		$categories = array('generate', 'new', 'immature', 'orphan');
+		$counts = array();
+		$needsInspection = array();
+		foreach ($categories as $category) {
+			$count = $this->sumRowsByValue($rows, 'category', $category, 'block_count');
+			$counts[$category] = $count;
+			if ($count > 0) {
+				$needsInspection[] = $category;
+			}
+		}
+
+		return array(
+			'blocks_by_category' => $summary,
+			'category_counts' => $counts,
+			'categories_needing_accounting_inspection' => $needsInspection,
+			'inspection_stage_status' => array(
+				'status' => 'blocked_not_run',
+				'runs_backend_accounting' => false,
+				'message' => 'Backend block accounting remains frozen; this preview only reports backlog categories.',
+			),
+		);
+	}
+
+	private function accountCreditTransitionStages()
+	{
+		return array(
+			array(
+				'stage' => 'block_accounting_inspection',
+				'status' => 'blocked',
+				'message' => 'Requires separate approved review before any backend accounting processing.',
+			),
+			array(
+				'stage' => 'earnings_credit_readiness_verification',
+				'status' => 'blocked',
+				'message' => 'Requires separate approved review before account-credit mutation is considered.',
+			),
+			array(
+				'stage' => 'account_credit_mutation',
+				'status' => 'blocked',
+				'message' => 'No account-credit mutation path is added by this command.',
+			),
+			array(
+				'stage' => 'post_credit_account_balance_verification',
+				'status' => 'blocked_not_run',
+				'message' => 'Verification can only happen after a separately approved credit stage.',
+			),
+			array(
+				'stage' => 'payout_candidate_regeneration',
+				'status' => 'blocked_not_run',
+				'message' => 'Payout candidates should be regenerated only after credited balances exist.',
+			),
+		);
+	}
+
+	private function accountCreditPayoutRowsBlockedReason($accountState)
+	{
+		$positiveBalance = floatval(arraySafeVal($accountState, 'total_positive_account_balance', 0));
+		if ($positiveBalance > 0) {
+			return 'Payout-row creation remains blocked even though credited balances exist; candidate preview and approval package review are still required.';
+		}
+		return 'Payout rows remain blocked because payout candidates require positive credited account balances. Existing payable source data in earnings or blocks must be reviewed before any future credit stage.';
+	}
+
+	private function accountCreditTransitionBlockedMetadata()
+	{
+		return array(
+			'status' => 'blocked',
+			'blocked_actions' => array(
+				'backend_accounting_processing',
+				'account_credit_mutation',
+				'earnings_mutation',
+				'block_mutation',
+				'coin_mutation',
+				'payout_row_creation',
+				'account_debit',
+				'wallet_rpc_read',
+				'wallet_send',
+				'share_deletion',
+				'payout_retry_delete',
+				'service_or_cron_changes',
+			),
+			'wallet_rpc_used' => false,
+			'message' => 'Read-only account-credit transition preview only. No accounting, crediting, payout, wallet, share, service, or cron action is performed.',
+		);
+	}
+
+	private function accountCreditTransitionAuditSummary($report)
+	{
+		$scope = $this->guard->getScope();
+		$coin = arraySafeVal($scope, 'coin', array());
+		$summary = arraySafeVal($report, 'summary', array());
+		$accountState = arraySafeVal($summary, 'account_balance_state', array());
+		$earningsState = arraySafeVal($summary, 'earnings_transition_state', array());
+		$blockState = arraySafeVal($summary, 'block_accounting_backlog_state', array());
+		$executionBlocked = arraySafeVal($summary, 'execution_blocked', array());
+		return array(
+			'command' => arraySafeVal($report, 'command'),
+			'coin_id' => arraySafeVal($scope, 'coin_id'),
+			'coin_symbol' => arraySafeVal($coin, 'symbol'),
+			'coin_algo' => arraySafeVal($coin, 'algo'),
+			'account_count' => intval(arraySafeVal($accountState, 'account_count', 0)),
+			'positive_account_count' => intval(arraySafeVal($accountState, 'positive_account_count', 0)),
+			'total_positive_account_balance' => floatval(arraySafeVal($accountState, 'total_positive_account_balance', 0)),
+			'uncredited_earnings_rows' => intval(arraySafeVal($earningsState, 'uncredited_earnings_rows', 0)),
+			'uncredited_earnings_amount' => floatval(arraySafeVal($earningsState, 'uncredited_earnings_amount', 0)),
+			'credit_ready_rows' => intval(arraySafeVal($earningsState, 'credit_ready_rows', 0)),
+			'categories_needing_accounting_inspection' => arraySafeVal($blockState, 'categories_needing_accounting_inspection', array()),
+			'blocked_actions' => arraySafeVal($executionBlocked, 'blocked_actions', array()),
+			'checksum_note' => 'See top-level report_checksum; generated_at is excluded from checksum input.',
+			'checksum_purpose' => 'preview audit comparison only; not payout authorization',
+		);
+	}
+
 	private function payoutPreviewAuditSummary($report)
 	{
 		$scope = $this->guard->getScope();
@@ -995,7 +1186,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 
 	private function isPayoutAuditCommand($command)
 	{
-		return in_array($command, array('payout-candidates-preview', 'payout-row-preflight-preview', 'payout-row-dryrun-plan', 'payable-source-reconciliation-preview'), true);
+		return in_array($command, array('payout-candidates-preview', 'payout-row-preflight-preview', 'payout-row-dryrun-plan', 'payable-source-reconciliation-preview', 'account-credit-transition-preview'), true);
 	}
 
 	private function ensurePayoutPreviewAuditFields($report)
@@ -1138,6 +1329,29 @@ class BadpoolGuardCommand extends CConsoleCommand
 			$value = (string)arraySafeVal($row, $keyColumn, '');
 			if (isset($allowed[$value])) {
 				$total += intval(arraySafeVal($row, $sumColumn, 0));
+			}
+		}
+		return $total;
+	}
+
+	private function sumRowsFloatByValues($rows, $keyColumn, $keyValues, $sumColumn)
+	{
+		if (!is_array($rows)) {
+			return 0.0;
+		}
+		$allowed = array();
+		foreach ($keyValues as $value) {
+			$allowed[(string)$value] = true;
+		}
+
+		$total = 0.0;
+		foreach ($rows as $row) {
+			if (!is_array($row)) {
+				continue;
+			}
+			$value = (string)arraySafeVal($row, $keyColumn, '');
+			if (isset($allowed[$value])) {
+				$total += floatval(arraySafeVal($row, $sumColumn, 0));
 			}
 		}
 		return $total;

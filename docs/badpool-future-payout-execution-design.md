@@ -74,6 +74,8 @@ It must not create payout rows, debit accounts, create withdraw rows, call walle
 
 Payout candidates are derived from already credited account balances. A zero payout candidate count is not proof that unpaid miner source data is absent. Before payout-row creation is considered, operators should review payable source reconciliation across blocks, earnings, account credit readiness, account balances, and payout candidate readiness.
 
+If payable source data exists in earnings or block backlog before account balances are credited, operators must run `account-credit-transition-preview` and resolve the account-credit/backlog review path before payout-row approval work resumes. That preview is audit scaffolding only; it does not credit accounts, alter earnings or blocks, or authorize a future credit stage.
+
 ### 2. Payout Row Creation
 
 Current scaffolding may report payout-row preflight readiness in read-only mode. That preflight report can list the selected coin, required preview checksum input, candidate count, projected payout total, payout threshold, backup status, mutation-log status, stage status, and blocked actions.

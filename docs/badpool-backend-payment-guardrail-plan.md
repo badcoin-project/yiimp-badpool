@@ -143,6 +143,7 @@ php yaamp/yiic.php badpoolguard payout-candidates-preview --coin-id=<coin-id>
 php yaamp/yiic.php badpoolguard payout-row-preflight-preview --coin-id=<coin-id>
 php yaamp/yiic.php badpoolguard payout-row-dryrun-plan --coin-id=<coin-id>
 php yaamp/yiic.php badpoolguard payable-source-reconciliation-preview --coin-id=<coin-id>
+php yaamp/yiic.php badpoolguard account-credit-transition-preview --coin-id=<coin-id>
 php yaamp/yiic.php badpoolguard safety-scan --coin-id=<coin-id>
 ```
 
@@ -276,6 +277,21 @@ Payout candidates require credited account balances. A zero candidate count does
 The reconciliation preview reports coin identity, positive account balances, payout candidate readiness, earnings grouped by status, blocks grouped by category, a payable-source state assessment, next required stage text, blocked action metadata, audit metadata, and a report checksum. It is SELECT-only and does not create payout rows, debit accounts, call wallet RPC, mutate earnings/blocks/coins, delete shares, or restore backend services.
 
 Use this preview to decide whether the next safe review is account-credit/backlog processing or payout-row approval work. Payout-row creation still requires a separate approved PR and operator action.
+
+### Patch group L implementation status
+
+Patch group L adds a read-only account-credit transition preview to `web/yaamp/commands/BadpoolGuardCommand.php`:
+
+```text
+cd /srv/badpool/yiimp-badpool/web
+php yaamp/yiic.php badpoolguard account-credit-transition-preview --coin-id=<coin-id> --format=json
+```
+
+Payout rows require positive credited account balances. Payable source data may exist in earnings or block backlog before account balances are credited, so a zero payout candidate count is not enough to approve payout-row creation.
+
+The transition preview reports coin identity, current account balance state, earnings grouped by status, uncredited and credit-ready earnings totals when distinguishable, block categories needing accounting inspection, proposed future transition stages, blocked action metadata, audit metadata, and a report checksum. It is SELECT-only and does not credit accounts, change earnings or blocks, create payout rows, call wallet RPC, delete shares, or restore backend services.
+
+Any future account-credit mutation remains a separate approved PR, separate validation step, and separate operator action.
 
 ### Read-only preview commands
 
@@ -766,6 +782,15 @@ These must be answered by L3 using read-only live-server checks, not by reposito
 - Report whether payable data appears already credited to accounts, present in earnings but not credited, present in block data needing accounting, absent, or indeterminate.
 - Report next required stage text only, such as account-credit preview needed, backend block accounting still frozen, or no payout rows should be created until account balances exist.
 - Do not add payout-row creation, account debit, wallet RPC calls, earnings/block/coin mutation, share deletion, retry/delete behavior, service changes, or backend loop restoration.
+
+### Patch group L: account-credit transition preview
+
+- Add a read-only command that explains the account-credit/backlog transition needed before payout-row creation can be considered.
+- Require explicit coin scope and refuse all-coin scope.
+- Report account count, positive account count, total positive balance, earnings grouped by status, uncredited and credit-ready earnings totals, block categories needing accounting inspection, future transition stages, blocked action metadata, audit metadata, and checksum metadata.
+- State why payout rows remain blocked until positive credited account balances exist.
+- Do not add account credit mutation, earnings/block/coin mutation, payout-row creation, account debit, wallet RPC calls, share deletion, retry/delete behavior, service changes, or backend loop restoration.
+- Future account-credit mutation remains a separate approved PR and operator action.
 
 ## Non-goals for this plan
 

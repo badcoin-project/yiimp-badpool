@@ -1,6 +1,6 @@
 # BadPool Read-Only Preview Commands
 
-Patch group A adds a guarded Yii console command for DB-only preview reports. Patch group B adds shared guard context/report plumbing used by the same commands. Patch group C adds a source-level wallet-send hard guard. Patch group D adds a source-level share-delete hard guard. Patch group E improves read-only payout candidate preview reporting. Patch group F adds deterministic preview checksum metadata. Patch group G defines the future payout execution design. Patch group H adds read-only payout-row preflight scaffolding. Patch group I adds a read-only payout-row dry-run plan preview. Patch group J defines the payout-row approval package checklist. Patch group K adds a read-only payable source reconciliation preview. These guards, previews, and docs do not add execute/apply behavior or any activation path.
+Patch group A adds a guarded Yii console command for DB-only preview reports. Patch group B adds shared guard context/report plumbing used by the same commands. Patch group C adds a source-level wallet-send hard guard. Patch group D adds a source-level share-delete hard guard. Patch group E improves read-only payout candidate preview reporting. Patch group F adds deterministic preview checksum metadata. Patch group G defines the future payout execution design. Patch group H adds read-only payout-row preflight scaffolding. Patch group I adds a read-only payout-row dry-run plan preview. Patch group J defines the payout-row approval package checklist. Patch group K adds a read-only payable source reconciliation preview. Patch group L adds a read-only account-credit transition preview for earnings/block backlog review. These guards, previews, and docs do not add execute/apply behavior or any activation path.
 
 ```text
 cd web
@@ -12,6 +12,7 @@ php yaamp/yiic.php badpoolguard payout-candidates-preview --coin-id=<coin-id>
 php yaamp/yiic.php badpoolguard payout-row-preflight-preview --coin-id=<coin-id>
 php yaamp/yiic.php badpoolguard payout-row-dryrun-plan --coin-id=<coin-id>
 php yaamp/yiic.php badpoolguard payable-source-reconciliation-preview --coin-id=<coin-id>
+php yaamp/yiic.php badpoolguard account-credit-transition-preview --coin-id=<coin-id>
 php yaamp/yiic.php badpoolguard safety-scan --coin-id=<coin-id>
 php yaamp/yiic.php badpoolguard guard-context --coin-id=<coin-id>
 ```
@@ -38,6 +39,8 @@ Payout candidates require already credited positive account balances. A zero can
 `payout-row-dryrun-plan` reports a read-only plan for future payout-row creation: selected coin, coin symbol/algo, candidate count, projected payout total, threshold used, required source preview checksum input, proposed stage name, proposed mutation-log and backup/snapshot status, idempotency/rerun status, blocked row creation, blocked account debit, blocked wallet send, and a blocked post-execution verification checklist. It plans future row creation but does not create rows, debit accounts, call wallet RPC, write logs, write backups, authorize execution, or perform any database mutation.
 
 `payable-source-reconciliation-preview` bridges account balances, payout candidate readiness, earnings statuses, and block categories for one coin. It helps decide whether the next review should be account-credit/backlog processing or payout-row creation. It is read-only, does not mutate database state, and does not enable payout-row creation.
+
+`account-credit-transition-preview` explains the account-credit/backlog transition needed before payout-row creation can be considered. It reports current account balances, earnings grouped by status, uncredited and credit-ready earnings totals when distinguishable, block categories that need accounting inspection, proposed future transition stages, and why payout rows remain blocked until positive credited balances exist. It is read-only; it does not credit accounts, modify earnings or blocks, create payout rows, authorize execution, or perform any database mutation.
 
 Each rendered preview report includes a top-level `report_checksum` object. The checksum excludes volatile `generated_at` metadata and is intended only for comparing repeated preview reports during review. It is not payout authorization and does not enable execution.
 
