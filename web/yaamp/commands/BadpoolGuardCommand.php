@@ -19,6 +19,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 		'earnings-credit-readiness-preview',
 		'block-category-maturity-preview',
 		'earnings-block-reconciliation-preview',
+		'maturity-source-verification-preview',
 		'safety-scan',
 		'guard-context',
 	);
@@ -81,6 +82,9 @@ class BadpoolGuardCommand extends CConsoleCommand
 			case 'earnings-block-reconciliation-preview':
 				$report = $this->earningsBlockReconciliationPreviewReport();
 				break;
+			case 'maturity-source-verification-preview':
+				$report = $this->maturitySourceVerificationPreviewReport();
+				break;
 			case 'safety-scan':
 				$report = $this->safetyScanReport();
 				break;
@@ -112,6 +116,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 			"       php yaamp/yiic.php badpoolguard earnings-credit-readiness-preview --coin-id=<id> [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard block-category-maturity-preview --coin-id=<id> [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard earnings-block-reconciliation-preview --coin-id=<id> [--format=json|text]\n".
+			"       php yaamp/yiic.php badpoolguard maturity-source-verification-preview --coin-id=<id> [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard safety-scan --coin-id=<id> [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard guard-context --coin-id=<id> [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard overview --all-coins-preview [--format=json|text]\n\n".
@@ -412,6 +417,51 @@ class BadpoolGuardCommand extends CConsoleCommand
 		$report['summary']['proposed_future_stages'] = $this->earningsBlockReconciliationStages();
 		$report['summary']['execution_blocked'] = $this->earningsBlockReconciliationBlockedMetadata();
 		$report['summary']['audit'] = $this->earningsBlockReconciliationAuditSummary($report);
+
+		$report = $this->guard->finalizeReport($report);
+		$report = $this->ensurePayoutPreviewAuditFields($report);
+		$report['report_checksum'] = BadpoolGuardReport::checksum($report);
+		return $report;
+	}
+
+	private function maturitySourceVerificationPreviewReport()
+	{
+		if ($this->guard->isAllCoinsPreview()) {
+			$this->guard->addError('maturity-source-verification-preview requires --coin-id and refuses all-coin scope.');
+			return $this->guard->refusalReport();
+		}
+
+		$report = $this->guard->baseReport();
+		$scope = $this->guard->getScope();
+		$coin = arraySafeVal($scope, 'coin', array());
+		$coinFields = $this->maturitySourceCoinFields();
+		$blockEvidence = $this->maturitySourceBlocksEvidence();
+		$linkedRange = $this->maturitySourceLinkedImmatureRange();
+		$delta = $this->maturitySourceDelta($coinFields);
+		$confidence = $this->maturitySourceConfidence($coinFields, $blockEvidence);
+		$decision = $this->maturitySourceDecision($coinFields, $delta, $confidence);
+
+		$report['summary']['coin'] = array(
+			'coin_id' => arraySafeVal($scope, 'coin_id'),
+			'symbol' => arraySafeVal($coin, 'symbol'),
+			'algo' => arraySafeVal($coin, 'algo'),
+		);
+		$report['summary']['source_scope'] = array(
+			'db_only' => true,
+			'daemon_rpc_used' => false,
+			'wallet_rpc_used' => false,
+			'message' => 'This preview inspects repository database state only. It does not query wallets, daemons, systemd, services, or logs.',
+		);
+		$report['summary']['coin_maturity_current_height_fields'] = $coinFields;
+		$report['summary']['blocks_table_height_evidence'] = $blockEvidence;
+		$report['summary']['linked_immature_blocks_for_status_0_1_earnings'] = $linkedRange;
+		$report['summary']['maturity_delta'] = $delta;
+		$report['summary']['source_confidence'] = $confidence;
+		$report['summary']['conservative_decision'] = $decision;
+		$report['summary']['blockers'] = $this->maturitySourceBlockers($coinFields, $blockEvidence, $confidence);
+		$report['summary']['proposed_future_stages'] = $this->maturitySourceStages();
+		$report['summary']['execution_blocked'] = $this->maturitySourceBlockedMetadata();
+		$report['summary']['audit'] = $this->maturitySourceAuditSummary($report);
 
 		$report = $this->guard->finalizeReport($report);
 		$report = $this->ensurePayoutPreviewAuditFields($report);
@@ -2616,6 +2666,430 @@ class BadpoolGuardCommand extends CConsoleCommand
 		return 0;
 	}
 
+	private function maturitySourceCoinFields()
+	{
+		if (!$this->guard->tableExists('coins')) {
+			return $this->guard->missingTable('coins');
+		}
+
+		$scope = $this->guard->getScope();
+		$columns = $this->maturitySourceCoinFieldCandidates();
+		$available = array();
+		foreach ($columns as $column) {
+			if ($this->guard->columnExists('coins', $column)) {
+				$available[] = $column;
+			}
+		}
+
+		$row = $this->guard->selectRow(
+			'SELECT '.$this->guard->selectColumns('coins', $columns).' FROM coins WHERE '.$this->guard->qcol('id').'=:coin_id',
+			array(':coin_id' => arraySafeVal($scope, 'coin_id'))
+		);
+		if (!$row) {
+			return array('error' => 'selected coin is unavailable');
+		}
+
+		$fieldStatus = array();
+		foreach ($columns as $column) {
+			$present = in_array($column, $available, true);
+			$value = $present && array_key_exists($column, $row) ? $row[$column] : null;
+			$isNull = $present && $value === null;
+			$isNumeric = $present && $value !== null && is_numeric($value);
+			$fieldStatus[$column] = array(
+				'present' => $present,
+				'missing' => !$present,
+				'null' => $isNull,
+				'numeric' => $isNumeric,
+				'non_numeric' => $present && $value !== null && !$isNumeric,
+				'value' => $present ? $value : null,
+				'usable_as_current_height' => $isNumeric && in_array($column, $this->maturitySourceCurrentHeightColumns(), true),
+				'usable_as_maturity_threshold' => $isNumeric && in_array($column, $this->maturitySourceThresholdColumns(), true),
+			);
+		}
+
+		$currentHeight = $this->maturitySourceFirstUsableField($fieldStatus, 'usable_as_current_height');
+		$threshold = $this->maturitySourceFirstUsableField($fieldStatus, 'usable_as_maturity_threshold');
+		return array(
+			'fields' => $fieldStatus,
+			'selected_current_height' => $currentHeight,
+			'selected_maturity_threshold' => $threshold,
+			'available_maturity_like_columns' => $available,
+			'note' => 'Coin table fields are DB-only hints. They do not prove daemon chain height.',
+		);
+	}
+
+	private function maturitySourceBlocksEvidence()
+	{
+		if (!$this->guard->tableExists('blocks')) {
+			return $this->guard->missingTable('blocks');
+		}
+		$schema = $this->maturitySourceBlocksSchema();
+		if (!$schema['has_category']) {
+			return array('error' => 'blocks.category column is missing');
+		}
+
+		$where = $this->blockCategoryMaturityBlocksWhere('B');
+		$parts = array(
+			'B.'.$this->guard->qcol('category').' AS category',
+			'COUNT(*) AS block_count',
+		);
+		if ($schema['has_height']) {
+			$parts[] = 'MAX(B.'.$this->guard->qcol('height').') AS max_block_height';
+		}
+		if ($schema['has_time']) {
+			$parts[] = 'MAX(B.'.$this->guard->qcol('time').') AS max_block_time';
+		}
+		$byCategorySql = 'SELECT '.implode(', ', $parts).' FROM blocks B WHERE '.$where['sql'].
+			' GROUP BY B.'.$this->guard->qcol('category').' ORDER BY B.'.$this->guard->qcol('category');
+
+		return array(
+			'filter' => $where['filter'],
+			'by_category' => $this->guard->selectAll($byCategorySql, $where['params']),
+			'latest_block_row_by_time' => $this->maturitySourceLatestBlockRow('time', $where, $schema),
+			'latest_block_row_by_height' => $this->maturitySourceLatestBlockRow('height', $where, $schema),
+			'note' => 'Blocks table evidence is DB-only and may be stale while backend updaters remain frozen.',
+		);
+	}
+
+	private function maturitySourceLinkedImmatureRange()
+	{
+		if (!$this->guard->tableExists('earnings')) {
+			return $this->guard->missingTable('earnings');
+		}
+		if (!$this->guard->tableExists('blocks')) {
+			return $this->guard->missingTable('blocks');
+		}
+		$schema = $this->maturitySourceEarningsBlocksSchema();
+		if (!$schema['can_join'] || !$schema['blocks_has_category']) {
+			return array('status' => 'indeterminate', 'error' => 'earnings/block category linkage is unavailable', 'schema' => $schema);
+		}
+		if (!$schema['earnings_has_status']) {
+			return array('error' => 'earnings.status column is missing');
+		}
+
+		$where = $this->earningsCreditReadinessWhere('E');
+		$params = $where['params'];
+		$amount = $schema['earnings_has_amount'] ? 'SUM(E.'.$this->guard->qcol('amount').')' : 'NULL';
+		$parts = array(
+			'COUNT(DISTINCT B.'.$this->guard->qcol('id').') AS linked_block_count',
+			'COUNT(*) AS linked_earnings_row_count',
+			"$amount AS amount_sum",
+		);
+		if ($schema['blocks_has_height']) {
+			$height = 'B.'.$this->guard->qcol('height');
+			$parts[] = "MIN($height) AS min_linked_block_height";
+			$parts[] = "MAX($height) AS max_linked_block_height";
+		}
+		if ($schema['blocks_has_time']) {
+			$time = 'B.'.$this->guard->qcol('time');
+			$parts[] = "MIN($time) AS min_linked_block_time";
+			$parts[] = "MAX($time) AS max_linked_block_time";
+		}
+
+		$sql = 'SELECT '.implode(', ', $parts).
+			' FROM earnings E INNER JOIN blocks B ON B.'.$this->guard->qcol('id').'=E.'.$this->guard->qcol('blockid').
+			' WHERE '.$where['sql'].' AND E.'.$this->guard->qcol('status').' IN (0, 1)'.
+			" AND B.".$this->guard->qcol('category')."='immature'";
+		return array(
+			'filter' => $where['filter'],
+			'summary' => $this->guard->selectRow($sql, $params),
+		);
+	}
+
+	private function maturitySourceDelta($coinFields)
+	{
+		$current = arraySafeVal($coinFields, 'selected_current_height', array());
+		$threshold = arraySafeVal($coinFields, 'selected_maturity_threshold', array());
+		if (!arraySafeVal($current, 'numeric', false) || !arraySafeVal($threshold, 'numeric', false)) {
+			return array(
+				'maturity_calculation_available' => false,
+				'reason' => 'current height or maturity threshold is missing, null, or non-numeric in coin DB fields',
+				'current_height' => arraySafeVal($current, 'value'),
+				'maturity_threshold' => arraySafeVal($threshold, 'value'),
+			);
+		}
+		if (!$this->guard->tableExists('earnings') || !$this->guard->tableExists('blocks')) {
+			return array('maturity_calculation_available' => false, 'reason' => 'earnings or blocks table is unavailable');
+		}
+		$schema = $this->maturitySourceEarningsBlocksSchema();
+		if (!$schema['can_join'] || !$schema['blocks_has_category'] || !$schema['blocks_has_height'] || !$schema['earnings_has_status']) {
+			return array('maturity_calculation_available' => false, 'reason' => 'linked block height/category/status fields are unavailable', 'schema' => $schema);
+		}
+
+		$where = $this->earningsCreditReadinessWhere('E');
+		$params = $where['params'];
+		$params[':current_height'] = floatval(arraySafeVal($current, 'value'));
+		$params[':mature_blocks'] = floatval(arraySafeVal($threshold, 'value'));
+		$sql = 'SELECT '.
+			'COUNT(*) AS linked_immature_block_count, '.
+			'MIN(:current_height - D.block_height) AS min_height_delta, '.
+			'MAX(:current_height - D.block_height) AS max_height_delta, '.
+			'SUM(CASE WHEN (:current_height - D.block_height) >= :mature_blocks THEN 1 ELSE 0 END) AS mature_by_height_delta_count, '.
+			'SUM(CASE WHEN (:current_height - D.block_height) < :mature_blocks THEN 1 ELSE 0 END) AS not_mature_by_height_delta_count '.
+			'FROM ('.
+				'SELECT DISTINCT B.'.$this->guard->qcol('id').' AS block_id, B.'.$this->guard->qcol('height').' AS block_height '.
+				'FROM earnings E INNER JOIN blocks B ON B.'.$this->guard->qcol('id').'=E.'.$this->guard->qcol('blockid').' '.
+				'WHERE '.$where['sql'].' AND E.'.$this->guard->qcol('status').' IN (0, 1) '.
+				"AND B.".$this->guard->qcol('category')."='immature'".
+			') D';
+		$row = $this->guard->selectRow($sql, $params);
+
+		return array(
+			'maturity_calculation_available' => true,
+			'current_height' => floatval(arraySafeVal($current, 'value')),
+			'current_height_source' => arraySafeVal($current, 'column'),
+			'maturity_threshold' => floatval(arraySafeVal($threshold, 'value')),
+			'maturity_threshold_source' => arraySafeVal($threshold, 'column'),
+			'summary' => $row,
+			'calculation' => 'current_height_minus_block_height_compared_to_maturity_threshold',
+			'note' => 'This is DB-only arithmetic over linked immature blocks; it is not daemon height verification.',
+		);
+	}
+
+	private function maturitySourceConfidence($coinFields, $blockEvidence)
+	{
+		$current = arraySafeVal($coinFields, 'selected_current_height', array());
+		$threshold = arraySafeVal($coinFields, 'selected_maturity_threshold', array());
+		$maxBlocksHeight = $this->maturitySourceMaxBlocksHeight($blockEvidence);
+		$currentNumeric = arraySafeVal($current, 'numeric', false);
+		$thresholdNumeric = arraySafeVal($threshold, 'numeric', false);
+		$currentValue = arraySafeVal($current, 'value');
+		$heightStatus = 'missing_or_non_numeric';
+		if ($currentNumeric) {
+			$heightStatus = $maxBlocksHeight !== null && floatval($currentValue) < $maxBlocksHeight ? 'possibly_stale' : 'db_numeric';
+		}
+
+		return array(
+			'db_coin_height_confidence' => array(
+				'status' => $heightStatus,
+				'source' => arraySafeVal($current, 'column'),
+				'value' => $currentValue,
+				'max_blocks_table_height' => $maxBlocksHeight,
+				'message' => 'DB coin height is a preview input only and may be stale while backend updaters remain frozen.',
+			),
+			'db_mature_blocks_confidence' => array(
+				'status' => $thresholdNumeric ? 'db_numeric' : 'missing_or_non_numeric',
+				'source' => arraySafeVal($threshold, 'column'),
+				'value' => arraySafeVal($threshold, 'value'),
+			),
+			'blocks_table_height_confidence' => array(
+				'status' => $maxBlocksHeight === null ? 'missing_or_empty' : 'db_numeric',
+				'max_height' => $maxBlocksHeight,
+				'message' => 'Blocks table height is DB evidence only and is not chain-tip proof.',
+			),
+			'rpc_height_needed_for_final_decision' => true,
+		);
+	}
+
+	private function maturitySourceDecision($coinFields, $delta, $confidence)
+	{
+		$calculationAvailable = arraySafeVal($delta, 'maturity_calculation_available', false);
+		$heightStatus = arraySafeVal(arraySafeVal($confidence, 'db_coin_height_confidence', array()), 'status');
+		$thresholdStatus = arraySafeVal(arraySafeVal($confidence, 'db_mature_blocks_confidence', array()), 'status');
+		return array(
+			'can_determine_maturity_from_db_only' => $calculationAvailable,
+			'can_prepare_transition_package_from_db_only' => false,
+			'needs_rpc_height_or_backend_logic_review' => true,
+			'decision_basis' => array(
+				'maturity_calculation_available' => $calculationAvailable,
+				'db_coin_height_confidence' => $heightStatus,
+				'db_mature_blocks_confidence' => $thresholdStatus,
+				'daemon_rpc_used_by_preview' => false,
+			),
+			'message' => 'DB-only maturity math can inform review, but final transition work still needs separate chain-height and backend logic review.',
+		);
+	}
+
+	private function maturitySourceBlockers($coinFields, $blockEvidence, $confidence)
+	{
+		$current = arraySafeVal($coinFields, 'selected_current_height', array());
+		$threshold = arraySafeVal($coinFields, 'selected_maturity_threshold', array());
+		$heightStatus = arraySafeVal(arraySafeVal($confidence, 'db_coin_height_confidence', array()), 'status');
+		return array(
+			'mature_blocks_null_or_non_numeric' => array(
+				'present' => !arraySafeVal($threshold, 'numeric', false),
+				'message' => 'A numeric maturity threshold is required before height-delta review can be trusted.',
+			),
+			'coin_current_height_null_or_non_numeric' => array(
+				'present' => !arraySafeVal($current, 'numeric', false),
+				'message' => 'A numeric DB current-height candidate is required for DB-only maturity math.',
+			),
+			'block_height_stale_or_missing' => array(
+				'present' => $heightStatus !== 'db_numeric',
+				'message' => 'DB coin height is missing, non-numeric, or below blocks table evidence.',
+			),
+			'daemon_rpc_not_used_by_preview' => array(
+				'present' => true,
+				'message' => 'This preview intentionally does not query daemon height.',
+			),
+			'backend_updater_frozen' => array(
+				'present' => true,
+				'message' => 'Backend updaters remain outside this preview and may leave DB height/category state stale.',
+			),
+			'transition_still_blocked' => array(
+				'present' => true,
+				'message' => 'No block category, earnings status, account-credit, or payout transition is authorized here.',
+			),
+		);
+	}
+
+	private function maturitySourceStages()
+	{
+		return array(
+			array('stage' => 'verify_daemon_current_height_separately', 'status' => 'blocked_not_run', 'message' => 'Final height source review must happen outside this DB-only preview.'),
+			array('stage' => 'inspect_backend_category_transition_logic', 'status' => 'blocked', 'message' => 'Backend category transition logic requires separate source review.'),
+			array('stage' => 'compare_db_height_with_daemon_height', 'status' => 'blocked_not_run', 'message' => 'DB height must be compared with a separately approved live height source.'),
+			array('stage' => 'prepare_block_category_transition_approval_package', 'status' => 'blocked_not_run', 'message' => 'Transition package preparation remains future work.'),
+			array('stage' => 'rerun_earnings_credit_readiness_preview', 'status' => 'blocked_not_run', 'message' => 'Readiness must be rechecked after any separately approved transition.'),
+			array('stage' => 'prepare_account_credit_approval_package', 'status' => 'blocked_not_run', 'message' => 'Account-credit approval remains future work after readiness is resolved.'),
+		);
+	}
+
+	private function maturitySourceBlockedMetadata()
+	{
+		return array(
+			'status' => 'blocked',
+			'blocked_actions' => array(
+				'daemon_rpc_read',
+				'wallet_rpc_read',
+				'backend_accounting_processing',
+				'block_category_mutation',
+				'earnings_status_mutation',
+				'account_credit_mutation',
+				'account_balance_mutation',
+				'block_mutation',
+				'earnings_mutation',
+				'coin_mutation',
+				'payout_row_creation',
+				'account_debit',
+				'wallet_send',
+				'share_deletion',
+				'payout_retry_delete',
+				'service_or_cron_changes',
+			),
+			'daemon_rpc_used' => false,
+			'wallet_rpc_used' => false,
+			'message' => 'Read-only maturity source verification only. It does not query daemons or wallets, run backend accounting, change categories, change earnings, credit accounts, create payout rows, delete shares, or change services.',
+		);
+	}
+
+	private function maturitySourceAuditSummary($report)
+	{
+		$scope = $this->guard->getScope();
+		$coin = arraySafeVal($scope, 'coin', array());
+		$summary = arraySafeVal($report, 'summary', array());
+		$decision = arraySafeVal($summary, 'conservative_decision', array());
+		$delta = arraySafeVal($summary, 'maturity_delta', array());
+		$executionBlocked = arraySafeVal($summary, 'execution_blocked', array());
+		return array(
+			'command' => arraySafeVal($report, 'command'),
+			'coin_id' => arraySafeVal($scope, 'coin_id'),
+			'coin_symbol' => arraySafeVal($coin, 'symbol'),
+			'coin_algo' => arraySafeVal($coin, 'algo'),
+			'maturity_calculation_available' => arraySafeVal($delta, 'maturity_calculation_available', false),
+			'can_determine_maturity_from_db_only' => arraySafeVal($decision, 'can_determine_maturity_from_db_only', false),
+			'can_prepare_transition_package_from_db_only' => arraySafeVal($decision, 'can_prepare_transition_package_from_db_only', false),
+			'needs_rpc_height_or_backend_logic_review' => arraySafeVal($decision, 'needs_rpc_height_or_backend_logic_review', true),
+			'blocked_actions' => arraySafeVal($executionBlocked, 'blocked_actions', array()),
+			'checksum_note' => 'See top-level report_checksum; generated_at is excluded from checksum input.',
+			'checksum_purpose' => 'preview audit comparison only; not payout authorization',
+		);
+	}
+
+	private function maturitySourceCoinFieldCandidates()
+	{
+		return array(
+			'id', 'symbol', 'symbol2', 'name', 'algo', 'block_height', 'target_height',
+			'mature_blocks', 'block_time', 'cleared', 'immature', 'available', 'balance',
+			'minted', 'reward', 'lastblock', 'last_block', 'confirmations', 'height',
+			'best_height', 'chain_height', 'current_height',
+		);
+	}
+
+	private function maturitySourceCurrentHeightColumns()
+	{
+		return array('block_height', 'target_height', 'height', 'best_height', 'chain_height', 'current_height');
+	}
+
+	private function maturitySourceThresholdColumns()
+	{
+		return array('mature_blocks');
+	}
+
+	private function maturitySourceFirstUsableField($fields, $flag)
+	{
+		foreach ($fields as $column => $status) {
+			if (arraySafeVal($status, $flag, false)) {
+				return array(
+					'column' => $column,
+					'value' => arraySafeVal($status, 'value'),
+					'numeric' => true,
+				);
+			}
+		}
+		return array('column' => null, 'value' => null, 'numeric' => false);
+	}
+
+	private function maturitySourceBlocksSchema()
+	{
+		return array(
+			'has_id' => $this->guard->columnExists('blocks', 'id'),
+			'has_category' => $this->guard->columnExists('blocks', 'category'),
+			'has_height' => $this->guard->columnExists('blocks', 'height'),
+			'has_time' => $this->guard->columnExists('blocks', 'time'),
+			'has_amount' => $this->guard->columnExists('blocks', 'amount'),
+		);
+	}
+
+	private function maturitySourceEarningsBlocksSchema()
+	{
+		return array(
+			'earnings_has_status' => $this->guard->columnExists('earnings', 'status'),
+			'earnings_has_amount' => $this->guard->columnExists('earnings', 'amount'),
+			'earnings_has_blockid' => $this->guard->columnExists('earnings', 'blockid'),
+			'blocks_has_id' => $this->guard->columnExists('blocks', 'id'),
+			'blocks_has_category' => $this->guard->columnExists('blocks', 'category'),
+			'blocks_has_height' => $this->guard->columnExists('blocks', 'height'),
+			'blocks_has_time' => $this->guard->columnExists('blocks', 'time'),
+			'can_join' => $this->guard->tableExists('earnings') && $this->guard->tableExists('blocks') &&
+				$this->guard->columnExists('earnings', 'blockid') && $this->guard->columnExists('blocks', 'id'),
+		);
+	}
+
+	private function maturitySourceLatestBlockRow($orderColumn, $where, $schema)
+	{
+		if (!$this->guard->columnExists('blocks', 'id')) {
+			return array('status' => 'not_available', 'reason' => 'blocks.id column is missing');
+		}
+		if (!$this->guard->columnExists('blocks', $orderColumn)) {
+			return array('status' => 'not_available', 'reason' => "blocks.$orderColumn column is missing");
+		}
+		$select = array('B.'.$this->guard->qcol('id').' AS id');
+		foreach (array('category', 'height', 'time', 'amount') as $column) {
+			if ($this->guard->columnExists('blocks', $column)) {
+				$select[] = 'B.'.$this->guard->qcol($column).' AS '.$this->guard->qcol($column);
+			}
+		}
+		$sql = 'SELECT '.implode(', ', $select).' FROM blocks B WHERE '.$where['sql'].
+			' ORDER BY B.'.$this->guard->qcol($orderColumn).' DESC, B.'.$this->guard->qcol('id').' DESC LIMIT 1';
+		$row = $this->guard->selectRow($sql, $where['params']);
+		return $row ? $row : array('status' => 'empty');
+	}
+
+	private function maturitySourceMaxBlocksHeight($blockEvidence)
+	{
+		$rows = arraySafeVal($blockEvidence, 'by_category', array());
+		$max = null;
+		foreach ($rows as $row) {
+			$value = arraySafeVal($row, 'max_block_height');
+			if (is_numeric($value)) {
+				$value = floatval($value);
+				$max = $max === null ? $value : max($max, $value);
+			}
+		}
+		return $max;
+	}
+
 	private function payoutPreviewAuditSummary($report)
 	{
 		$scope = $this->guard->getScope();
@@ -2660,7 +3134,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 
 	private function isPayoutAuditCommand($command)
 	{
-		return in_array($command, array('payout-candidates-preview', 'payout-row-preflight-preview', 'payout-row-dryrun-plan', 'payable-source-reconciliation-preview', 'account-credit-transition-preview', 'earnings-credit-readiness-preview', 'block-category-maturity-preview', 'earnings-block-reconciliation-preview'), true);
+		return in_array($command, array('payout-candidates-preview', 'payout-row-preflight-preview', 'payout-row-dryrun-plan', 'payable-source-reconciliation-preview', 'account-credit-transition-preview', 'earnings-credit-readiness-preview', 'block-category-maturity-preview', 'earnings-block-reconciliation-preview', 'maturity-source-verification-preview'), true);
 	}
 
 	private function ensurePayoutPreviewAuditFields($report)

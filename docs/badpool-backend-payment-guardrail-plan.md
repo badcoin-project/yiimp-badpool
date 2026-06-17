@@ -147,6 +147,7 @@ php yaamp/yiic.php badpoolguard account-credit-transition-preview --coin-id=<coi
 php yaamp/yiic.php badpoolguard earnings-credit-readiness-preview --coin-id=<coin-id>
 php yaamp/yiic.php badpoolguard block-category-maturity-preview --coin-id=<coin-id>
 php yaamp/yiic.php badpoolguard earnings-block-reconciliation-preview --coin-id=<coin-id>
+php yaamp/yiic.php badpoolguard maturity-source-verification-preview --coin-id=<coin-id>
 php yaamp/yiic.php badpoolguard safety-scan --coin-id=<coin-id>
 ```
 
@@ -342,6 +343,23 @@ The reconciliation preview reports coin identity, status 0 and status 1 earnings
 The preview is SELECT-only. It does not run backend accounting, change block categories, change earnings status, credit accounts, change coins, create payout rows, call wallet RPC, delete shares, or restore backend services.
 
 Any future category/status or account-credit transition remains blocked until earnings-row and block-row differences are reconciled and separately approved.
+
+### Patch group P implementation status
+
+Patch group P adds a read-only maturity threshold and current-height source verification preview to `web/yaamp/commands/BadpoolGuardCommand.php`:
+
+```text
+cd /srv/badpool/yiimp-badpool/web
+php yaamp/yiic.php badpoolguard maturity-source-verification-preview --coin-id=<coin-id> --format=json
+```
+
+Maturity/category transition requires a reliable current-height source and a numeric maturity threshold. DB-only previews must not assume chain height when `coins.block_height` is stale, missing, null, or non-numeric.
+
+The maturity source preview reports coin maturity/current-height fields, per-field usability, block table height evidence, linked immature block ranges for status 0/status 1 earnings, DB-only maturity delta counts when possible, source confidence, conservative decisions, blockers, proposed future stages, blocked action metadata, audit metadata, and a report checksum.
+
+The preview is SELECT-only. It does not call daemon RPC, call wallet RPC, run backend accounting, mature blocks, change block categories, change earnings status, credit accounts, change coins, create payout rows, delete shares, or restore backend services.
+
+Any future category/status or account-credit transition remains blocked until current height, maturity threshold, and backend transition logic are separately verified and approved.
 
 ### Read-only preview commands
 
@@ -868,6 +886,15 @@ These must be answered by L3 using read-only live-server checks, not by reposito
 - Explain that earnings rows and block rows are different units, and one block can have multiple earnings rows.
 - State that row-count differences must be reconciled before any category/status or account-credit transition.
 - Do not run backend accounting, change block categories, change earnings status, credit accounts, mutate blocks/earnings/accounts/coins, create payout rows, call wallet RPC, delete shares, retry/delete payouts, change services, or restore backend loops.
+- Future category/status and account-credit transition remains a separate approved PR and operator action.
+
+### Patch group P: maturity threshold and current-height source verification preview
+
+- Add a read-only command that verifies which DB fields can safely inform maturity threshold and current-height review before any future category/status or account-credit transition.
+- Require explicit coin scope and refuse all-coin scope.
+- Report coin maturity/current-height fields, field presence/null/numeric/usability classification, block table height evidence, linked immature block ranges, DB-only height-delta counts, source confidence, conservative decisions, blockers, future stages, audit metadata, and checksum metadata.
+- State that DB-only previews must not assume chain height when `coins.block_height` is stale, missing, null, or non-numeric.
+- Do not call daemon RPC, call wallet RPC, run backend accounting, mature blocks, change block categories, change earnings status, credit accounts, mutate blocks/earnings/accounts/coins, create payout rows, delete shares, retry/delete payouts, change services, or restore backend loops.
 - Future category/status and account-credit transition remains a separate approved PR and operator action.
 
 ## Non-goals for this plan
