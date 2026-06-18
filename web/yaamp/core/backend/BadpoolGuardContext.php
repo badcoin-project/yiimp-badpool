@@ -16,11 +16,14 @@ class BadpoolGuardContext
 	);
 	private $warnings = array();
 	private $errors = array();
+	private $options = array();
 
 	private $allowedOptions = array(
 		'coin-id',
 		'all-coins-preview',
 		'format',
+		'approval-input-checksum',
+		'mutation-scope-checksum',
 	);
 
 	private $dangerousOptions = array(
@@ -61,6 +64,7 @@ class BadpoolGuardContext
 		if (!$this->isValid()) {
 			return;
 		}
+		$this->options = $options;
 
 		if (isset($options['format'])) {
 			$this->format = strtolower($options['format']);
@@ -91,6 +95,11 @@ class BadpoolGuardContext
 	public function getCoin()
 	{
 		return $this->scope['coin'];
+	}
+
+	public function getOption($name, $default=null)
+	{
+		return array_key_exists($name, $this->options) ? $this->options[$name] : $default;
 	}
 
 	public function isAllCoinsPreview()

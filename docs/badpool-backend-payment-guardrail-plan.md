@@ -150,6 +150,7 @@ php yaamp/yiic.php badpoolguard earnings-block-reconciliation-preview --coin-id=
 php yaamp/yiic.php badpoolguard maturity-source-verification-preview --coin-id=<coin-id>
 php yaamp/yiic.php badpoolguard forward-catchup-preview --coin-id=<coin-id>
 php yaamp/yiic.php badpoolguard forward-catchup-approval-package --coin-id=<coin-id>
+php yaamp/yiic.php badpoolguard forward-catchup-stage1-apply-preflight --coin-id=<coin-id>
 php yaamp/yiic.php badpoolguard safety-scan --coin-id=<coin-id>
 ```
 
@@ -392,6 +393,25 @@ The approval package is for Stage 1 review only: importing post-checkpoint `cate
 The package reuses the forward-catch-up preview data model and reports coin identity, latest payout checkpoint, preview dependency checksums, approval package identity, proposed single-coin mutation scope, candidate summary, first batch plan, daemon sample summary, exact blocked future apply intent, blocked later stages, safety metadata, `approval_input_checksum`, `intended_mutation_scope_checksum`, and a report checksum.
 
 The command is read-only. It does not add an apply command, does not accept execute flags, does not create payout rows, does not change account balances, does not change block or earnings rows, does not send coins, does not run backend loops, and does not change services or cron. Future Stage 1 apply design or preflight remains a separate approved PR and operator action.
+
+### Patch group S implementation status
+
+Patch group S adds a read-only Stage 1 apply preflight command to `web/yaamp/commands/BadpoolGuardCommand.php`:
+
+```text
+cd /srv/badpool/yiimp-badpool/web
+php yaamp/yiic.php badpoolguard forward-catchup-stage1-apply-preflight --coin-id=<coin-id> --format=json
+```
+
+Optional checksum inputs can be supplied for comparison:
+
+```text
+php yaamp/yiic.php badpoolguard forward-catchup-stage1-apply-preflight --coin-id=<coin-id> --approval-input-checksum=<checksum> --mutation-scope-checksum=<checksum> --format=json
+```
+
+The preflight recomputes forward-catch-up preview and approval-package-equivalent checksums, reports checksum matches when inputs are supplied, verifies the forward candidate set, reports the first batch boundary, samples the first batch with read-only daemon calls, evaluates safety gates, records future apply constraints, and emits `preflight_input_checksum`, `batch_scope_checksum`, and `report_checksum`.
+
+The command is read-only. It does not add an apply command, does not accept execute flags, does not write database rows, does not create payout rows, does not change account balances, does not change block or earnings rows, does not send coins, does not run backend loops, and does not change services or cron.
 
 ### Read-only preview commands
 
@@ -947,6 +967,15 @@ These must be answered by L3 using read-only live-server checks, not by reposito
 - Keep future intent blocked: populate `txhash`, `amount`, and `confirmations`; transition category according to daemon-derived or safe intermediate rules; and plan projected earnings rows without creating them.
 - Do not add an apply command, execute flag, DB write, payout-row creation, account-balance change, block/earnings mutation, backend loop execution, wallet send, service change, cron change, or approval of later payout stages.
 - Future Stage 1 apply design or preflight remains a separate approved PR and operator action.
+
+### Patch group S: forward catch-up Stage 1 apply preflight
+
+- Add a read-only command that verifies approval-package consistency and the first batch boundary before any future Stage 1 apply design.
+- Require explicit coin scope and refuse all-coin scope.
+- Recompute preview and approval-package-equivalent checksums; compare optional supplied approval and mutation-scope checksums.
+- Report candidate set counts, missing field counts, linked earnings rows, first batch boundary, read-only daemon verification, safety gates, future apply constraints, blocked later stages, audit metadata, `preflight_input_checksum`, `batch_scope_checksum`, and `report_checksum`.
+- Keep future apply blocked and require a separate approved design before any mutation-capable command exists.
+- Do not add an apply command, execute flag, DB write, payout-row creation, account-balance change, block/earnings mutation, backend loop execution, wallet send, service change, cron change, or approval of later payout stages.
 
 ## Non-goals for this plan
 
