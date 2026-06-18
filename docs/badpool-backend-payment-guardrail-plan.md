@@ -148,6 +148,7 @@ php yaamp/yiic.php badpoolguard earnings-credit-readiness-preview --coin-id=<coi
 php yaamp/yiic.php badpoolguard block-category-maturity-preview --coin-id=<coin-id>
 php yaamp/yiic.php badpoolguard earnings-block-reconciliation-preview --coin-id=<coin-id>
 php yaamp/yiic.php badpoolguard maturity-source-verification-preview --coin-id=<coin-id>
+php yaamp/yiic.php badpoolguard forward-catchup-preview --coin-id=<coin-id>
 php yaamp/yiic.php badpoolguard safety-scan --coin-id=<coin-id>
 ```
 
@@ -360,6 +361,21 @@ The maturity source preview reports coin maturity/current-height fields, per-fie
 The preview is SELECT-only. It does not call daemon RPC, call wallet RPC, run backend accounting, mature blocks, change block categories, change earnings status, credit accounts, change coins, create payout rows, delete shares, or restore backend services.
 
 Any future category/status or account-credit transition remains blocked until current height, maturity threshold, and backend transition logic are separately verified and approved.
+
+### Patch group Q implementation status
+
+Patch group Q adds a read-only forward catch-up window preview to `web/yaamp/commands/BadpoolGuardCommand.php`:
+
+```text
+cd /srv/badpool/yiimp-badpool/web
+php yaamp/yiic.php badpoolguard forward-catchup-preview --coin-id=<coin-id> --format=json
+```
+
+The forward catch-up preview maps the post-payout checkpoint window for one coin. It reports coin identity, the latest `payouts.MAX(time)` checkpoint, post-checkpoint blocks grouped by category, import candidates for incomplete `new` blocks, a fixed-size read-only daemon sample for oldest import candidates, projected future stages, conservative safety classification, blocked action metadata, audit metadata, and a report checksum.
+
+The daemon sample only reads `getblock` and `gettransaction` through the guarded wallet RPC wrapper. It does not add an apply path, does not create payout rows, does not change account balances, does not change block or earnings rows, does not send coins, does not run backend loops, and does not create an approval package command.
+
+Any future forward catch-up execution remains blocked until a separate approval package and separate implementation task are reviewed and approved.
 
 ### Read-only preview commands
 
@@ -896,6 +912,15 @@ These must be answered by L3 using read-only live-server checks, not by reposito
 - State that DB-only previews must not assume chain height when `coins.block_height` is stale, missing, null, or non-numeric.
 - Do not call daemon RPC, call wallet RPC, run backend accounting, mature blocks, change block categories, change earnings status, credit accounts, mutate blocks/earnings/accounts/coins, create payout rows, delete shares, retry/delete payouts, change services, or restore backend loops.
 - Future category/status and account-credit transition remains a separate approved PR and operator action.
+
+### Patch group Q: forward catch-up window preview
+
+- Add a read-only command that maps the forward catch-up window from the latest payout checkpoint for one coin.
+- Require explicit coin scope and refuse all-coin scope.
+- Report coin identity, `payouts.MAX(time)` checkpoint data, post-checkpoint blocks grouped by category, incomplete `new` block import candidates, fixed-size daemon read sample, projected future stages, safety classification, audit metadata, and checksum metadata.
+- Use daemon reads only for oldest import candidates, limited to `getblock` and `gettransaction` through the guarded wallet RPC wrapper.
+- Do not add an apply command, approval package command, payout-row creation, account-balance change, block/earnings mutation, coin mutation, backend loop execution, wallet send, share deletion, retry/delete payout path, process change, or schedule change.
+- Future forward catch-up execution remains a separate approved PR and operator action.
 
 ## Non-goals for this plan
 
