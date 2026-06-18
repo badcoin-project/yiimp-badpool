@@ -149,6 +149,7 @@ php yaamp/yiic.php badpoolguard block-category-maturity-preview --coin-id=<coin-
 php yaamp/yiic.php badpoolguard earnings-block-reconciliation-preview --coin-id=<coin-id>
 php yaamp/yiic.php badpoolguard maturity-source-verification-preview --coin-id=<coin-id>
 php yaamp/yiic.php badpoolguard forward-catchup-preview --coin-id=<coin-id>
+php yaamp/yiic.php badpoolguard forward-catchup-approval-package --coin-id=<coin-id>
 php yaamp/yiic.php badpoolguard safety-scan --coin-id=<coin-id>
 ```
 
@@ -376,6 +377,21 @@ The forward catch-up preview maps the post-payout checkpoint window for one coin
 The daemon sample only reads `getblock` and `gettransaction` through the guarded wallet RPC wrapper. It does not add an apply path, does not create payout rows, does not change account balances, does not change block or earnings rows, does not send coins, does not run backend loops, and does not create an approval package command.
 
 Any future forward catch-up execution remains blocked until a separate approval package and separate implementation task are reviewed and approved.
+
+### Patch group R implementation status
+
+Patch group R adds a read-only forward catch-up Stage 1 approval package command to `web/yaamp/commands/BadpoolGuardCommand.php`:
+
+```text
+cd /srv/badpool/yiimp-badpool/web
+php yaamp/yiic.php badpoolguard forward-catchup-approval-package --coin-id=<coin-id> --format=json
+```
+
+The approval package is for Stage 1 review only: importing post-checkpoint `category='new'` blocks, populating `txhash`, `amount`, and `confirmations`, choosing a daemon-derived or safe intermediate category, and planning projected earnings rows according to existing backend block-new-equivalent logic. The command reports these as blocked future intent only and does not execute them.
+
+The package reuses the forward-catch-up preview data model and reports coin identity, latest payout checkpoint, preview dependency checksums, approval package identity, proposed single-coin mutation scope, candidate summary, first batch plan, daemon sample summary, exact blocked future apply intent, blocked later stages, safety metadata, `approval_input_checksum`, `intended_mutation_scope_checksum`, and a report checksum.
+
+The command is read-only. It does not add an apply command, does not accept execute flags, does not create payout rows, does not change account balances, does not change block or earnings rows, does not send coins, does not run backend loops, and does not change services or cron. Future Stage 1 apply design or preflight remains a separate approved PR and operator action.
 
 ### Read-only preview commands
 
@@ -921,6 +937,16 @@ These must be answered by L3 using read-only live-server checks, not by reposito
 - Use daemon reads only for oldest import candidates, limited to `getblock` and `gettransaction` through the guarded wallet RPC wrapper.
 - Do not add an apply command, approval package command, payout-row creation, account-balance change, block/earnings mutation, coin mutation, backend loop execution, wallet send, share deletion, retry/delete payout path, process change, or schedule change.
 - Future forward catch-up execution remains a separate approved PR and operator action.
+
+### Patch group R: forward catch-up Stage 1 approval package
+
+- Add a read-only command that generates an auditable approval package for future Stage 1 forward catch-up import review.
+- Require explicit coin scope and refuse all-coin scope.
+- Reuse the forward-catch-up preview data model and report dependency checksums, approval identity, mutation scope, candidate summary, first batch plan, daemon sample summary, exact blocked future apply intent, blocked later stages, safety metadata, and approval checksums.
+- Scope Stage 1 to post-checkpoint `category='new'` blocks with blockhash, userid, workerid, and no linked earnings rows.
+- Keep future intent blocked: populate `txhash`, `amount`, and `confirmations`; transition category according to daemon-derived or safe intermediate rules; and plan projected earnings rows without creating them.
+- Do not add an apply command, execute flag, DB write, payout-row creation, account-balance change, block/earnings mutation, backend loop execution, wallet send, service change, cron change, or approval of later payout stages.
+- Future Stage 1 apply design or preflight remains a separate approved PR and operator action.
 
 ## Non-goals for this plan
 
