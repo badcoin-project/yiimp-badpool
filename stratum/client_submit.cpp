@@ -336,6 +336,58 @@ static void client_do_submit(YAAMP_CLIENT *client, YAAMP_JOB *job, YAAMP_JOB_VAL
 	free(block_hex);
 }
 
+static bool submit_reject_diag_enabled()
+{
+	return g_debuglog_hash;
+}
+
+static bool submit_reject_diag_code_selected(int id)
+{
+	return id == 21 || id == 22 || id == 25 || id == 26;
+}
+
+static bool submit_reject_diag_rate_limited(int id)
+{
+	static time_t last_log[32];
+	static unsigned int suppressed[32];
+	int idx = id >= 0? id % 32: 0;
+	time_t now = time(NULL);
+
+	if(last_log[idx] != now)
+	{
+		if(suppressed[idx])
+		{
+			debuglog("share_reject_diag_suppressed code=%d count=%u\n", id, suppressed[idx]);
+			suppressed[idx] = 0;
+		}
+		last_log[idx] = now;
+		return false;
+	}
+
+	suppressed[idx]++;
+	return true;
+}
+
+static void log_share_reject_diag(YAAMP_CLIENT *client, YAAMP_JOB *job, int id, const char *message,
+	char *extranonce2, char *ntime, char *nonce, bool build_complete, bool hash_computed,
+	uint64_t hash_int, uint64_t user_target, uint64_t coin_target)
+{
+	if(!submit_reject_diag_enabled() || !submit_reject_diag_code_selected(id)) return;
+	if(submit_reject_diag_rate_limited(id)) return;
+
+	YAAMP_JOB_TEMPLATE *templ = job? job->templ: NULL;
+	YAAMP_COIND *coind = job? job->coind: NULL;
+	debuglog("share_reject_diag algo=%s code=%d reason=\"%s\" jobid=%x job_lookup=%s coinid=%d coin=%s worker_uid=%d "
+		"client_ip=%s authorized=%d subscribed=%d difficulty=%.8f nbits=%s ntime=%s nonce=%s extranonce2_len=%u "
+		"build_submit_values=%d hash_computed=%d hash_int=%016llx user_target=%016llx coin_target=%016llx\n",
+		g_current_algo? g_current_algo->name: g_stratum_algo, id, message? message: "-", job? job->id: 0,
+		job? "found": "missing", coind? coind->id: 0, coind? coind->symbol: "-", client? client->userid: 0,
+		(client && client->sock)? client->sock->ip: "-", (client && client->username[0])? 1: 0, client? client->extranonce_subscribe: 0,
+		client? client->difficulty_actual: 0, (templ && templ->nbits[0])? templ->nbits: "-", ntime? ntime: "-", nonce? nonce: "-",
+		extranonce2? (unsigned int)strlen(extranonce2): 0, build_complete? 1: 0, hash_computed? 1: 0,
+		(unsigned long long)hash_int, (unsigned long long)user_target, (unsigned long long)coin_target);
+}
+
 bool dump_submit_debug(const char *title, YAAMP_CLIENT *client, YAAMP_JOB *job, char *extranonce2, char *ntime, char *nonce)
 {
 	debuglog("ERROR %s, %s subs %d, job %x, %s, id %x, %d, %s, %s %s\n",
@@ -361,6 +413,13 @@ void client_submit_error(YAAMP_CLIENT *client, YAAMP_JOB *job, int id, const cha
 	}
 
 	object_unlock(job);
+}
+
+static void client_submit_error_diag(YAAMP_CLIENT *client, YAAMP_JOB *job, int id, const char *message, char *extranonce2, char *ntime, char *nonce,
+	bool build_complete, bool hash_computed, uint64_t hash_int, uint64_t user_target, uint64_t coin_target)
+{
+	log_share_reject_diag(client, job, id, message, extranonce2, ntime, nonce, build_complete, hash_computed, hash_int, user_target, coin_target);
+	client_submit_error(client, job, id, message, extranonce2, ntime, nonce);
 }
 
 static bool ntime_valid_range(const char ntimehex[])
@@ -432,7 +491,7 @@ bool client_submit(YAAMP_CLIENT *client, json_value *json_params)
 	YAAMP_JOB *job = (YAAMP_JOB *)object_find(&g_list_job, jobid, true);
 	if(!job)
 	{
-		client_submit_error(client, NULL, 21, "Invalid job id", extranonce2, ntime, nonce);
+		client_submit_error_diag(client, NULL, 21, "Invalid job id", extranonce2, ntime, nonce, false, false, 0, 0, 0);
 		return true;
 	}
 
@@ -469,7 +528,7 @@ bool client_submit(YAAMP_CLIENT *client, json_value *json_params)
 	YAAMP_SHARE *share = share_find(job->id, extranonce2, ntime, nonce, client->extranonce1);
 	if(share)
 	{
-		client_submit_error(client, job, 22, "Duplicate share", extranonce2, ntime, nonce);
+		client_submit_error_diag(client, job, 22, "Duplicate share", extranonce2, ntime, nonce, false, false, 0, 0, 0);
 		return true;
 	}
 
@@ -529,7 +588,7 @@ bool client_submit(YAAMP_CLIENT *client, json_value *json_params)
 				(int) submitvalues.hash_bin[31], (int) submitvalues.hash_bin[30],
 				(int) submitvalues.hash_bin[29], (int) submitvalues.hash_bin[28]);
 		}
-		client_submit_error(client, job, 25, "Invalid share", extranonce2, ntime, nonce);
+		client_submit_error_diag(client, job, 25, "Invalid share", extranonce2, ntime, nonce, true, true, 0, 0, 0);
 		return true;
 	}
 
@@ -551,7 +610,7 @@ bool client_submit(YAAMP_CLIENT *client, json_value *json_params)
 	}
 	if(hash_int > user_target && hash_int > coin_target)
 	{
-		client_submit_error(client, job, 26, "Low difficulty share", extranonce2, ntime, nonce);
+		client_submit_error_diag(client, job, 26, "Low difficulty share", extranonce2, ntime, nonce, true, true, hash_int, user_target, coin_target);
 		return true;
 	}
 
