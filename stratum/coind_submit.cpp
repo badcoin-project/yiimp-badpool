@@ -1,6 +1,72 @@
 
 #include "stratum.h"
 
+static const char *submitblock_json_type_name(json_value *json)
+{
+	if(!json) return "missing";
+	switch(json->type)
+	{
+		case json_null: return "null";
+		case json_string: return "string";
+		case json_boolean: return "boolean";
+		case json_integer: return "number";
+		case json_double: return "number";
+		case json_object: return "object";
+		case json_array: return "array";
+		default: return "unknown";
+	}
+}
+
+static void submitblock_json_scalar_value(json_value *json, char *out, size_t outlen)
+{
+	if(!out || !outlen) return;
+	out[0] = '\0';
+	if(!json) return;
+
+	switch(json->type)
+	{
+		case json_string:
+			snprintf(out, outlen, "%.160s", json->u.string.ptr? json->u.string.ptr: "");
+			break;
+		case json_boolean:
+			snprintf(out, outlen, "%s", json->u.boolean? "true": "false");
+			break;
+		case json_integer:
+			snprintf(out, outlen, "%lld", (long long)json->u.integer);
+			break;
+		case json_double:
+			snprintf(out, outlen, "%.8f", json->u.dbl);
+			break;
+		default:
+			break;
+	}
+}
+
+static void log_submitblock_response(YAAMP_COIND *coind, const char *method, json_value *json_result, json_value *json_error, bool returned_success)
+{
+	char result_value[192];
+	char error_code[64];
+	char error_message[192];
+	submitblock_json_scalar_value(json_result, result_value, sizeof(result_value));
+	submitblock_json_scalar_value((json_error && json_error->type == json_object)? json_get_val(json_error, "code"): NULL, error_code, sizeof(error_code));
+	submitblock_json_scalar_value((json_error && json_error->type == json_object)? json_get_val(json_error, "message"): NULL, error_message, sizeof(error_message));
+
+	stratumlog("submitblock_observe method=%s algo=%s coinid=%d coin=%s symbol=%s height=%d "
+		"result_type=%s result_value=%s error_type=%s error_code=%s error_message=%s return_success=%d\n",
+		method? method: "unknown",
+		(coind && coind->algo[0])? coind->algo: g_stratum_algo,
+		coind? coind->id: 0,
+		(coind && coind->name[0])? coind->name: "-",
+		(coind && coind->symbol[0])? coind->symbol: "-",
+		coind? coind->height: 0,
+		submitblock_json_type_name(json_result),
+		result_value[0]? result_value: "-",
+		submitblock_json_type_name(json_error),
+		error_code[0]? error_code: "-",
+		error_message[0]? error_message: "-",
+		returned_success? 1: 0);
+}
+
 bool coind_submitwork(YAAMP_COIND *coind, const char *block)
 {
 	int paramlen = strlen(block);
@@ -47,30 +113,13 @@ bool coind_submitblock(YAAMP_COIND *coind, const char *block)
 	if(!json) return false;
 
 	json_value *json_error = json_get_object(json, "error");
-	if(json_error && json_error->type != json_null)
-	{
-		const char *p = json_get_string(json_error, "message");
-		if(p) stratumlog("ERROR %s %s\n", coind->name, p);
-
-	//	job_reset();
-		json_value_free(json);
-
-		return false;
-	}
-
 	json_value *json_result = json_get_object(json, "result");
+	bool has_error = json_error && json_error->type != json_null;
+	bool b = !has_error && json_result && json_result->type == json_null;
 
-	bool b = json_result && json_result->type == json_null;
-	if(!b) {
-		if(json_result && json_result->type == json_string && json_result->u.string.ptr)
-			stratumlog("ERROR %s submitblock result %s\n", coind->name, json_result->u.string.ptr);
-		else if(json_result)
-			stratumlog("ERROR %s submitblock result type %d\n", coind->name, json_result->type);
-		else
-			stratumlog("ERROR %s submitblock missing result\n", coind->name);
-	}
+	log_submitblock_response(coind, "submitblock", json_result, json_error, b);
+
 	json_value_free(json);
-
 	return b;
 }
 
@@ -88,30 +137,13 @@ bool coind_submitblocktemplate(YAAMP_COIND *coind, const char *block)
 	if(!json) return false;
 
 	json_value *json_error = json_get_object(json, "error");
-	if(json_error && json_error->type != json_null)
-	{
-		const char *p = json_get_string(json_error, "message");
-		if(p) stratumlog("ERROR %s %s\n", coind->name, p);
-
-	//	job_reset();
-		json_value_free(json);
-
-		return false;
-	}
-
 	json_value *json_result = json_get_object(json, "result");
+	bool has_error = json_error && json_error->type != json_null;
+	bool b = !has_error && json_result && json_result->type == json_null;
 
-	bool b = json_result && json_result->type == json_null;
-	if(!b) {
-		if(json_result && json_result->type == json_string && json_result->u.string.ptr)
-			stratumlog("ERROR %s getblocktemplate-submit result %s\n", coind->name, json_result->u.string.ptr);
-		else if(json_result)
-			stratumlog("ERROR %s getblocktemplate-submit result type %d\n", coind->name, json_result->type);
-		else
-			stratumlog("ERROR %s getblocktemplate-submit missing result\n", coind->name);
-	}
+	log_submitblock_response(coind, "submitblocktemplate", json_result, json_error, b);
+
 	json_value_free(json);
-
 	return b;
 }
 
