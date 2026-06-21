@@ -709,6 +709,9 @@ class BadpoolGuardCommand extends CConsoleCommand
 			'operator_must_confirm_attribution_model' => true,
 			'attribution_model' => 'block_userid_single_recipient',
 		);
+		$batchScopeChecksumValue = arraySafeVal(arraySafeVal($dryrun, 'batch_scope_checksum', array()), 'value');
+		$projectedMutationChecksumValue = arraySafeVal(arraySafeVal($dryrun, 'projected_mutation_checksum', array()), 'value');
+		$projectedEarningsChecksumValue = arraySafeVal(arraySafeVal($dryrun, 'projected_earnings_checksum', array()), 'value');
 		$futureApplyCommandShape = array(
 			'php',
 			'yaamp/yiic.php',
@@ -716,9 +719,9 @@ class BadpoolGuardCommand extends CConsoleCommand
 			'forward-catchup-stage1-apply',
 			'--coin-id='.arraySafeVal($this->guard->getScope(), 'coin_id'),
 			'--approval-package-checksum=<approval_package_checksum>',
-			'--batch-scope-checksum='.arraySafeVal($dryrun, 'batch_scope_checksum'),
-			'--projected-mutation-checksum='.arraySafeVal($dryrun, 'projected_mutation_checksum'),
-			'--projected-earnings-checksum='.arraySafeVal($dryrun, 'projected_earnings_checksum'),
+			'--batch-scope-checksum='.$batchScopeChecksumValue,
+			'--projected-mutation-checksum='.$projectedMutationChecksumValue,
+			'--projected-earnings-checksum='.$projectedEarningsChecksumValue,
 			'--operator-confirms-attribution-model=block_userid_single_recipient',
 		);
 		$mandatoryFutureApplyGates = array(
