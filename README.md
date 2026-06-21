@@ -1,137 +1,66 @@
-[![Build Status](https://travis-ci.org/tpruvot/yiimp.svg?branch=next)](https://travis-ci.org/tpruvot/yiimp)
+# BadPool
 
-#yiimp - yaamp fork
+BadPool is a Badcoin-focused mining pool codebase derived from Yiimp/Yaamp-era pool software. This repository is maintained for Badcoin pool development and documentation while preserving appropriate upstream attribution and history.
 
-WARNINGS
-- Use at your own risks.
-- Usage of this software requires abilities with sysadmin, database admin, coin daemons, and sometimes a bit of programming. Running a production pool can literally be more work than a full-time job.
+This repository contains pool web, stratum, database, and operational-adjacent code. Treat changes here as potentially production-sensitive even when they are documentation-only.
 
-Required:
+## Upstream attribution
 
-	linux, mysql, php, memcached, a webserver (lighttpd or nginx recommended)
+BadPool is based on Yiimp, which itself traces back to Yaamp-derived pool software and the Yii PHP framework. Preserve upstream copyright notices, license headers, file history, and attribution when modifying existing files.
 
+Historical upstream notes credited globalzon for releasing the initial Yaamp source code and tpruvot for Yiimp maintenance. This README does not replace that attribution; it removes stale install/run instructions that could be mistaken for current Badcoin operational truth.
 
-Config for nginx:
+## Project governance and organization defaults
 
-	location / {
-		try_files $uri @rewrite;
-	}
+BadPool follows Badcoin organization-wide repository defaults unless this repository provides more specific guidance:
 
-	location @rewrite {
-		rewrite ^/(.*)$ /index.php?r=$1;
-	}
+- [Contributing](https://github.com/badcoin-project/.github/blob/main/CONTRIBUTING.md)
+- [Security policy](https://github.com/badcoin-project/.github/blob/main/SECURITY.md)
+- [Support policy](https://github.com/badcoin-project/.github/blob/main/SUPPORT.md)
+- [Branch policy](https://github.com/badcoin-project/.github/blob/main/docs/branch-policy.md)
+- [Repository hygiene](https://github.com/badcoin-project/.github/blob/main/docs/repo-hygiene.md)
 
-	location ~ \.php$ {
-		fastcgi_pass unix:/var/run/php5-fpm.sock;
-		fastcgi_index index.php;
-		include fastcgi_params;
-	}
+## Branch flow
 
+- `main` is stable and release-oriented.
+- `development` is the integration branch for reviewed work before it is promoted toward `main`.
+- Scoped branches such as `docs/readme-hygiene`, `bugfix/stratum-guard`, or `refactor/config-loader` should target `development` unless maintainers document a different target for a specific change.
 
-If you use apache, it should be something like that (already set in web/.htaccess):
+A Git merge is not production deployment approval. Merging into `development` does not approve service restarts, database mutations, wallet actions, payout actions, fund movement, or production deployment.
 
-	RewriteEngine on
+## Production-safety expectations
 
-	RewriteCond %{REQUEST_FILENAME} !-f
-	RewriteRule ^(.*) index.php?r=$1 [QSA]
+Pool software can affect miners, accounting, payouts, wallets, coin daemons, and infrastructure. Keep changes conservative and reviewable.
 
+Do not treat repository documentation, merge status, or branch state as proof that any live service is running, healthy, funded, payout-ready, or approved for deployment. If current runtime status is not documented by maintainers in an appropriate operational channel, make no claims about live service state.
 
-If you use lighttpd, use the following config:
+Before proposing operational changes, clearly separate:
 
-	$HTTP["host"] =~ "yiimp.ccminer.org" {
-	        server.document-root = "/var/yaamp/web"
-	        url.rewrite-if-not-file = (
-			"^(.*)/([0-9]+)$" => "index.php?r=$1&id=$2",
-			"^(.*)\?(.*)" => "index.php?r=$1&$2",
-	                "^(.*)" => "index.php?r=$1",
-	                "." => "index.php"
-	        )
+- code review,
+- configuration review,
+- database review,
+- wallet/fund-movement review,
+- deployment approval,
+- restart approval,
+- payout approval.
 
-		url.access-deny = ( "~", ".dat", ".log" )
-	}
+These are separate decisions. Approval of one does not imply approval of the others.
 
+## Secrets and local artifacts
 
-For the database, import the initial dump present in the sql/ folder
+Never commit secrets or local runtime material. This includes, but is not limited to:
 
-Then, apply the migration scripts to be in sync with the current git, they are sorted by date of change.
+- wallet files or wallet backups,
+- RPC usernames, RPC passwords, credentials, tokens, cookies, and API keys,
+- SQL dumps, database exports, and private migration scratch files,
+- logs, debug traces, crash dumps, backups, and runtime files,
+- local configs such as `web/serverconfig.php`, daemon configs, pool configs, or environment files,
+- production hostnames, private contacts, private infrastructure notes, or private incident details.
 
-Your database need at least 2 users, one for the web site (php) and one for the stratum connections (password set in config/algo.conf).
+Use `.gitignore` and local-only files for machine-specific state, but do not rely on ignore rules as the only protection. Review diffs before committing.
 
+## Documentation status
 
+The old README contained generic Yiimp installation and runtime instructions, including sample web-server snippets, shell startup notes, exchange key paths, admin login notes, and donation text. Those instructions were stale for this Badcoin repository and could be misread as current deployment guidance.
 
-The recommended install folder for the stratum engine is /var/stratum. Copy all the .conf files, run.sh, the stratum binary and the blocknotify binary to this folder. 
-
-Some scripts are expecting the web folder to be /var/web. You can use directory symlinks...
-
-
-Add your exchange API public and secret keys in these two separated files:
-
-	/etc/yiimp/keys.php - fixed path in code
-	web/serverconfig.php - use sample as base...
-
-You can find sample config files in web/serverconfig.sample.php and web/keys.sample.php
-
-This web application includes some command line tools, add bin/ folder to your path and type "yiimp" to list them, "yiimp checkup" can help to test your initial setup.
-Future scripts and maybe the "cron" jobs will then use this yiic console interface.
-
-You need at least three backend shells (in screen) running these scripts:
-
-	web/main.sh
-	web/loop2.sh
-	web/block.sh
-
-Start one stratum per algo using the run.sh script with the algo as parameter. For example, for x11:
-
-	run.sh x11
-
-Edit each .conf file with proper values.
-
-Look at rc.local, it starts all three backend shells and all stratum processes. Copy it to the /etc folder so that all screen shells are started at boot up.
-
-All your coin's config files need to blocknotify their corresponding stratum using something like:
-
-	blocknotify=blocknotify yaamp.com:port coinid %s
-
-On the website, go to http://server.com/site/adminRights to login as admin. You have to change it to something different in the code (web/yaamp/modules/site/SiteController.php). A real admin login may be added later, but you can setup a password authentification with your web server, sample for lighttpd:
-
-	htpasswd -c /etc/yiimp/admin.htpasswd <adminuser>
-
-and in the lighttpd config file:
-
-	# Admin access
-	$HTTP["url"] =~ "^/site/adminRights" {
-	        auth.backend = "htpasswd"
-	        auth.backend.htpasswd.userfile = "/etc/yiimp/admin.htpasswd"
-	        auth.require = (
-	                "/" => (
-	                        "method" => "basic",
-	                        "realm" => "Yiimp Administration",
-	                        "require" => "valid-user"
-	                )
-	        )
-	}
-
-And finally remove the IP filter check in SiteController.php
-
-
-
-There are logs generated in the /var/stratum folder and /var/log/stratum/debug.log for the php log.
-
-More instructions coming as needed.
-
-
-There a lot of unused code in the php branch. Lot come from other projects I worked on and I've been lazy to clean it up before to integrate it to yaamp. It's mostly based on the Yii framework which implements a lightweight MVC.
-
-	http://www.yiiframework.com/
-
-
-Credits:
-
-Thanks to globalzon to have released the initial Yaamp source code.
-
---
-
-You can support this project donating to tpruvot :
-
-BTC : 1Auhps1mHZQpoX4mCcVL8odU81VakZQ6dR
-
+For now, this README intentionally provides project identity, attribution, governance links, branch flow, and safety boundaries only. Add repository-specific setup or operation documentation in focused follow-up changes after maintainer review.
