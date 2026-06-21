@@ -8,6 +8,8 @@ class BadpoolGuardCommand extends CConsoleCommand
 	const FORWARD_CATCHUP_DAEMON_SAMPLE_LIMIT = 5;
 	const FORWARD_CATCHUP_APPROVAL_BATCH_SIZE = 25;
 	const FORWARD_CATCHUP_APPROVAL_VERSION = '1';
+	const FORWARD_CATCHUP_STAGE1_DRYRUN_DEFAULT_LIMIT = 25;
+	const FORWARD_CATCHUP_STAGE1_DRYRUN_MAX_LIMIT = 50;
 
 	private $guard;
 
@@ -27,6 +29,8 @@ class BadpoolGuardCommand extends CConsoleCommand
 		'maturity-source-verification-preview',
 		'forward-catchup-preview',
 		'forward-catchup-approval-package',
+		'forward-catchup-stage1-apply-dryrun',
+		'forward-catchup-stage1-apply-approval-package',
 		'safety-scan',
 		'guard-context',
 	);
@@ -98,6 +102,12 @@ class BadpoolGuardCommand extends CConsoleCommand
 			case 'forward-catchup-approval-package':
 				$report = $this->forwardCatchupApprovalPackageReport();
 				break;
+			case 'forward-catchup-stage1-apply-dryrun':
+				$report = $this->forwardCatchupStage1ApplyDryrunReport();
+				break;
+			case 'forward-catchup-stage1-apply-approval-package':
+				$report = $this->forwardCatchupStage1ApplyApprovalPackageReport();
+				break;
 			case 'safety-scan':
 				$report = $this->safetyScanReport();
 				break;
@@ -132,6 +142,8 @@ class BadpoolGuardCommand extends CConsoleCommand
 			"       php yaamp/yiic.php badpoolguard maturity-source-verification-preview --coin-id=<id> [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard forward-catchup-preview --coin-id=<id> [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard forward-catchup-approval-package --coin-id=<id> [--format=json|text]\n".
+			"       php yaamp/yiic.php badpoolguard forward-catchup-stage1-apply-dryrun --coin-id=<id> [--limit=<n>] [--format=json|text]\n".
+			"       php yaamp/yiic.php badpoolguard forward-catchup-stage1-apply-approval-package --coin-id=<id> [--limit=<n>] [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard safety-scan --coin-id=<id> [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard guard-context --coin-id=<id> [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard overview --all-coins-preview [--format=json|text]\n\n".
@@ -585,6 +597,168 @@ class BadpoolGuardCommand extends CConsoleCommand
 		$report = $this->ensurePayoutPreviewAuditFields($report);
 		$report['report_checksum'] = BadpoolGuardReport::checksum($report);
 		return $report;
+	}
+
+	private function forwardCatchupStage1ApplyDryrunReport()
+	{
+		if ($this->guard->isAllCoinsPreview()) {
+			$this->guard->addError('forward-catchup-stage1-apply-dryrun requires --coin-id and refuses all-coin scope.');
+			return $this->guard->refusalReport();
+		}
+
+		$limit = $this->forwardCatchupStage1DryrunLimit();
+		if ($limit === false) {
+			return $this->guard->refusalReport();
+		}
+
+		$checkpoint = $this->forwardCatchupCheckpoint();
+		$lastPayoutTime = arraySafeVal($checkpoint, 'last_payout_time');
+		$candidates = $this->forwardCatchupStage1DryrunCandidates($lastPayoutTime, $limit);
+		$classified = $this->forwardCatchupStage1DryrunClassify($candidates);
+		$plan = $this->forwardCatchupStage1DryrunPlan($classified);
+		$totals = $this->forwardCatchupStage1DryrunTotals($classified, $plan);
+		$safetyGates = $this->forwardCatchupStage1DryrunSafetyGates($checkpoint, $classified, $plan, $limit);
+		$batchScope = array(
+			'coin_id' => arraySafeVal($this->guard->getScope(), 'coin_id'),
+			'checkpoint' => $lastPayoutTime,
+			'limit' => $limit,
+			'block_ids' => $this->forwardCatchupApprovalBatchIds($candidates),
+		);
+
+		$report = $this->guard->baseReport();
+		$report['wallet_reads'] = count($candidates) > 0;
+		$report['wallet_sends'] = false;
+		$report['db_mutations'] = false;
+		$report['account_credit'] = false;
+		$report['payout_rows_created'] = false;
+		$report['backend_loops_run'] = false;
+		$report['daemon_rpc_used'] = count($candidates) > 0;
+		$report['dryrun_input_checksum'] = BadpoolGuardReport::checksum(array(
+			'coin_id' => arraySafeVal($this->guard->getScope(), 'coin_id'),
+			'limit' => $limit,
+			'checkpoint' => $lastPayoutTime,
+		));
+		$report['batch_scope_checksum'] = BadpoolGuardReport::checksum($batchScope);
+		$report['projected_mutation_checksum'] = BadpoolGuardReport::checksum(arraySafeVal($plan, 'projected_block_mutations', array()));
+		$report['projected_earnings_checksum'] = BadpoolGuardReport::checksum(arraySafeVal($plan, 'projected_pending_earnings', array()));
+		$report['summary']['checkpoint'] = $checkpoint;
+		$report['summary']['limit'] = array(
+			'requested' => $limit,
+			'default' => self::FORWARD_CATCHUP_STAGE1_DRYRUN_DEFAULT_LIMIT,
+			'max' => self::FORWARD_CATCHUP_STAGE1_DRYRUN_MAX_LIMIT,
+		);
+		$report['summary']['candidate_selection'] = array(
+			'criteria' => array(
+				'blocks.coin_id selected coin',
+				"blocks.category='new'",
+				'blocks.time greater than checkpoint',
+				'blockhash present',
+			),
+			'ordering' => $this->guard->columnExists('blocks', 'height') ? 'height,time,id' : 'time,id',
+		);
+		$report['summary']['warnings'] = array(
+			'attribution_model' => 'block_userid_single_recipient',
+			'attribution_model_requires_operator_confirmation' => true,
+			'historical_evidence_mixed' => true,
+			'backendblocknew_not_used' => true,
+			'fee_policy' => 'not_applied_in_dryrun',
+		);
+		$report['summary']['totals'] = $totals;
+		$report['summary']['safety_gates'] = $safetyGates;
+		$report['summary']['future_apply_constraints'] = array(
+			'exact_batch_boundary_required' => true,
+			'approval_checksum_required' => true,
+			'batch_checksum_required' => true,
+			'operator_attribution_confirmation_required' => true,
+			'abort_if_linked_earnings_already_exist' => true,
+			"abort_if_block_no_longer_category_new" => true,
+			'abort_if_daemon_classification_changes' => true,
+			'orphan_creates_no_earnings' => true,
+		);
+		$report['summary']['recommended_next_stage'] = 'forward-catchup-stage1-apply-approval';
+		$report['items']['candidates'] = $classified;
+		$report['items']['projected_block_mutations'] = arraySafeVal($plan, 'projected_block_mutations', array());
+		$report['items']['projected_pending_earnings'] = arraySafeVal($plan, 'projected_pending_earnings', array());
+
+		return $this->guard->finalizeReport($report);
+	}
+
+	private function forwardCatchupStage1ApplyApprovalPackageReport()
+	{
+		$dryrun = $this->forwardCatchupStage1ApplyDryrunReport();
+		if (!$this->guard->isValid()) {
+			return $dryrun;
+		}
+
+		$totals = arraySafeVal(arraySafeVal($dryrun, 'summary', array()), 'totals', array());
+		$safetyGates = arraySafeVal(arraySafeVal($dryrun, 'summary', array()), 'safety_gates', array());
+		$dryrunChecksums = array(
+			'dryrun_input_checksum' => arraySafeVal($dryrun, 'dryrun_input_checksum'),
+			'batch_scope_checksum' => arraySafeVal($dryrun, 'batch_scope_checksum'),
+			'projected_mutation_checksum' => arraySafeVal($dryrun, 'projected_mutation_checksum'),
+			'projected_earnings_checksum' => arraySafeVal($dryrun, 'projected_earnings_checksum'),
+			'report_checksum' => arraySafeVal($dryrun, 'report_checksum'),
+		);
+		$intendedMutationScope = $this->forwardCatchupStage1ApprovalMutationScope();
+		$approvalInput = array(
+			'coin_id' => arraySafeVal($this->guard->getScope(), 'coin_id'),
+			'limit' => arraySafeVal(arraySafeVal($dryrun, 'summary', array()), 'limit'),
+			'dryrun_checksums' => $dryrunChecksums,
+			'attribution_model' => 'block_userid_single_recipient',
+		);
+
+		$report = $this->guard->baseReport();
+		$report['wallet_reads'] = arraySafeVal($dryrun, 'wallet_reads', false);
+		$report['wallet_sends'] = false;
+		$report['db_mutations'] = false;
+		$report['account_credit'] = false;
+		$report['payout_rows_created'] = false;
+		$report['backend_loops_run'] = false;
+		$report['daemon_rpc_used'] = arraySafeVal($dryrun, 'daemon_rpc_used', false);
+		$report['dryrun_input_checksum'] = $dryrunChecksums['dryrun_input_checksum'];
+		$report['batch_scope_checksum'] = $dryrunChecksums['batch_scope_checksum'];
+		$report['projected_mutation_checksum'] = $dryrunChecksums['projected_mutation_checksum'];
+		$report['projected_earnings_checksum'] = $dryrunChecksums['projected_earnings_checksum'];
+		$report['approval_input_checksum'] = BadpoolGuardReport::checksum($approvalInput);
+		$report['intended_mutation_scope_checksum'] = BadpoolGuardReport::checksum($intendedMutationScope);
+		$report['approval_package_checksum'] = BadpoolGuardReport::checksum(array(
+			'approval_input' => $approvalInput,
+			'intended_mutation_scope' => $intendedMutationScope,
+		));
+		$report['summary']['approval_package_type'] = 'forward-catchup-stage1-apply';
+		$report['summary']['approval_package_version'] = 1;
+		$report['summary']['approval_required'] = true;
+		$report['summary']['apply_command_not_implemented'] = true;
+		$report['summary']['operator_must_confirm_attribution_model'] = true;
+		$report['summary']['attribution_model'] = 'block_userid_single_recipient';
+		$report['summary']['backendblocknew_not_used'] = true;
+		$report['summary']['fee_policy'] = 'not_applied_in_dryrun';
+		$report['summary']['dryrun_output_summary'] = array(
+			'selected_count' => arraySafeVal($totals, 'selected_count'),
+			'first_height' => arraySafeVal($totals, 'first_height'),
+			'last_height' => arraySafeVal($totals, 'last_height'),
+			'stage1_import_generate_count' => arraySafeVal($totals, 'stage1_import_generate_count'),
+			'stage1_import_immature_count' => arraySafeVal($totals, 'stage1_import_immature_count'),
+			'stage1_mark_orphan_no_earnings_count' => arraySafeVal($totals, 'stage1_mark_orphan_no_earnings_count'),
+			'stage1_blocked_review_count' => arraySafeVal($totals, 'stage1_blocked_review_count'),
+			'projected_pending_earnings_rows' => arraySafeVal($totals, 'projected_pending_earnings_rows'),
+			'projected_pending_earnings_amount_gross' => arraySafeVal($totals, 'projected_pending_earnings_amount_gross'),
+			'projected_orphan_excluded_amount' => arraySafeVal($totals, 'projected_orphan_excluded_amount'),
+			'dryrun_checksums' => $dryrunChecksums,
+		);
+		foreach ($totals as $key => $value) {
+			$report['summary'][$key] = $value;
+		}
+		$report['summary']['intended_future_apply_command_shape'] = $this->forwardCatchupStage1ApprovalFutureCommandShape();
+		$report['summary']['intended_mutation_scope'] = $intendedMutationScope;
+		$report['summary']['mandatory_future_apply_gates'] = $this->forwardCatchupStage1ApprovalFutureApplyGates();
+		$report['summary']['safety_gates'] = $this->forwardCatchupStage1ApprovalSafetyGates($safetyGates);
+		$report['summary']['overall_approval_package_status'] =
+			arraySafeVal($report['summary']['safety_gates'], 'overall_approval_package_status');
+		$report['summary']['recommended_next_stage'] = 'forward-catchup-stage1-apply-command-design';
+		$report['items'] = arraySafeVal($dryrun, 'items', array());
+
+		return $this->guard->finalizeReport($report);
 	}
 
 	private function safetyScanReport()
@@ -3255,6 +3429,316 @@ class BadpoolGuardCommand extends CConsoleCommand
 		$report = BadpoolGuardReport::finalize($report);
 		$report['report_checksum'] = BadpoolGuardReport::checksum($report);
 		return $report;
+	}
+
+	private function forwardCatchupStage1DryrunLimit()
+	{
+		$limit = $this->guard->getOption('limit', self::FORWARD_CATCHUP_STAGE1_DRYRUN_DEFAULT_LIMIT);
+		if (!preg_match('/^[0-9]+$/', (string)$limit) || intval($limit) <= 0) {
+			$this->guard->addError('Invalid --limit. Expected a positive integer.');
+			return false;
+		}
+
+		$limit = intval($limit);
+		if ($limit > self::FORWARD_CATCHUP_STAGE1_DRYRUN_MAX_LIMIT) {
+			$this->guard->addError('Invalid --limit. Maximum is '.self::FORWARD_CATCHUP_STAGE1_DRYRUN_MAX_LIMIT.'.');
+			return false;
+		}
+
+		return $limit;
+	}
+
+	private function forwardCatchupStage1DryrunCandidates($lastPayoutTime, $limit)
+	{
+		if (!$this->guard->tableExists('blocks') || $lastPayoutTime === null || !is_numeric($lastPayoutTime)) {
+			return array();
+		}
+		foreach (array('id', 'coin_id', 'category', 'time', 'blockhash') as $column) {
+			if (!$this->guard->columnExists('blocks', $column)) {
+				return array();
+			}
+		}
+
+		$scope = $this->guard->getScope();
+		$select = array(
+			'B.'.$this->guard->qcol('id').' AS id',
+			'B.'.$this->guard->qcol('time').' AS time',
+			'B.'.$this->guard->qcol('blockhash').' AS blockhash',
+		);
+		foreach (array('height', 'userid', 'workerid') as $column) {
+			if ($this->guard->columnExists('blocks', $column)) {
+				$select[] = 'B.'.$this->guard->qcol($column).' AS '.$this->guard->qcol($column);
+			}
+		}
+		$order = $this->guard->columnExists('blocks', 'height') ?
+			'B.'.$this->guard->qcol('height').' ASC, B.'.$this->guard->qcol('time').' ASC, B.'.$this->guard->qcol('id').' ASC' :
+			'B.'.$this->guard->qcol('time').' ASC, B.'.$this->guard->qcol('id').' ASC';
+
+		return $this->guard->selectAll(
+			'SELECT '.implode(', ', $select).' FROM blocks B '.
+			'WHERE B.'.$this->guard->qcol('coin_id').'=:coin_id '.
+			"AND B.".$this->guard->qcol('category')."='new' ".
+			'AND B.'.$this->guard->qcol('time').'>:last_time '.
+			'AND B.'.$this->guard->qcol('blockhash').' IS NOT NULL '.
+			"AND B.".$this->guard->qcol('blockhash')."!='' ".
+			'ORDER BY '.$order.' LIMIT '.intval($limit),
+			array(':coin_id' => arraySafeVal($scope, 'coin_id'), ':last_time' => $lastPayoutTime)
+		);
+	}
+
+	private function forwardCatchupStage1DryrunClassify($candidates)
+	{
+		$result = array();
+		if (empty($candidates)) {
+			return $result;
+		}
+
+		$coin = db_coins::model()->findByPk(arraySafeVal($this->guard->getScope(), 'coin_id'));
+		$remote = $coin ? new WalletRPC($coin) : null;
+		foreach ($candidates as $candidate) {
+			$item = $candidate;
+			$item['daemon'] = array(
+				'txid' => null,
+				'category' => null,
+				'amount' => null,
+				'confirmations' => null,
+				'getblock_found' => false,
+				'gettransaction_found' => false,
+			);
+			$item['classification'] = 'stage1_blocked_review';
+			if (!$remote) {
+				$item['daemon']['error'] = 'coin rpc record unavailable';
+				$result[] = $item;
+				continue;
+			}
+
+			try {
+				$block = $this->forwardCatchupNormalizeRpcValue($remote->getblock(arraySafeVal($candidate, 'blockhash')));
+				$txids = is_array(arraySafeVal($block, 'tx')) ? arraySafeVal($block, 'tx') : array();
+				$txid = arraySafeVal($txids, 0);
+				$tx = $txid ? $this->forwardCatchupNormalizeRpcValue($remote->gettransaction($txid)) : array();
+			} catch (Exception $e) {
+				$item['daemon']['error'] = $e->getMessage();
+				$result[] = $item;
+				continue;
+			}
+
+			$details = is_array(arraySafeVal($tx, 'details')) ? arraySafeVal($tx, 'details') : array();
+			$detail = is_array(arraySafeVal($details, 0)) ? arraySafeVal($details, 0) : array();
+			$category = arraySafeVal($detail, 'category', arraySafeVal($tx, 'category'));
+			$amount = arraySafeVal($detail, 'amount', arraySafeVal($tx, 'amount'));
+			$confirmations = arraySafeVal($tx, 'confirmations', arraySafeVal($block, 'confirmations'));
+			$item['daemon'] = array(
+				'txid' => $txid,
+				'category' => $category,
+				'amount' => $amount,
+				'confirmations' => $confirmations,
+				'getblock_found' => !empty($block),
+				'gettransaction_found' => !empty($tx),
+			);
+
+			$positiveAmount = is_numeric($amount) && floatval($amount) > 0;
+			$knownConfirmations = is_numeric($confirmations);
+			if ($category === 'generate' && $positiveAmount && $knownConfirmations && intval($confirmations) > 0) {
+				$item['classification'] = 'stage1_import_generate';
+			} elseif ($category === 'immature' && $positiveAmount && $knownConfirmations && intval($confirmations) >= 0) {
+				$item['classification'] = 'stage1_import_immature';
+			} elseif ($category === 'orphan') {
+				$item['classification'] = 'stage1_mark_orphan_no_earnings';
+			}
+			$result[] = $item;
+		}
+
+		return $result;
+	}
+
+	private function forwardCatchupStage1DryrunPlan($classified)
+	{
+		$scope = $this->guard->getScope();
+		$mutations = array();
+		$earnings = array();
+		foreach ($classified as $item) {
+			$daemon = arraySafeVal($item, 'daemon', array());
+			$class = arraySafeVal($item, 'classification');
+			$mutation = array(
+				'blockid' => arraySafeVal($item, 'id'),
+				'height' => arraySafeVal($item, 'height'),
+				'classification' => $class,
+				'would_set_txhash' => arraySafeVal($daemon, 'txid'),
+			);
+			if ($class === 'stage1_import_generate' || $class === 'stage1_import_immature') {
+				$mutation['would_set_amount'] = arraySafeVal($daemon, 'amount');
+				$mutation['would_set_confirmations'] = arraySafeVal($daemon, 'confirmations');
+				$mutation['would_set_category'] = 'immature';
+				$earnings[] = array(
+					'userid' => arraySafeVal($item, 'userid'),
+					'coinid' => arraySafeVal($scope, 'coin_id'),
+					'blockid' => arraySafeVal($item, 'id'),
+					'create_time' => arraySafeVal($item, 'time'),
+					'amount' => arraySafeVal($daemon, 'amount'),
+					'status' => 0,
+					'mature_time' => null,
+					'attribution_model' => 'block_userid_single_recipient',
+					'attribution_model_requires_operator_confirmation' => true,
+					'historical_evidence_mixed' => true,
+					'backendblocknew_not_used' => true,
+					'fee_policy' => 'not_applied_in_dryrun',
+				);
+			} elseif ($class === 'stage1_mark_orphan_no_earnings') {
+				$mutation['would_set_category'] = 'orphan';
+				$mutation['daemon_amount_excluded_from_earnings'] = arraySafeVal($daemon, 'amount');
+			} else {
+				$mutation['would_skip_or_block'] = true;
+			}
+			$mutations[] = $mutation;
+		}
+
+		return array(
+			'projected_block_mutations' => $mutations,
+			'projected_pending_earnings' => $earnings,
+		);
+	}
+
+	private function forwardCatchupStage1DryrunTotals($classified, $plan)
+	{
+		$totals = array(
+			'selected_count' => count($classified),
+			'stage1_import_generate_count' => 0,
+			'stage1_import_immature_count' => 0,
+			'stage1_mark_orphan_no_earnings_count' => 0,
+			'stage1_blocked_review_count' => 0,
+			'projected_pending_earnings_rows' => count(arraySafeVal($plan, 'projected_pending_earnings', array())),
+			'projected_pending_earnings_amount_gross' => 0.0,
+			'projected_orphan_excluded_amount' => 0.0,
+			'first_height' => null,
+			'last_height' => null,
+		);
+		foreach (arraySafeVal($plan, 'projected_pending_earnings', array()) as $earning) {
+			$totals['projected_pending_earnings_amount_gross'] += floatval(arraySafeVal($earning, 'amount', 0));
+		}
+		foreach ($classified as $item) {
+			$height = arraySafeVal($item, 'height');
+			if (is_numeric($height)) {
+				$height = intval($height);
+				$totals['first_height'] = $totals['first_height'] === null ? $height : min($totals['first_height'], $height);
+				$totals['last_height'] = $totals['last_height'] === null ? $height : max($totals['last_height'], $height);
+			}
+			$class = arraySafeVal($item, 'classification');
+			if ($class === 'stage1_import_generate') {
+				$totals['stage1_import_generate_count']++;
+			} elseif ($class === 'stage1_import_immature') {
+				$totals['stage1_import_immature_count']++;
+			} elseif ($class === 'stage1_mark_orphan_no_earnings') {
+				$totals['stage1_mark_orphan_no_earnings_count']++;
+				$totals['projected_orphan_excluded_amount'] += floatval(arraySafeVal(arraySafeVal($item, 'daemon', array()), 'amount', 0));
+			} else {
+				$totals['stage1_blocked_review_count']++;
+			}
+		}
+
+		return $totals;
+	}
+
+	private function forwardCatchupStage1DryrunSafetyGates($checkpoint, $classified, $plan, $limit)
+	{
+		$blockedCount = 0;
+		$orphanBlockids = array();
+		foreach ($classified as $item) {
+			$class = arraySafeVal($item, 'classification');
+			if ($class === 'stage1_blocked_review') {
+				$blockedCount++;
+			} elseif ($class === 'stage1_mark_orphan_no_earnings') {
+				$orphanBlockids[arraySafeVal($item, 'id')] = true;
+			}
+		}
+
+		$orphanEarnings = false;
+		foreach (arraySafeVal($plan, 'projected_pending_earnings', array()) as $earning) {
+			if (isset($orphanBlockids[arraySafeVal($earning, 'blockid')])) {
+				$orphanEarnings = true;
+			}
+		}
+
+		$gates = array(
+			'gate_coin_scope' => !$this->guard->isAllCoinsPreview(),
+			'gate_checkpoint_present' => arraySafeVal($checkpoint, 'last_payout_time') !== null,
+			'gate_batch_limited' => $limit <= self::FORWARD_CATCHUP_STAGE1_DRYRUN_MAX_LIMIT,
+			'gate_daemon_classification_complete' => $blockedCount === 0,
+			'gate_orphans_excluded_from_earnings' => !$orphanEarnings,
+			'gate_no_account_credit' => true,
+			'gate_no_payout_rows' => true,
+			'gate_no_wallet_sends' => true,
+			'gate_no_backend_loop_calls' => true,
+			'gate_operator_attribution_confirmation_required' => true,
+		);
+		$gates['overall_dryrun_status'] = !in_array(false, $gates, true) ? 'pass' : 'blocked';
+		return $gates;
+	}
+
+	private function forwardCatchupStage1ApprovalFutureCommandShape()
+	{
+		return "php yaamp/yiic.php badpoolguard forward-catchup-stage1-apply \\\n".
+			"  --coin-id=<id> \\\n".
+			"  --limit=<n> \\\n".
+			"  --approval-package-checksum=<checksum> \\\n".
+			"  --batch-scope-checksum=<checksum> \\\n".
+			"  --projected-mutation-checksum=<checksum> \\\n".
+			"  --projected-earnings-checksum=<checksum> \\\n".
+			"  --operator-confirms-attribution-model=block_userid_single_recipient";
+	}
+
+	private function forwardCatchupStage1ApprovalMutationScope()
+	{
+		return array(
+			'stage1_import_generate' => array(
+				'update_block' => array('txhash', 'amount', 'confirmations', "category='immature'"),
+				'insert_pending_earning' => array('one row', 'status=0'),
+			),
+			'stage1_import_immature' => array(
+				'update_block' => array('txhash', 'amount', 'confirmations', "category='immature'"),
+				'insert_pending_earning' => array('one row', 'status=0'),
+			),
+			'stage1_mark_orphan_no_earnings' => array(
+				'update_block' => array("category='orphan'"),
+				'create_earnings' => false,
+			),
+			'no_account_credit' => true,
+			'no_payout_row' => true,
+			'no_wallet_send' => true,
+		);
+	}
+
+	private function forwardCatchupStage1ApprovalFutureApplyGates()
+	{
+		return array(
+			'exact_batch_boundary_match' => true,
+			'current_block_category_must_still_be_new' => true,
+			'no_linked_earnings_may_exist' => true,
+			'daemon_classification_must_match_approval_package' => true,
+			'orphan_rows_must_create_no_earnings' => true,
+			'selected_count_must_match_approval_package' => true,
+			'operator_attribution_model_confirmation_required' => true,
+			'account_credit_disabled' => true,
+			'payout_rows_disabled' => true,
+			'wallet_sends_disabled' => true,
+		);
+	}
+
+	private function forwardCatchupStage1ApprovalSafetyGates($dryrunGates)
+	{
+		$gates = array(
+			'gate_read_only' => true,
+			'gate_apply_not_implemented' => true,
+			'gate_no_db_mutations' => true,
+			'gate_no_account_credit' => true,
+			'gate_no_payout_rows' => true,
+			'gate_no_wallet_sends' => true,
+			'gate_no_backend_loop_calls' => true,
+			'gate_dryrun_status_pass' => arraySafeVal($dryrunGates, 'overall_dryrun_status') === 'pass',
+			'gate_operator_confirmation_required' => true,
+		);
+		$gates['overall_approval_package_status'] = !in_array(false, $gates, true) ? 'pass' : 'blocked';
+		return $gates;
 	}
 
 	private function forwardCatchupCheckpoint()

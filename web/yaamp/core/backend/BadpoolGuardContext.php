@@ -16,11 +16,13 @@ class BadpoolGuardContext
 	);
 	private $warnings = array();
 	private $errors = array();
+	private $options = array();
 
 	private $allowedOptions = array(
 		'coin-id',
 		'all-coins-preview',
 		'format',
+		'limit',
 	);
 
 	private $dangerousOptions = array(
@@ -70,6 +72,7 @@ class BadpoolGuardContext
 			}
 		}
 
+		$this->options = $options;
 		$this->resolveScope($options);
 	}
 
@@ -86,6 +89,11 @@ class BadpoolGuardContext
 	public function getScope()
 	{
 		return $this->scope;
+	}
+
+	public function getOption($name, $default=null)
+	{
+		return array_key_exists($name, $this->options) ? $this->options[$name] : $default;
 	}
 
 	public function getCoin()
