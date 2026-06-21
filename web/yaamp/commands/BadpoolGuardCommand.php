@@ -31,6 +31,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 		'forward-catchup-approval-package',
 		'forward-catchup-stage1-apply-dryrun',
 		'forward-catchup-stage1-apply-approval-package',
+		'forward-catchup-stage1-apply',
 		'safety-scan',
 		'guard-context',
 	);
@@ -50,7 +51,11 @@ class BadpoolGuardCommand extends CConsoleCommand
 			return 2;
 		}
 
-		$this->guard = BadpoolGuardContext::fromArgs($action, $args);
+		$actionArgs = $args;
+		if ($action === 'forward-catchup-stage1-apply') {
+			$actionArgs = $this->forwardCatchupStage1ApplyContextArgs($args);
+		}
+		$this->guard = BadpoolGuardContext::fromArgs($action, $actionArgs);
 		if (!$this->guard->isValid()) {
 			$this->emitFinalReport($this->guard->refusalReport());
 			return 2;
@@ -108,6 +113,9 @@ class BadpoolGuardCommand extends CConsoleCommand
 			case 'forward-catchup-stage1-apply-approval-package':
 				$report = $this->forwardCatchupStage1ApplyApprovalPackageReport();
 				break;
+			case 'forward-catchup-stage1-apply':
+				$report = $this->forwardCatchupStage1ApplyReport($args);
+				break;
 			case 'safety-scan':
 				$report = $this->safetyScanReport();
 				break;
@@ -144,6 +152,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 			"       php yaamp/yiic.php badpoolguard forward-catchup-approval-package --coin-id=<id> [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard forward-catchup-stage1-apply-dryrun --coin-id=<id> [--limit=<n>] [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard forward-catchup-stage1-apply-approval-package --coin-id=<id> [--limit=<n>] [--format=json|text]\n".
+			"       php yaamp/yiic.php badpoolguard forward-catchup-stage1-apply --coin-id=<id> --approval-package-checksum=<sha256> --batch-scope-checksum=<sha256> --projected-mutation-checksum=<sha256> --projected-earnings-checksum=<sha256> --operator-confirms-attribution-model=block_userid_single_recipient --format=json\n".
 			"       php yaamp/yiic.php badpoolguard safety-scan --coin-id=<id> [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard guard-context --coin-id=<id> [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard overview --all-coins-preview [--format=json|text]\n\n".
@@ -796,6 +805,277 @@ class BadpoolGuardCommand extends CConsoleCommand
 		$report['approval_package_checksum'] = BadpoolGuardReport::checksum($report);
 		$report['report_checksum'] = BadpoolGuardReport::checksum($report);
 		return $report;
+	}
+
+	private function forwardCatchupStage1ApplyReport($args)
+	{
+		$options = $this->forwardCatchupStage1ApplyOptions($args);
+		$report = $this->forwardCatchupStage1ApplyBaseReport($options);
+		$required = array('approval-package-checksum', 'batch-scope-checksum', 'projected-mutation-checksum', 'projected-earnings-checksum');
+
+		if (isset($options['__parse_error'])) {
+			return $this->forwardCatchupStage1ApplyFail($report, 'invalid_option', $options['__parse_error']);
+		}
+		if ($this->guard->isAllCoinsPreview()) {
+			return $this->forwardCatchupStage1ApplyFail($report, 'coin_id_required', 'forward-catchup-stage1-apply requires --coin-id and refuses all-coin scope.');
+		}
+		if ($this->guard->getFormat() !== 'json') {
+			return $this->forwardCatchupStage1ApplyFail($report, 'json_format_required', 'forward-catchup-stage1-apply supports --format=json only.');
+		}
+		foreach ($required as $name) {
+			if (!isset($options[$name]) || $options[$name] === '') {
+				return $this->forwardCatchupStage1ApplyFail($report, 'missing_required_checksum', 'Missing required --'.$name.'.');
+			}
+		}
+		if (arraySafeVal($options, 'operator-confirms-attribution-model') !== 'block_userid_single_recipient') {
+			return $this->forwardCatchupStage1ApplyFail($report, 'attribution_confirmation_required', 'Missing exact --operator-confirms-attribution-model=block_userid_single_recipient.');
+		}
+
+		$approval = $this->forwardCatchupStage1ApplyApprovalPackageReport();
+		if (!$this->guard->isValid()) {
+			return $this->forwardCatchupStage1ApplyFail($report, 'approval_package_recompute_failed', 'Fresh approval package recompute failed.');
+		}
+
+		$report = $this->forwardCatchupStage1ApplyPopulateFromApproval($report, $approval);
+		$checks = array(
+			'approval-package-checksum' => arraySafeVal(arraySafeVal($approval, 'approval_package_checksum', array()), 'value'),
+			'batch-scope-checksum' => arraySafeVal(arraySafeVal($approval, 'batch_scope_checksum', array()), 'value'),
+			'projected-mutation-checksum' => arraySafeVal(arraySafeVal($approval, 'projected_mutation_checksum', array()), 'value'),
+			'projected-earnings-checksum' => arraySafeVal(arraySafeVal($approval, 'projected_earnings_checksum', array()), 'value'),
+		);
+		foreach ($checks as $name => $actual) {
+			if ((string)arraySafeVal($options, $name) !== (string)$actual) {
+				return $this->forwardCatchupStage1ApplyFail($report, 'checksum_mismatch', 'Expected checksum does not match freshly generated approval package state: --'.$name.'.');
+			}
+		}
+		if (arraySafeVal($approval, 'overall_approval_package_status') !== 'pass') {
+			return $this->forwardCatchupStage1ApplyFail($report, 'approval_package_blocked', 'Fresh approval package status is not pass.');
+		}
+
+		$classified = arraySafeVal(arraySafeVal($approval, 'items', array()), 'candidates', array());
+		$mutations = arraySafeVal(arraySafeVal($approval, 'items', array()), 'projected_block_mutations', array());
+		$earnings = arraySafeVal(arraySafeVal($approval, 'items', array()), 'projected_pending_earnings', array());
+		$gate = $this->forwardCatchupStage1ApplyPreflightGates($classified, $mutations, $earnings);
+		if (arraySafeVal($gate, 'status') !== 'pass') {
+			return $this->forwardCatchupStage1ApplyFail($report, arraySafeVal($gate, 'abort_reason'), arraySafeVal($gate, 'message'));
+		}
+
+		$tx = app()->db->beginTransaction();
+		if (!$tx) {
+			return $this->forwardCatchupStage1ApplyFail($report, 'transaction_unavailable', 'Database transaction mechanism is unavailable; refusing partial writes.');
+		}
+		try {
+			$applied = $this->forwardCatchupStage1ApplyMutations($mutations, $earnings);
+			$tx->commit();
+			$report['status'] = 'pass';
+			$report['applied_generated_count'] = $applied['applied_generated_count'];
+			$report['applied_orphan_count'] = $applied['applied_orphan_count'];
+			$report['inserted_earnings_count'] = $applied['inserted_earnings_count'];
+			$report['abort_reason'] = null;
+			return $report;
+		} catch (Exception $e) {
+			if ($tx->active) {
+				$tx->rollback();
+			}
+			return $this->forwardCatchupStage1ApplyFail($report, 'mutation_failed_rolled_back', $e->getMessage());
+		}
+	}
+
+	private function forwardCatchupStage1ApplyContextArgs($args)
+	{
+		$allowed = array('coin-id', 'format');
+		$result = array();
+		foreach ($args as $arg) {
+			if (preg_match('/^--([^=]+)(=.*)?$/', $arg, $m) && in_array(strtolower($m[1]), $allowed, true)) {
+				$result[] = $arg;
+			}
+		}
+		return $result;
+	}
+
+	private function forwardCatchupStage1ApplyOptions($args)
+	{
+		$options = array();
+		$allowed = array('coin-id', 'format', 'approval-package-checksum', 'batch-scope-checksum', 'projected-mutation-checksum', 'projected-earnings-checksum', 'operator-confirms-attribution-model');
+		foreach ($args as $arg) {
+			if (preg_match('/^--([^=]+)=(.*)$/', $arg, $m)) {
+				$name = strtolower($m[1]);
+				if (!in_array($name, $allowed, true)) {
+					$options['__parse_error'] = 'Unknown option refused: --'.$m[1];
+				} elseif (isset($options[$name])) {
+					$options['__parse_error'] = 'Duplicate option refused: --'.$m[1];
+				} else {
+					$options[$name] = $m[2];
+				}
+			} elseif (strpos($arg, '--') === 0) {
+				$options['__parse_error'] = 'Option requires an explicit value: '.$arg;
+			}
+		}
+		return $options;
+	}
+
+	private function forwardCatchupStage1ApplyBaseReport($options)
+	{
+		$report = $this->guard->baseReport('fail');
+		$report['read_only'] = false;
+		$report['stage'] = 'forward-catchup-stage1-apply';
+		$report['coin_id'] = arraySafeVal($this->guard->getScope(), 'coin_id');
+		$report['selected_count'] = 0;
+		$report['applied_generated_count'] = 0;
+		$report['applied_orphan_count'] = 0;
+		$report['inserted_earnings_count'] = 0;
+		$report['projected_pending_earnings_rows'] = 0;
+		$report['projected_pending_earnings_amount_gross'] = 0.0;
+		$report['approval_package_checksum'] = arraySafeVal($options, 'approval-package-checksum');
+		$report['batch_scope_checksum'] = arraySafeVal($options, 'batch-scope-checksum');
+		$report['projected_mutation_checksum'] = arraySafeVal($options, 'projected-mutation-checksum');
+		$report['projected_earnings_checksum'] = arraySafeVal($options, 'projected-earnings-checksum');
+		$report['attribution_model'] = arraySafeVal($options, 'operator-confirms-attribution-model');
+		$report['account_credit'] = false;
+		$report['payout_rows_created'] = false;
+		$report['wallet_sends'] = false;
+		$report['backend_loops_run'] = false;
+		$report['shares_deleted'] = false;
+		$report['abort_reason'] = null;
+		return $report;
+	}
+
+	private function forwardCatchupStage1ApplyPopulateFromApproval($report, $approval)
+	{
+		$totals = arraySafeVal(arraySafeVal($approval, 'summary', array()), 'totals', array());
+		$report['selected_count'] = intval(arraySafeVal($totals, 'selected_count', 0));
+		$report['projected_pending_earnings_rows'] = intval(arraySafeVal($totals, 'projected_pending_earnings_rows', 0));
+		$report['projected_pending_earnings_amount_gross'] = floatval(arraySafeVal($totals, 'projected_pending_earnings_amount_gross', 0));
+		return $report;
+	}
+
+	private function forwardCatchupStage1ApplyFail($report, $reason, $message)
+	{
+		$report['status'] = 'fail';
+		$report['abort_reason'] = $reason;
+		$this->guard->addError($message);
+		return $report;
+	}
+
+	private function forwardCatchupStage1ApplyPreflightGates($classified, $mutations, $earnings)
+	{
+		if (!$this->guard->tableExists('blocks') || !$this->guard->tableExists('earnings')) {
+			return array('status' => 'fail', 'abort_reason' => 'required_table_missing', 'message' => 'blocks and earnings tables are required.');
+		}
+		foreach (array('id', 'coin_id', 'category', 'txhash', 'amount', 'confirmations') as $column) {
+			if (!$this->guard->columnExists('blocks', $column)) {
+				return array('status' => 'fail', 'abort_reason' => 'blocks_schema_missing', 'message' => 'Required blocks column missing: '.$column.'.');
+			}
+		}
+		foreach (array('id', 'userid', 'coinid', 'blockid', 'amount', 'status') as $column) {
+			if (!$this->guard->columnExists('earnings', $column)) {
+				return array('status' => 'fail', 'abort_reason' => 'earnings_schema_missing', 'message' => 'Required earnings column missing: '.$column.'.');
+			}
+		}
+		$allowed = array('stage1_import_generate', 'stage1_import_immature', 'stage1_mark_orphan_no_earnings');
+		foreach ($classified as $idx => $item) {
+			if (!in_array(arraySafeVal($item, 'classification'), $allowed, true)) {
+				return array('status' => 'fail', 'abort_reason' => 'daemon_classification_blocked', 'message' => 'Daemon classification is not applyable for selected block index '.$idx.'.');
+			}
+			$row = $this->guard->selectRow(
+				'SELECT '.$this->guard->selectColumns('blocks', array('id', 'coin_id', 'category', 'height')).' FROM blocks WHERE '.$this->guard->qcol('id').'=:id',
+				array(':id' => arraySafeVal($item, 'id'))
+			);
+			if (!$row || intval(arraySafeVal($row, 'coin_id')) !== intval(arraySafeVal($this->guard->getScope(), 'coin_id'))) {
+				return array('status' => 'fail', 'abort_reason' => 'selected_block_scope_changed', 'message' => 'Selected block ID no longer matches approval package scope.');
+			}
+			if ($this->guard->columnExists('blocks', 'height') && (string)arraySafeVal($row, 'height') !== (string)arraySafeVal($item, 'height')) {
+				return array('status' => 'fail', 'abort_reason' => 'selected_block_height_changed', 'message' => 'Selected block height differs from approval package scope.');
+			}
+			if (arraySafeVal($row, 'category') !== 'new') {
+				return array('status' => 'fail', 'abort_reason' => 'selected_block_not_new', 'message' => 'Selected block is no longer category=new.');
+			}
+			$linked = $this->guard->selectRow(
+				'SELECT COUNT(*) AS row_count FROM earnings WHERE '.$this->guard->qcol('blockid').'=:blockid',
+				array(':blockid' => arraySafeVal($item, 'id'))
+			);
+			if (intval(arraySafeVal($linked, 'row_count', 0)) !== 0) {
+				return array('status' => 'fail', 'abort_reason' => 'linked_earnings_exist', 'message' => 'Selected block already has linked earnings.');
+			}
+		}
+		foreach ($earnings as $earning) {
+			$found = false;
+			foreach ($classified as $item) {
+				if ((string)arraySafeVal($item, 'id') === (string)arraySafeVal($earning, 'blockid')) {
+					$found = true;
+					if ((string)arraySafeVal($earning, 'userid') !== (string)arraySafeVal($item, 'userid')) {
+						return array('status' => 'fail', 'abort_reason' => 'earning_recipient_mismatch', 'message' => 'Projected earning recipient does not match selected block userid.');
+					}
+				}
+			}
+			if (!$found) {
+				return array('status' => 'fail', 'abort_reason' => 'earning_outside_batch', 'message' => 'Projected earning references a block outside selected scope.');
+			}
+		}
+		return array('status' => 'pass');
+	}
+
+	private function forwardCatchupStage1ApplyMutations($mutations, $earnings)
+	{
+		$earningsByBlock = array();
+		foreach ($earnings as $earning) {
+			$earningsByBlock[(string)arraySafeVal($earning, 'blockid')] = $earning;
+		}
+		$appliedGenerated = 0;
+		$appliedOrphan = 0;
+		$inserted = 0;
+		foreach ($mutations as $mutation) {
+			$class = arraySafeVal($mutation, 'classification');
+			$blockid = arraySafeVal($mutation, 'blockid');
+			if ($class === 'stage1_import_generate' || $class === 'stage1_import_immature') {
+				$count = app()->db->createCommand()->update('blocks', array(
+					'txhash' => arraySafeVal($mutation, 'would_set_txhash'),
+					'amount' => arraySafeVal($mutation, 'would_set_amount'),
+					'confirmations' => arraySafeVal($mutation, 'would_set_confirmations'),
+					'category' => 'immature',
+				), 'id=:id AND category=:category', array(':id' => $blockid, ':category' => 'new'));
+				if (intval($count) !== 1) {
+					throw new CException('Generated block update affected '.intval($count).' rows for block '.$blockid.'.');
+				}
+				if (!isset($earningsByBlock[(string)$blockid])) {
+					throw new CException('Projected earning missing for generated block '.$blockid.'.');
+				}
+				$earning = $earningsByBlock[(string)$blockid];
+				$exists = $this->guard->selectRow('SELECT COUNT(*) AS row_count FROM earnings WHERE '.$this->guard->qcol('blockid').'=:blockid', array(':blockid' => $blockid));
+				if (intval(arraySafeVal($exists, 'row_count', 0)) !== 0) {
+					throw new CException('Duplicate earning protection tripped for block '.$blockid.'.');
+				}
+				$row = array(
+					'userid' => arraySafeVal($earning, 'userid'),
+					'coinid' => arraySafeVal($earning, 'coinid'),
+					'blockid' => $blockid,
+					'amount' => arraySafeVal($earning, 'amount'),
+					'status' => 0,
+				);
+				if ($this->guard->columnExists('earnings', 'create_time')) {
+					$row['create_time'] = arraySafeVal($earning, 'create_time');
+				}
+				if ($this->guard->columnExists('earnings', 'mature_time')) {
+					$row['mature_time'] = null;
+				}
+				app()->db->createCommand()->insert('earnings', $row);
+				$appliedGenerated++;
+				$inserted++;
+			} elseif ($class === 'stage1_mark_orphan_no_earnings') {
+				$count = app()->db->createCommand()->update('blocks', array('category' => 'orphan'), 'id=:id AND category=:category', array(':id' => $blockid, ':category' => 'new'));
+				if (intval($count) !== 1) {
+					throw new CException('Orphan block update affected '.intval($count).' rows for block '.$blockid.'.');
+				}
+				$appliedOrphan++;
+			} else {
+				throw new CException('Unapplyable mutation classification for block '.$blockid.'.');
+			}
+		}
+		return array(
+			'applied_generated_count' => $appliedGenerated,
+			'applied_orphan_count' => $appliedOrphan,
+			'inserted_earnings_count' => $inserted,
+		);
 	}
 
 	private function safetyScanReport()
