@@ -709,6 +709,27 @@ class BadpoolGuardCommand extends CConsoleCommand
 			'operator_must_confirm_attribution_model' => true,
 			'attribution_model' => 'block_userid_single_recipient',
 		);
+		$futureApplyCommandShape = array(
+			'php',
+			'yaamp/yiic.php',
+			'badpoolguard',
+			'forward-catchup-stage1-apply',
+			'--coin-id='.arraySafeVal($this->guard->getScope(), 'coin_id'),
+			'--approval-package-checksum=<approval_package_checksum>',
+			'--batch-scope-checksum='.arraySafeVal($dryrun, 'batch_scope_checksum'),
+			'--projected-mutation-checksum='.arraySafeVal($dryrun, 'projected_mutation_checksum'),
+			'--projected-earnings-checksum='.arraySafeVal($dryrun, 'projected_earnings_checksum'),
+			'--operator-confirms-attribution-model=block_userid_single_recipient',
+		);
+		$mandatoryFutureApplyGates = array(
+			'current block category must still be new',
+			'no linked earnings',
+			'daemon classification must still match this approval package',
+			'orphan rows create no earnings',
+			'no account credit',
+			'no payout rows',
+			'no wallet sends',
+		);
 		$approvalInputChecksum = BadpoolGuardReport::checksum($approvalInput);
 		$intendedMutationScopeChecksum = BadpoolGuardReport::checksum(array(
 			'read_only_approval_package_for_future_design' => true,
@@ -721,6 +742,8 @@ class BadpoolGuardCommand extends CConsoleCommand
 			'batch_scope_checksum' => arraySafeVal($dryrun, 'batch_scope_checksum'),
 			'projected_mutation_checksum' => arraySafeVal($dryrun, 'projected_mutation_checksum'),
 			'projected_earnings_checksum' => arraySafeVal($dryrun, 'projected_earnings_checksum'),
+			'future_apply_command_shape' => $futureApplyCommandShape,
+			'mandatory_future_apply_gates' => $mandatoryFutureApplyGates,
 		));
 
 		$report = $dryrun;
@@ -740,6 +763,8 @@ class BadpoolGuardCommand extends CConsoleCommand
 		$report['projected_orphan_excluded_amount'] = arraySafeVal($totals, 'projected_orphan_excluded_amount');
 		$report['approval_input_checksum'] = $approvalInputChecksum;
 		$report['intended_mutation_scope_checksum'] = $intendedMutationScopeChecksum;
+		$report['intended_future_apply_command_shape'] = $futureApplyCommandShape;
+		$report['mandatory_future_apply_gates'] = $mandatoryFutureApplyGates;
 		$report['overall_approval_package_status'] = arraySafeVal($safetyGates, 'overall_dryrun_status') === 'pass' ? 'pass' : 'blocked';
 		$report['recommended_next_stage'] = 'forward-catchup-stage1-apply-command-design';
 		$report['summary']['approval_package'] = array(
@@ -747,6 +772,8 @@ class BadpoolGuardCommand extends CConsoleCommand
 			'approval_package_version' => $report['approval_package_version'],
 			'approval_required' => $report['approval_required'],
 			'apply_command_not_implemented' => $report['apply_command_not_implemented'],
+			'intended_future_apply_command_shape' => $futureApplyCommandShape,
+			'mandatory_future_apply_gates' => $mandatoryFutureApplyGates,
 			'overall_approval_package_status' => $report['overall_approval_package_status'],
 			'recommended_next_stage' => $report['recommended_next_stage'],
 		);
