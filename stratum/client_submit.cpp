@@ -372,10 +372,56 @@ static bool share_decision_diag_rate_limited(const char *decision)
 	return true;
 }
 
+static bool is_sha256d_submit(YAAMP_JOB *job)
+{
+	return g_current_algo && !strcmp(g_current_algo->name, "sha256") &&
+		job && job->coind && job->coind->id == 1270;
+}
+
+static void diff_to_sha256_target_hex(double difficulty, char *target_hex)
+{
+	uint64_t target64 = diff_to_target(difficulty);
+
+	memset(target_hex, '0', 64);
+	target_hex[64] = '\0';
+	sprintf(target_hex + 4, "%016llx", (unsigned long long)target64);
+	memset(target_hex + 20, '0', 44);
+}
+
+static bool sha256_hash_meets_share_target(YAAMP_JOB *job, YAAMP_JOB_VALUES *submitvalues, YAAMP_JOB_TEMPLATE *templ, double difficulty,
+	uint64_t hash_int, uint64_t user_target, uint64_t coin_target, bool *meets_user, bool *meets_coin)
+{
+	char user_target_hex[65];
+	char coin_target_hex[65];
+
+	diff_to_sha256_target_hex(difficulty, user_target_hex);
+	bool user_ok = hash_be_meets_target_hex(submitvalues->hash_be, user_target_hex);
+	bool coin_ok = compact_to_target_hex(templ->nbits, coin_target_hex) &&
+		hash_be_meets_target_hex(submitvalues->hash_be, coin_target_hex);
+
+	if(meets_user) *meets_user = user_ok;
+	if(meets_coin) *meets_coin = coin_ok;
+
+	if(g_debuglog_hash)
+	{
+		debuglog("sha256_target_check hash_be=%s user_target_hex=%s coin_target_hex=%s user_ok=%d coin_ok=%d\n",
+			submitvalues->hash_be, user_target_hex, coin_target_hex, user_ok, coin_ok);
+	}
+
+	if(is_sha256d_submit(job) && !g_debuglog_hash && share_decision_diag_rate_limited("SHA256_TARGET_CHECK") == false)
+	{
+		debuglog("sha256_target_check_safe coinid=%d hash_be=%s hash_int=%016llx user_target=%016llx coin_target=%016llx "
+			"user_target_hex=%s coin_target_hex=%s user_ok=%d coin_ok=%d\n",
+			job->coind->id, submitvalues->hash_be, (unsigned long long)hash_int, (unsigned long long)user_target,
+			(unsigned long long)coin_target, user_target_hex, coin_target_hex, user_ok, coin_ok);
+	}
+	return user_ok || coin_ok;
+}
+
 static void log_share_decision_diag(YAAMP_CLIENT *client, YAAMP_JOB *job, const char *decision, const char *result,
 	uint64_t hash_int, uint64_t user_target, uint64_t coin_target, double share_diff)
 {
-	if(!g_debuglog_hash) return;
+	if(!g_debuglog_hash && !is_sha256d_submit(job)) return;
 	if(share_decision_diag_rate_limited(decision)) return;
 
 	YAAMP_JOB_TEMPLATE *templ = job? job->templ: NULL;
@@ -659,24 +705,30 @@ bool client_submit(YAAMP_CLIENT *client, json_value *json_params)
 	}
 
 	uint64_t hash_int = get_hash_difficulty(submitvalues.hash_bin);
-	debuglog("POOL hash_hex=%s\n", submitvalues.hash_hex);
-	debuglog("POOL hash_be=%s\n", submitvalues.hash_be);
 	
 	uint64_t user_target = diff_to_target(client->difficulty_actual);
 	uint64_t coin_target = decode_compact(templ->nbits);
 	if (templ->nbits && !coin_target) coin_target = 0xFFFF000000000000ULL;
-	
-	debuglog("POOL user_target=%016llx\n", (unsigned long long)user_target);
-	debuglog("POOL coin_target=%016llx\n", (unsigned long long)coin_target);
 
 	if (g_debuglog_hash) {
+		debuglog("POOL hash_hex=%s\n", submitvalues.hash_hex);
+		debuglog("POOL hash_be=%s\n", submitvalues.hash_be);
+		debuglog("POOL user_target=%016llx\n", (unsigned long long)user_target);
+		debuglog("POOL coin_target=%016llx\n", (unsigned long long)coin_target);
 		debuglog("%016llx actual\n", hash_int);
 		debuglog("%016llx target\n", user_target);
 		debuglog("%016llx coin\n", coin_target);
 	}
-	bool hash_gt_user_target = hash_int > user_target;
-	bool hash_gt_coin_target = hash_int > coin_target;
-	if(hash_gt_user_target && hash_gt_coin_target)
+
+	bool hash_meets_user_target = hash_int <= user_target;
+	bool hash_meets_coin_target = hash_int <= coin_target;
+	if(is_sha256d_submit(job))
+	{
+		sha256_hash_meets_share_target(job, &submitvalues, templ, client->difficulty_actual,
+			hash_int, user_target, coin_target, &hash_meets_user_target, &hash_meets_coin_target);
+	}
+
+	if(!hash_meets_user_target && !hash_meets_coin_target)
 	{
 		log_share_decision_diag(client, job, "LOW_DIFFICULTY_REJECT", "code=26", hash_int, user_target, coin_target, 0);
 		client_submit_error_diag(client, job, 26, "Low difficulty share", extranonce2, ntime, nonce, true, true, hash_int, user_target, coin_target);
