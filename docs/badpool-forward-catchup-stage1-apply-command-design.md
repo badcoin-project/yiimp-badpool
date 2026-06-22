@@ -28,7 +28,7 @@ php yaamp/yiic.php badpoolguard forward-catchup-stage1-apply \
   --format=json
 ```
 
-The checksum arguments are intended to bind execution to the exact approval package, batch scope, projected block mutations, and projected earnings that were reviewed before apply.
+The checksum arguments are intended to bind execution to the approved stable authorization package, batch scope, projected block mutations, and projected earnings that were reviewed before apply. Live daemon confirmation counts are volatile audit data and are excluded from the stable approval and projected mutation authorization checksums; the apply command may write the current daemon confirmation count observed at execution time only after all stable checksum and pre-mutation gates pass.
 
 ## Operator Preconditions
 
@@ -70,7 +70,7 @@ The future command may perform only the following Stage 1 mutations.
 
 For selected rows classified by the approved package as generated/immature, the command may:
 
-1. Update the block row with the approved daemon-observed values:
+1. Update the block row with the approved daemon-observed values, except that `confirmations` may use the current execution-time daemon value because it is expected to drift naturally:
    - `txhash`
    - `amount`
    - `confirmations`
