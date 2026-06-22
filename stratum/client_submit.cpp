@@ -336,6 +336,72 @@ static void client_do_submit(YAAMP_CLIENT *client, YAAMP_JOB *job, YAAMP_JOB_VAL
 	free(block_hex);
 }
 
+
+static int share_decision_diag_index(const char *decision)
+{
+	if(!decision) return 0;
+	if(!strcmp(decision, "LOW_DIFFICULTY_REJECT")) return 1;
+	if(!strcmp(decision, "PROCEED_TO_SUBMIT")) return 2;
+	if(!strcmp(decision, "PROCEED_TO_CLIENT_DO_SUBMIT")) return 3;
+	if(!strcmp(decision, "PROCEED_TO_REMOTE_SUBMIT")) return 4;
+	if(!strcmp(decision, "SUBMIT_RETURNED")) return 5;
+	if(!strcmp(decision, "SHARE_ADD_BEGIN")) return 6;
+	if(!strcmp(decision, "SHARE_ADD_DONE")) return 7;
+	return 0;
+}
+
+static bool share_decision_diag_rate_limited(const char *decision)
+{
+	static time_t last_log[16];
+	static unsigned int suppressed[16];
+	int idx = share_decision_diag_index(decision);
+	time_t now = time(NULL);
+
+	if(last_log[idx] != now)
+	{
+		if(suppressed[idx])
+		{
+			debuglog("share_decision_diag_suppressed decision=%s count=%u\n", decision? decision: "-", suppressed[idx]);
+			suppressed[idx] = 0;
+		}
+		last_log[idx] = now;
+		return false;
+	}
+
+	suppressed[idx]++;
+	return true;
+}
+
+static void log_share_decision_diag(YAAMP_CLIENT *client, YAAMP_JOB *job, const char *decision, const char *result,
+	uint64_t hash_int, uint64_t user_target, uint64_t coin_target, double share_diff)
+{
+	if(!g_debuglog_hash) return;
+	if(share_decision_diag_rate_limited(decision)) return;
+
+	YAAMP_JOB_TEMPLATE *templ = job? job->templ: NULL;
+	YAAMP_COIND *coind = job? job->coind: NULL;
+
+	debuglog("share_decision_diag algo=%s decision=%s result=%s jobid=%x coinid=%d coin=%s worker_uid=%d client_ip=%s "
+		"difficulty=%.8f nbits=%s hash_int=%016llx user_target=%016llx coin_target=%016llx "
+		"hash_gt_user_target=%d hash_gt_coin_target=%d share_diff=%.8f\n",
+		g_current_algo? g_current_algo->name: g_stratum_algo,
+		decision? decision: "-",
+		result? result: "-",
+		job? job->id: 0,
+		coind? coind->id: 0,
+		coind? coind->symbol: "-",
+		client? client->userid: 0,
+		(client && client->sock)? client->sock->ip: "-",
+		client? client->difficulty_actual: 0,
+		(templ && templ->nbits[0])? templ->nbits: "-",
+		(unsigned long long)hash_int,
+		(unsigned long long)user_target,
+		(unsigned long long)coin_target,
+		hash_int > user_target,
+		hash_int > coin_target,
+		share_diff);
+}
+
 static bool submit_reject_diag_enabled()
 {
 	return g_debuglog_hash;
@@ -608,16 +674,28 @@ bool client_submit(YAAMP_CLIENT *client, json_value *json_params)
 		debuglog("%016llx target\n", user_target);
 		debuglog("%016llx coin\n", coin_target);
 	}
-	if(hash_int > user_target && hash_int > coin_target)
+	bool hash_gt_user_target = hash_int > user_target;
+	bool hash_gt_coin_target = hash_int > coin_target;
+	if(hash_gt_user_target && hash_gt_coin_target)
 	{
+		log_share_decision_diag(client, job, "LOW_DIFFICULTY_REJECT", "code=26", hash_int, user_target, coin_target, 0);
 		client_submit_error_diag(client, job, 26, "Low difficulty share", extranonce2, ntime, nonce, true, true, hash_int, user_target, coin_target);
 		return true;
 	}
 
+	log_share_decision_diag(client, job, "PROCEED_TO_SUBMIT", "hash_target_gate_passed", hash_int, user_target, coin_target, 0);
 	if(job->coind)
+	{
+		log_share_decision_diag(client, job, "PROCEED_TO_CLIENT_DO_SUBMIT", "begin", hash_int, user_target, coin_target, 0);
 		client_do_submit(client, job, &submitvalues, extranonce2, ntime, nonce, vote);
+		log_share_decision_diag(client, job, "SUBMIT_RETURNED", "client_do_submit_returned", hash_int, user_target, coin_target, 0);
+	}
 	else
+	{
+		log_share_decision_diag(client, job, "PROCEED_TO_REMOTE_SUBMIT", "begin", hash_int, user_target, coin_target, 0);
 		remote_submit(client, job, &submitvalues, extranonce2, ntime, nonce);
+		log_share_decision_diag(client, job, "SUBMIT_RETURNED", "remote_submit_returned", hash_int, user_target, coin_target, 0);
+	}
 
 	client_send_result(client, "true");
 	client_record_difficulty(client);
@@ -640,7 +718,9 @@ bool client_submit(YAAMP_CLIENT *client, json_value *json_params)
 				jobid, extranonce2, ntime, nonce, share_diff, client->difficulty_actual);
 	}
 
+	log_share_decision_diag(client, job, "SHARE_ADD_BEGIN", "valid_true", hash_int, user_target, coin_target, share_diff);
 	share_add(client, job, true, extranonce2, ntime, nonce, share_diff, 0);
+	log_share_decision_diag(client, job, "SHARE_ADD_DONE", "reached_after_share_add", hash_int, user_target, coin_target, share_diff);
 	object_unlock(job);
 
 	return true;
