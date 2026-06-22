@@ -631,7 +631,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 			'coin_id' => arraySafeVal($this->guard->getScope(), 'coin_id'),
 			'checkpoint' => $lastPayoutTime,
 			'limit' => $limit,
-			'block_ids' => $this->forwardCatchupApprovalBatchIds($candidates),
+			'blocks' => $this->forwardCatchupStage1BatchScopeBlocks($candidates),
 		);
 
 		$report = $this->guard->baseReport();
@@ -648,7 +648,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 			'checkpoint' => $lastPayoutTime,
 		));
 		$report['batch_scope_checksum'] = BadpoolGuardReport::checksum($batchScope);
-		$report['projected_mutation_checksum'] = BadpoolGuardReport::checksum(arraySafeVal($plan, 'projected_block_mutations', array()));
+		$report['projected_mutation_checksum'] = BadpoolGuardReport::checksum($this->forwardCatchupStage1StableProjectedMutations(arraySafeVal($plan, 'projected_block_mutations', array())));
 		$report['projected_earnings_checksum'] = BadpoolGuardReport::checksum(arraySafeVal($plan, 'projected_pending_earnings', array()));
 		$report['summary']['checkpoint'] = $checkpoint;
 		$report['summary']['limit'] = array(
@@ -674,7 +674,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 		);
 		$report['summary']['totals'] = $totals;
 		$report['summary']['safety_gates'] = $safetyGates;
-		$report['summary']['future_apply_constraints'] = array(
+		$report['summary']['apply_constraints'] = array(
 			'exact_batch_boundary_required' => true,
 			'approval_checksum_required' => true,
 			'batch_checksum_required' => true,
@@ -682,6 +682,8 @@ class BadpoolGuardCommand extends CConsoleCommand
 			'abort_if_linked_earnings_already_exist' => true,
 			"abort_if_block_no_longer_category_new" => true,
 			'abort_if_daemon_classification_changes' => true,
+			'confirmation_count_excluded_from_authorization_checksum' => true,
+			'current_confirmation_count_written_at_execution_time' => true,
 			'orphan_creates_no_earnings' => true,
 		);
 		$report['summary']['recommended_next_stage'] = 'forward-catchup-stage1-apply-approval';
@@ -721,7 +723,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 		$batchScopeChecksumValue = arraySafeVal(arraySafeVal($dryrun, 'batch_scope_checksum', array()), 'value');
 		$projectedMutationChecksumValue = arraySafeVal(arraySafeVal($dryrun, 'projected_mutation_checksum', array()), 'value');
 		$projectedEarningsChecksumValue = arraySafeVal(arraySafeVal($dryrun, 'projected_earnings_checksum', array()), 'value');
-		$futureApplyCommandShape = array(
+		$applyCommandShape = array(
 			'php',
 			'yaamp/yiic.php',
 			'badpoolguard',
@@ -733,7 +735,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 			'--projected-earnings-checksum='.$projectedEarningsChecksumValue,
 			'--operator-confirms-attribution-model=block_userid_single_recipient',
 		);
-		$mandatoryFutureApplyGates = array(
+		$mandatoryApplyGates = array(
 			'current block category must still be new',
 			'no linked earnings',
 			'daemon classification must still match this approval package',
@@ -753,8 +755,8 @@ class BadpoolGuardCommand extends CConsoleCommand
 		);
 		$approvalInputChecksum = BadpoolGuardReport::checksum($approvalInput);
 		$intendedMutationScopeChecksum = BadpoolGuardReport::checksum(array(
-			'read_only_approval_package_for_future_design' => true,
-			'apply_command_not_implemented' => true,
+			'read_only_approval_package' => true,
+			'apply_command_implemented' => true,
 			'no_db_writes' => true,
 			'no_account_credit' => true,
 			'no_payout_rows' => true,
@@ -763,8 +765,8 @@ class BadpoolGuardCommand extends CConsoleCommand
 			'batch_scope_checksum' => arraySafeVal($dryrun, 'batch_scope_checksum'),
 			'projected_mutation_checksum' => arraySafeVal($dryrun, 'projected_mutation_checksum'),
 			'projected_earnings_checksum' => arraySafeVal($dryrun, 'projected_earnings_checksum'),
-			'future_apply_command_shape' => $futureApplyCommandShape,
-			'mandatory_future_apply_gates' => $mandatoryFutureApplyGates,
+			'apply_command_shape' => $applyCommandShape,
+			'mandatory_apply_gates' => $mandatoryApplyGates,
 			'intended_mutation_scope' => $intendedMutationScope,
 		));
 
@@ -772,7 +774,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 		$report['approval_package_type'] = 'forward-catchup-stage1-apply';
 		$report['approval_package_version'] = 1;
 		$report['approval_required'] = true;
-		$report['apply_command_not_implemented'] = true;
+		$report['apply_command_implemented'] = true;
 		$report['operator_must_confirm_attribution_model'] = true;
 		$report['attribution_model'] = 'block_userid_single_recipient';
 		$report['backendblocknew_not_used'] = true;
@@ -785,24 +787,39 @@ class BadpoolGuardCommand extends CConsoleCommand
 		$report['projected_orphan_excluded_amount'] = arraySafeVal($totals, 'projected_orphan_excluded_amount');
 		$report['approval_input_checksum'] = $approvalInputChecksum;
 		$report['intended_mutation_scope_checksum'] = $intendedMutationScopeChecksum;
-		$report['intended_future_apply_command_shape'] = $futureApplyCommandShape;
-		$report['mandatory_future_apply_gates'] = $mandatoryFutureApplyGates;
+		$report['intended_apply_command_shape'] = $applyCommandShape;
+		$report['mandatory_apply_gates'] = $mandatoryApplyGates;
 		$report['intended_mutation_scope'] = $intendedMutationScope;
 		$report['overall_approval_package_status'] = arraySafeVal($safetyGates, 'overall_dryrun_status') === 'pass' ? 'pass' : 'blocked';
 		$report['recommended_next_stage'] = 'forward-catchup-stage1-apply-command-design';
+		$report['stable_authorization'] = array(
+			'checksum_fields' => array(
+				'approval_package_checksum',
+				'batch_scope_checksum',
+				'projected_mutation_checksum',
+				'projected_earnings_checksum',
+			),
+			'volatile_fields_excluded' => array(
+				'generated_at',
+				'report_checksum',
+				'live_daemon_confirmation_count',
+			),
+			'confirmation_policy' => 'confirmations are excluded from authorization checksums and current daemon confirmations are written at execution time after stable gates pass',
+			'manual_validation_note' => 'In environments without a safe local fixture, validate by regenerating an approval package, waiting for confirmation drift, and confirming apply still passes stable checksum gates before mutation.',
+		);
 		$report['summary']['approval_package'] = array(
 			'approval_package_type' => $report['approval_package_type'],
 			'approval_package_version' => $report['approval_package_version'],
 			'approval_required' => $report['approval_required'],
-			'apply_command_not_implemented' => $report['apply_command_not_implemented'],
-			'intended_future_apply_command_shape' => $futureApplyCommandShape,
-			'mandatory_future_apply_gates' => $mandatoryFutureApplyGates,
+			'apply_command_implemented' => $report['apply_command_implemented'],
+			'intended_apply_command_shape' => $applyCommandShape,
+			'mandatory_apply_gates' => $mandatoryApplyGates,
 			'intended_mutation_scope' => $intendedMutationScope,
 			'overall_approval_package_status' => $report['overall_approval_package_status'],
 			'recommended_next_stage' => $report['recommended_next_stage'],
 		);
 		unset($report['report_checksum']);
-		$report['approval_package_checksum'] = BadpoolGuardReport::checksum($report);
+		$report['approval_package_checksum'] = $this->forwardCatchupStage1StableApprovalPackageChecksum($report);
 		$report['report_checksum'] = BadpoolGuardReport::checksum($report);
 		return $report;
 	}
@@ -955,6 +972,80 @@ class BadpoolGuardCommand extends CConsoleCommand
 		$report['abort_reason'] = $reason;
 		$this->guard->addError($message);
 		return $report;
+	}
+
+	private function forwardCatchupStage1StableProjectedMutations($mutations)
+	{
+		$stable = array();
+		foreach ($mutations as $mutation) {
+			$item = array(
+				'blockid' => arraySafeVal($mutation, 'blockid'),
+				'height' => arraySafeVal($mutation, 'height'),
+				'classification' => arraySafeVal($mutation, 'classification'),
+				'would_set_txhash' => arraySafeVal($mutation, 'would_set_txhash'),
+				'would_set_category' => arraySafeVal($mutation, 'would_set_category'),
+			);
+			if (array_key_exists('would_set_amount', $mutation)) {
+				$item['would_set_amount'] = arraySafeVal($mutation, 'would_set_amount');
+			}
+			if (array_key_exists('daemon_amount_excluded_from_earnings', $mutation)) {
+				$item['daemon_amount_excluded_from_earnings'] = arraySafeVal($mutation, 'daemon_amount_excluded_from_earnings');
+			}
+			if (array_key_exists('would_skip_or_block', $mutation)) {
+				$item['would_skip_or_block'] = arraySafeVal($mutation, 'would_skip_or_block');
+			}
+			$stable[] = $item;
+		}
+		return $stable;
+	}
+
+	private function forwardCatchupStage1BatchScopeBlocks($candidates)
+	{
+		$blocks = array();
+		foreach ($candidates as $candidate) {
+			$blocks[] = array(
+				'id' => arraySafeVal($candidate, 'id'),
+				'height' => arraySafeVal($candidate, 'height'),
+			);
+		}
+		return $blocks;
+	}
+
+	private function forwardCatchupStage1StableApprovalPackageChecksum($approval)
+	{
+		$items = arraySafeVal($approval, 'items', array());
+		$summary = arraySafeVal($approval, 'summary', array());
+		$totals = arraySafeVal($summary, 'totals', array());
+		return BadpoolGuardReport::checksum(array(
+			'approval_package_type' => arraySafeVal($approval, 'approval_package_type'),
+			'approval_package_version' => arraySafeVal($approval, 'approval_package_version'),
+			'coin_id' => arraySafeVal(arraySafeVal($approval, 'scope', array()), 'coin_id'),
+			'approval_required' => arraySafeVal($approval, 'approval_required'),
+			'attribution_model' => arraySafeVal($approval, 'attribution_model'),
+			'operator_must_confirm_attribution_model' => arraySafeVal($approval, 'operator_must_confirm_attribution_model'),
+			'overall_approval_package_status' => arraySafeVal($approval, 'overall_approval_package_status'),
+			'selected_count' => arraySafeVal($approval, 'selected_count'),
+			'first_height' => arraySafeVal($approval, 'first_height'),
+			'last_height' => arraySafeVal($approval, 'last_height'),
+			'projected_pending_earnings_rows' => arraySafeVal($approval, 'projected_pending_earnings_rows'),
+			'projected_pending_earnings_amount_gross' => arraySafeVal($approval, 'projected_pending_earnings_amount_gross'),
+			'projected_orphan_excluded_amount' => arraySafeVal($approval, 'projected_orphan_excluded_amount'),
+			'batch_scope_checksum' => arraySafeVal($approval, 'batch_scope_checksum'),
+			'projected_mutation_checksum' => arraySafeVal($approval, 'projected_mutation_checksum'),
+			'projected_earnings_checksum' => arraySafeVal($approval, 'projected_earnings_checksum'),
+			'intended_mutation_scope_checksum' => arraySafeVal($approval, 'intended_mutation_scope_checksum'),
+			'stable_projected_block_mutations' => $this->forwardCatchupStage1StableProjectedMutations(arraySafeVal($items, 'projected_block_mutations', array())),
+			'projected_pending_earnings' => arraySafeVal($items, 'projected_pending_earnings', array()),
+			'total_counts' => array(
+				'selected_count' => arraySafeVal($totals, 'selected_count'),
+				'stage1_import_generate_count' => arraySafeVal($totals, 'stage1_import_generate_count'),
+				'stage1_import_immature_count' => arraySafeVal($totals, 'stage1_import_immature_count'),
+				'stage1_mark_orphan_no_earnings_count' => arraySafeVal($totals, 'stage1_mark_orphan_no_earnings_count'),
+				'projected_pending_earnings_rows' => arraySafeVal($totals, 'projected_pending_earnings_rows'),
+				'projected_pending_earnings_amount_gross' => arraySafeVal($totals, 'projected_pending_earnings_amount_gross'),
+			),
+			'volatile_fields_excluded' => array('live_daemon_confirmation_count'),
+		));
 	}
 
 	private function forwardCatchupStage1ApplyPreflightGates($classified, $mutations, $earnings)
