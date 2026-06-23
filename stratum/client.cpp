@@ -1,6 +1,8 @@
 
 #include "stratum.h"
 
+#define STRATUM_VERSION_ROLLING_MASK 0x1fffe000
+
 bool client_suggest_difficulty(YAAMP_CLIENT *client, json_value *json_params)
 {
 	if(json_params->u.array.length>0)
@@ -19,6 +21,30 @@ bool client_suggest_difficulty(YAAMP_CLIENT *client, json_value *json_params)
 bool client_suggest_target(YAAMP_CLIENT *client, json_value *json_params)
 {
 	client_send_result(client, "true");
+	return true;
+}
+
+static bool stratum_algo_supports_version_rolling()
+{
+	if(!g_current_algo) return false;
+
+	return !strcmp(g_current_algo->name, "sha256");
+}
+
+static bool mining_configure_param_mask(json_value *json_params, uint32_t *mask)
+{
+	if(!mask || json_params->u.array.length < 2) return false;
+
+	json_value *options = json_params->u.array.values[1];
+	if(!options || options->type != json_object) return false;
+
+	const char *maskstr = json_get_string(options, "version-rolling.mask");
+	if(!maskstr) return false;
+
+	size_t len = strlen(maskstr);
+	if(len != 8 || !ishexa((char *)maskstr, 8)) return false;
+
+	*mask = htoi(maskstr);
 	return true;
 }
 
@@ -46,6 +72,11 @@ static bool client_configure(YAAMP_CLIENT *client, json_value *json_params)
 {
 	char response[YAAMP_SMALLBUFSIZE] = "{";
 	int count = 0;
+	uint32_t requested_mask = STRATUM_VERSION_ROLLING_MASK;
+	bool requested_mask_valid = mining_configure_param_mask(json_params, &requested_mask);
+
+	client->version_rolling_enabled = false;
+	client->version_rolling_mask = 0;
 
 	if(json_params->u.array.length > 0 && json_is_array(json_params->u.array.values[0]))
 	{
@@ -61,6 +92,41 @@ static bool client_configure(YAAMP_CLIENT *client, json_value *json_params)
 
 			size_t used = strlen(response);
 			size_t needed = strlen(name) + strlen(count? ",\"\":false": "\"\":false");
+
+			if(!strcmp(name, "version-rolling"))
+			{
+				bool supported = stratum_algo_supports_version_rolling();
+				uint32_t negotiated_mask = requested_mask & STRATUM_VERSION_ROLLING_MASK;
+
+				if(!requested_mask_valid)
+					negotiated_mask = STRATUM_VERSION_ROLLING_MASK;
+				if(!negotiated_mask)
+					supported = false;
+
+				if(supported)
+				{
+					client->version_rolling_enabled = true;
+					client->version_rolling_mask = negotiated_mask;
+				}
+
+				char entry[160];
+				snprintf(entry, sizeof(entry), "%s\"version-rolling\":%s,\"version-rolling.mask\":\"%08x\"",
+					count? ",": "", supported? "true": "false", supported? negotiated_mask: 0);
+
+				if(used + strlen(entry) + 2 >= sizeof(response)) break;
+				strcat(response, entry);
+				count++;
+
+				if(g_debuglog_hash)
+					debuglog("version_rolling_configure client_ip=%s algo=%s requested=1 supported=%d "
+						"requested_mask=%08x requested_mask_valid=%d negotiated_mask=%08x enabled=%d\n",
+						client && client->sock? client->sock->ip: "-",
+						g_current_algo? g_current_algo->name: g_stratum_algo,
+						supported? 1: 0, requested_mask, requested_mask_valid? 1: 0,
+						client->version_rolling_mask, client->version_rolling_enabled? 1: 0);
+
+				continue;
+			}
 
 			if(used + needed + 2 >= sizeof(response)) break;
 

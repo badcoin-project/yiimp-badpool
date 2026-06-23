@@ -17,8 +17,10 @@ uint64_t lyra2z_height = 0;
 //#define DONTSUBMIT
 
 void build_submit_values(YAAMP_JOB_VALUES *submitvalues, YAAMP_JOB_TEMPLATE *templ,
-	const char *nonce1, const char *nonce2, const char *ntime, const char *nonce)
+	const char *nonce1, const char *nonce2, const char *ntime, const char *nonce, const char *version)
 {
+	const char *header_version = version && version[0]? version: templ->version;
+
 	sprintf(submitvalues->coinbase, "%s%s%s%s", templ->coinb1, nonce1, nonce2, templ->coinb2);
 	int coinbase_len = strlen(submitvalues->coinbase);
 
@@ -42,15 +44,15 @@ void build_submit_values(YAAMP_JOB_VALUES *submitvalues, YAAMP_JOB_TEMPLATE *tem
 	printf("merkle root %s\n", merkleroot.c_str());
 #endif
 	if (!strcmp(g_stratum_algo, "lbry")) {
-		sprintf(submitvalues->header, "%s%s%s%s%s%s%s", templ->version, templ->prevhash_be, submitvalues->merkleroot_be,
+		sprintf(submitvalues->header, "%s%s%s%s%s%s%s", header_version, templ->prevhash_be, submitvalues->merkleroot_be,
 			templ->claim_be, ntime, templ->nbits, nonce);
 		ser_string_be(submitvalues->header, submitvalues->header_be, 112/4);
 	} else if (strlen(templ->extradata_be) == 128) { // LUX SC
-		sprintf(submitvalues->header, "%s%s%s%s%s%s%s", templ->version, templ->prevhash_be, submitvalues->merkleroot_be,
+		sprintf(submitvalues->header, "%s%s%s%s%s%s%s", header_version, templ->prevhash_be, submitvalues->merkleroot_be,
 			ntime, templ->nbits, nonce, templ->extradata_be);
 		ser_string_be(submitvalues->header, submitvalues->header_be, 36); // 80+64 / sizeof(u32)
 	} else {
-		sprintf(submitvalues->header, "%s%s%s%s%s%s", templ->version, templ->prevhash_be, submitvalues->merkleroot_be,
+		sprintf(submitvalues->header, "%s%s%s%s%s%s", header_version, templ->prevhash_be, submitvalues->merkleroot_be,
 			ntime, templ->nbits, nonce);
 		ser_string_be(submitvalues->header, submitvalues->header_be, 20);
 	}
@@ -507,6 +509,32 @@ static bool valid_string_params(json_value *json_params)
 	return true;
 }
 
+static bool client_submit_version_rolling_allowed(YAAMP_CLIENT *client, YAAMP_JOB *job)
+{
+	if(!client || !client->version_rolling_enabled) return false;
+	if(!job || !job->templ) return false;
+	if(!g_current_algo) return false;
+
+	return !strcmp(g_current_algo->name, "sha256");
+}
+
+static void log_version_rolling_submit(YAAMP_CLIENT *client, YAAMP_JOB *job, YAAMP_JOB_TEMPLATE *templ,
+	const char *submitted_version_bits, const char *effective_version, bool applied)
+{
+	if(!g_debuglog_hash) return;
+
+	debuglog("version_rolling_submit client_ip=%s algo=%s jobid=%x template_version=%s "
+		"submitted_version_bits=%s negotiated_mask=%08x effective_version=%s applied=%d enabled=%d\n",
+		client && client->sock? client->sock->ip: "-",
+		g_current_algo? g_current_algo->name: g_stratum_algo, job? job->id: 0,
+		templ && templ->version[0]? templ->version: "-",
+		submitted_version_bits && submitted_version_bits[0]? submitted_version_bits: "-",
+		client? client->version_rolling_mask: 0,
+		effective_version && effective_version[0]? effective_version: (templ && templ->version[0]? templ->version: "-"),
+		applied? 1: 0,
+		client && client->version_rolling_enabled? 1: 0);
+}
+
 bool client_submit(YAAMP_CLIENT *client, json_value *json_params)
 {
 	// submit(worker_name, jobid, extranonce2, ntime, nonce):
@@ -521,6 +549,10 @@ bool client_submit(YAAMP_CLIENT *client, json_value *json_params)
 	char nonce[80] = { 0 };
 	char ntime[32] = { 0 };
 	char vote[8] = { 0 };
+	char version_bits[16] = { 0 };
+	const char *submitted_version_bits_param = NULL;
+	char effective_version[16] = { 0 };
+	bool version_rolling_applied = false;
 
 	if (strlen(json_params->u.array.values[1]->u.string.ptr) > 32) {
 		clientlog(client, "bad json, wrong jobid len");
@@ -538,7 +570,9 @@ bool client_submit(YAAMP_CLIENT *client, json_value *json_params)
 	string_lower(nonce);
 
 	if (json_params->u.array.length == 6) {
-		if (strstr(g_stratum_algo, "phi")) {
+		if (client->version_rolling_enabled && !strstr(g_stratum_algo, "phi")) {
+			submitted_version_bits_param = json_params->u.array.values[5]->u.string.ptr;
+		} else if (strstr(g_stratum_algo, "phi")) {
 			// lux optional field, smart contral root hashes (not mandatory on shares submit)
 			strncpy(extra, json_params->u.array.values[5]->u.string.ptr, 128);
 			string_lower(extra);
@@ -572,6 +606,49 @@ bool client_submit(YAAMP_CLIENT *client, json_value *json_params)
 	bool is_decred = job->coind && !strcmp("DCR", job->coind->rpcencoding);
 
 	YAAMP_JOB_TEMPLATE *templ = job->templ;
+	bool version_rolling_allowed = client_submit_version_rolling_allowed(client, job);
+
+	if(submitted_version_bits_param && submitted_version_bits_param[0])
+	{
+		uint32_t template_version = 0;
+		uint32_t submitted_version_bits = 0;
+		uint32_t negotiated_mask = client->version_rolling_mask;
+
+		if(!version_rolling_allowed) {
+			log_version_rolling_submit(client, job, templ, submitted_version_bits_param, templ->version, false);
+			client_submit_error(client, job, 20, "Invalid version rolling", extranonce2, ntime, nonce);
+			return true;
+		}
+		if(strlen(submitted_version_bits_param) != 8 || !ishexa((char *)submitted_version_bits_param, 8)) {
+			log_version_rolling_submit(client, job, templ, submitted_version_bits_param, templ->version, false);
+			client_submit_error(client, job, 20, "Invalid version rolling bits", extranonce2, ntime, nonce);
+			return true;
+		}
+		strncpy(version_bits, submitted_version_bits_param, 8);
+		string_lower(version_bits);
+
+		if(strlen(templ->version) != 8 || !ishexa(templ->version, 8)) {
+			log_version_rolling_submit(client, job, templ, version_bits, templ->version, false);
+			client_submit_error(client, job, 20, "Invalid template version", extranonce2, ntime, nonce);
+			return true;
+		}
+
+		template_version = htoi(templ->version);
+		submitted_version_bits = htoi(version_bits);
+
+		if(submitted_version_bits & ~negotiated_mask) {
+			log_version_rolling_submit(client, job, templ, version_bits, templ->version, false);
+			client_submit_error(client, job, 20, "Invalid version rolling mask", extranonce2, ntime, nonce);
+			return true;
+		}
+
+		uint32_t effective = (template_version & ~negotiated_mask) | (submitted_version_bits & negotiated_mask);
+		snprintf(effective_version, sizeof(effective_version), "%08x", effective);
+		version_rolling_applied = true;
+	}
+
+	log_version_rolling_submit(client, job, templ, version_bits,
+		version_rolling_applied? effective_version: templ->version, version_rolling_applied);
 
 	if(strlen(nonce) != YAAMP_NONCE_SIZE*2 || !ishexa(nonce, YAAMP_NONCE_SIZE*2)) {
 		client_submit_error(client, job, 20, "Invalid nonce size", extranonce2, ntime, nonce);
@@ -640,7 +717,8 @@ bool client_submit(YAAMP_CLIENT *client, json_value *json_params)
 	if(is_decred)
 		build_submit_values_decred(&submitvalues, templ, client->extranonce1, extranonce2, ntime, nonce, vote, true);
 	else
-		build_submit_values(&submitvalues, templ, client->extranonce1, extranonce2, ntime, nonce);
+		build_submit_values(&submitvalues, templ, client->extranonce1, extranonce2, ntime, nonce,
+			version_rolling_applied? effective_version: NULL);
 
 	if (templ->height && !strcmp(g_current_algo->name,"lyra2z")) {
 		lyra2z_height = templ->height;
