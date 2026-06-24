@@ -14,6 +14,7 @@ from typing import Any, Dict, Iterable, List
 
 UINT64_MASK = (1 << 64) - 1
 BASE_TARGET64 = 0x0000FFFF00000000
+DEFAULT_VERSION_ROLLING_MASK = 0x1FFFE000
 
 
 def require_hex(name: str, value: str, even: bool = True, length: int | None = None) -> str:
@@ -126,24 +127,7 @@ def replay(data: Dict[str, Any]) -> int:
     extranonce1 = require_hex("extranonce1", fixture_value(data, "extranonce1"))
     extranonce2 = require_hex("extranonce2", fixture_value(data, "extranonce2"))
     version = require_hex("version", fixture_value(data, "version"), length=8)
-    version_rolling = fixture_value(data, "version_rolling", {})
-    if version_rolling and not isinstance(version_rolling, dict):
-        raise ValueError("version_rolling must be an object when present")
-    version_rolling_enabled = bool(version_rolling.get("enabled", False))
-    negotiated_mask = require_hex("version_rolling.mask", version_rolling.get("mask", "00000000"), length=8)
-    submitted_version_bits = require_hex(
-        "version_rolling.submitted_bits",
-        version_rolling.get("submitted_bits", "00000000"),
-        length=8,
-    )
-    if version_rolling_enabled and int(submitted_version_bits, 16) & ~int(negotiated_mask, 16):
-        raise ValueError("version_rolling.submitted_bits contains bits outside version_rolling.mask")
-    if version_rolling_enabled:
-        effective_version_int = ((int(version, 16) & ~int(negotiated_mask, 16)) |
-                                 (int(submitted_version_bits, 16) & int(negotiated_mask, 16)))
-        effective_version = f"{effective_version_int & 0xffffffff:08x}"
-    else:
-        effective_version = version
+    template_version = version
     prevhash = require_hex("prevhash", fixture_value(data, "prevhash"), length=64)
     nbits = require_hex("nbits", fixture_value(data, "nbits"), length=8)
     ntime = require_hex("ntime", fixture_value(data, "ntime"), length=8)
@@ -153,6 +137,17 @@ def replay(data: Dict[str, Any]) -> int:
         raise ValueError("merkle_branches must be an array")
     difficulty_actual = float(fixture_value(data, "difficulty_actual"))
     diff_multiplier = float(fixture_value(data, "diff_multiplier", 1.0))
+    version_rolling_bits = data.get("version_rolling_bits")
+    version_rolling_mask = int(str(data.get("version_rolling_mask", f"{DEFAULT_VERSION_ROLLING_MASK:08x}")), 16)
+
+    if version_rolling_bits is not None:
+        submitted_bits = require_hex("version_rolling_bits", str(version_rolling_bits), length=8)
+        submitted_int = int(submitted_bits, 16)
+        template_int = int(template_version, 16)
+        outside_mask = submitted_int & ~version_rolling_mask
+        if outside_mask:
+            raise ValueError(f"version_rolling_bits contain bits outside mask: {outside_mask:08x}")
+        version = f"{((template_int & ~version_rolling_mask) | (submitted_int & version_rolling_mask)):08x}"
 
     expected_submit = data.get("expected_submit_tuple") or {}
     if expected_submit and not isinstance(expected_submit, dict):
@@ -163,7 +158,7 @@ def replay(data: Dict[str, Any]) -> int:
     merkle_internal = merkle_with_first(coinbase_hash, branches)
     merkle_be = ser_string_be_words(merkle_internal, 8)
     prevhash_be = ser_string_be_words(prevhash, 8)
-    header_pre_ser = effective_version + prevhash_be + merkle_be + ntime + nbits + nonce
+    header_pre_ser = version + prevhash_be + merkle_be + ntime + nbits + nonce
     header_hex = ser_string_be_words(header_pre_ser, 20)
     header_bytes = bytes.fromhex(header_hex)
     if len(header_bytes) != 80:
@@ -199,10 +194,10 @@ def replay(data: Dict[str, Any]) -> int:
     print_kv("pool.prevhash_input", prevhash)
     print_kv("pool.prevhash_be_words", prevhash_be)
     print_kv("pool.version", version)
-    print_kv("pool.version_rolling_enabled", str(version_rolling_enabled).lower())
-    print_kv("pool.version_rolling_mask", negotiated_mask)
-    print_kv("pool.submitted_version_bits", submitted_version_bits)
-    print_kv("pool.effective_version", effective_version)
+    print_kv("pool.template_version", template_version)
+    print_kv("pool.version_rolling_bits", version_rolling_bits if version_rolling_bits is not None else "not_provided")
+    print_kv("pool.version_rolling_mask", f"{version_rolling_mask:08x}")
+    print_kv("pool.version_rolling_effective", version)
     print_kv("pool.nbits", nbits)
     print_kv("pool.ntime", ntime)
     print_kv("pool.nonce", nonce)
