@@ -1,7 +1,5 @@
 
 #include "stratum.h"
-#include <type_traits>
-#include <utility>
 // --- YESCRYPT DEBUG HELPER ---
 static void debug_hex(const char* label, const unsigned char* data, int len)
 {
@@ -516,30 +514,6 @@ static bool is_sha256_algo()
 	return g_current_algo && !strcmp(g_current_algo->name, "sha256");
 }
 
-template<typename T, typename = void>
-struct has_version_rolling_state: std::false_type {};
-
-template<typename T>
-struct has_version_rolling_state<T, std::void_t<
-	decltype(std::declval<T*>()->version_rolling_enabled),
-	decltype(std::declval<T*>()->version_rolling_mask)
->>: std::true_type {};
-
-template<typename T>
-static bool client_version_rolling_state(T *client, uint32_t *mask)
-{
-	if constexpr(has_version_rolling_state<T>::value)
-	{
-		if(client && client->version_rolling_enabled)
-		{
-			if(mask) *mask = client->version_rolling_mask;
-			return true;
-		}
-	}
-
-	return false;
-}
-
 static void log_version_rolling_submit(const char *label, uint32_t template_version, uint32_t submitted_bits,
 	uint32_t mask, const char *effective_version, bool applied, const char *reason)
 {
@@ -552,11 +526,9 @@ static void log_version_rolling_submit(const char *label, uint32_t template_vers
 static bool client_submit_version_rolling_allowed(YAAMP_CLIENT *client, uint32_t submitted_bits, uint32_t *mask,
 	bool *negotiated)
 {
-	uint32_t selected_mask = 0;
-	bool has_negotiated_mask = client_version_rolling_state(client, &selected_mask);
+	if(!client || !client->version_rolling_enabled) return false;
 
-	if(!has_negotiated_mask) return false;
-
+	uint32_t selected_mask = client->version_rolling_mask;
 	if(mask) *mask = selected_mask;
 	if(negotiated) *negotiated = true;
 	return (submitted_bits & ~selected_mask) == 0;
