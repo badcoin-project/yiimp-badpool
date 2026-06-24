@@ -514,10 +514,34 @@ static bool is_sha256_algo()
 	return g_current_algo && !strcmp(g_current_algo->name, "sha256");
 }
 
-static bool apply_sha256_version_rolling_fallback(YAAMP_JOB *job, const char *submitted_bits,
+static void log_version_rolling_submit(const char *label, uint32_t template_version, uint32_t submitted_bits,
+	uint32_t mask, const char *effective_version, bool applied, const char *reason)
+{
+	debuglog("%s template_version=%08x submitted_bits=%08x mask=%08x effective_version=%s applied=%s reason=%s\n",
+		label? label: "version_rolling_submit",
+		template_version, submitted_bits, mask, effective_version? effective_version: "-",
+		applied? "true": "false", reason? reason: "-");
+}
+
+static bool client_submit_version_rolling_allowed(YAAMP_CLIENT *client, uint32_t submitted_bits, uint32_t *mask,
+	bool *negotiated)
+{
+	if(mask) *mask = STRATUM_VERSION_ROLLING_MASK;
+	if(negotiated) *negotiated = false;
+	if(!client || !client->version_rolling_enabled) return false;
+
+	uint32_t selected_mask = client->version_rolling_mask;
+	if(mask) *mask = selected_mask;
+	if(negotiated) *negotiated = true;
+	return (submitted_bits & ~selected_mask) == 0;
+}
+
+static bool apply_sha256_version_rolling(YAAMP_CLIENT *client, YAAMP_JOB *job, const char *submitted_bits,
 	char *effective_version, size_t effective_version_size)
 {
 	if(!job || !job->templ || !submitted_bits || !effective_version || effective_version_size < 9) return false;
+
+	uint32_t template_version = htoi(job->templ->version);
 
 	if(strlen(submitted_bits) != 8 || !ishexa((char *)submitted_bits, 8))
 	{
@@ -527,24 +551,28 @@ static bool apply_sha256_version_rolling_fallback(YAAMP_JOB *job, const char *su
 		return false;
 	}
 
-	uint32_t template_version = htoi(job->templ->version);
 	uint32_t version_bits = htoi(submitted_bits);
-	uint32_t outside_mask = version_bits & ~STRATUM_VERSION_ROLLING_MASK;
+	uint32_t mask = STRATUM_VERSION_ROLLING_MASK;
+	bool negotiated = false;
+	bool allowed = client_submit_version_rolling_allowed(client, version_bits, &mask, &negotiated);
 
-	if(outside_mask)
+	if(!negotiated)
+		allowed = (version_bits & ~mask) == 0;
+
+	if(!allowed)
 	{
-		debuglog("version_rolling_submit_fallback template_version=%08x submitted_bits=%08x mask=%08x "
-			"outside_mask=%08x effective_version=- applied=false reason=bits_outside_mask\n",
-			template_version, version_bits, STRATUM_VERSION_ROLLING_MASK, outside_mask);
+		uint32_t outside_mask = version_bits & ~mask;
+		debuglog("%s template_version=%08x submitted_bits=%08x mask=%08x outside_mask=%08x "
+			"effective_version=- applied=false reason=bits_outside_mask\n",
+			negotiated? "version_rolling_submit": "version_rolling_submit_fallback",
+			template_version, version_bits, mask, outside_mask);
 		return false;
 	}
 
-	uint32_t effective = (template_version & ~STRATUM_VERSION_ROLLING_MASK) |
-		(version_bits & STRATUM_VERSION_ROLLING_MASK);
+	uint32_t effective = (template_version & ~mask) | (version_bits & mask);
 	snprintf(effective_version, effective_version_size, "%08x", effective);
-	debuglog("version_rolling_submit_fallback template_version=%08x submitted_bits=%08x mask=%08x "
-		"effective_version=%s applied=true\n",
-		template_version, version_bits, STRATUM_VERSION_ROLLING_MASK, effective_version);
+	log_version_rolling_submit(negotiated? "version_rolling_submit": "version_rolling_submit_fallback",
+		template_version, version_bits, mask, effective_version, true, "-");
 	return true;
 }
 
@@ -619,7 +647,7 @@ bool client_submit(YAAMP_CLIENT *client, json_value *json_params)
 
 	if(submit_param6[0] && is_sha256_algo() && !is_decred && !strstr(g_stratum_algo, "phi"))
 	{
-		if(!apply_sha256_version_rolling_fallback(job, submit_param6, effective_version, sizeof(effective_version)))
+		if(!apply_sha256_version_rolling(client, job, submit_param6, effective_version, sizeof(effective_version)))
 		{
 			client_submit_error(client, job, 20, "Invalid version rolling bits", extranonce2, ntime, nonce);
 			return true;
