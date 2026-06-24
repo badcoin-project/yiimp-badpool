@@ -735,6 +735,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 			'--projected-earnings-checksum='.$projectedEarningsChecksumValue,
 			'--operator-confirms-attribution-model=block_userid_single_recipient',
 		);
+		$applyScopeBinding = 'Apply does not accept --limit; the selected batch is bound by approval, batch scope, projected mutation, and projected earnings checksums.';
 		$mandatoryApplyGates = array(
 			'current block category must still be new',
 			'no linked earnings',
@@ -766,6 +767,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 			'projected_mutation_checksum' => arraySafeVal($dryrun, 'projected_mutation_checksum'),
 			'projected_earnings_checksum' => arraySafeVal($dryrun, 'projected_earnings_checksum'),
 			'apply_command_shape' => $applyCommandShape,
+			'apply_scope_binding' => $applyScopeBinding,
 			'mandatory_apply_gates' => $mandatoryApplyGates,
 			'intended_mutation_scope' => $intendedMutationScope,
 		));
@@ -788,6 +790,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 		$report['approval_input_checksum'] = $approvalInputChecksum;
 		$report['intended_mutation_scope_checksum'] = $intendedMutationScopeChecksum;
 		$report['intended_apply_command_shape'] = $applyCommandShape;
+		$report['apply_scope_binding'] = $applyScopeBinding;
 		$report['mandatory_apply_gates'] = $mandatoryApplyGates;
 		$report['intended_mutation_scope'] = $intendedMutationScope;
 		$report['overall_approval_package_status'] = arraySafeVal($safetyGates, 'overall_dryrun_status') === 'pass' ? 'pass' : 'blocked';
@@ -813,6 +816,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 			'approval_required' => $report['approval_required'],
 			'apply_command_implemented' => $report['apply_command_implemented'],
 			'intended_apply_command_shape' => $applyCommandShape,
+			'apply_scope_binding' => $applyScopeBinding,
 			'mandatory_apply_gates' => $mandatoryApplyGates,
 			'intended_mutation_scope' => $intendedMutationScope,
 			'overall_approval_package_status' => $report['overall_approval_package_status'],
@@ -1119,14 +1123,13 @@ class BadpoolGuardCommand extends CConsoleCommand
 			$class = arraySafeVal($mutation, 'classification');
 			$blockid = arraySafeVal($mutation, 'blockid');
 			if ($class === 'stage1_import_generate' || $class === 'stage1_import_immature') {
-				$count = app()->db->createCommand()->update('blocks', array(
-					'txhash' => arraySafeVal($mutation, 'would_set_txhash'),
-					'amount' => arraySafeVal($mutation, 'would_set_amount'),
-					'confirmations' => arraySafeVal($mutation, 'would_set_confirmations'),
-					'category' => 'immature',
-				), 'id=:id AND category=:category', array(':id' => $blockid, ':category' => 'new'));
+				$count = $this->forwardCatchupStage1ExecuteGeneratedBlockUpdate($mutation, 'new');
 				if (intval($count) !== 1) {
-					throw new CException('Generated block update affected '.intval($count).' rows for block '.$blockid.'.');
+					throw new CException(
+						'Generated block update affected '.intval($count).' rows for block '.$blockid.
+						' with expected old category new. Current row snapshot: '.
+						$this->forwardCatchupStage1BlockFailureSnapshot($blockid)
+					);
 				}
 				if (!isset($earningsByBlock[(string)$blockid])) {
 					throw new CException('Projected earning missing for generated block '.$blockid.'.');
@@ -1153,9 +1156,13 @@ class BadpoolGuardCommand extends CConsoleCommand
 				$appliedGenerated++;
 				$inserted++;
 			} elseif ($class === 'stage1_mark_orphan_no_earnings') {
-				$count = app()->db->createCommand()->update('blocks', array('category' => 'orphan'), 'id=:id AND category=:category', array(':id' => $blockid, ':category' => 'new'));
+				$count = $this->forwardCatchupStage1ExecuteOrphanBlockUpdate($blockid, 'new');
 				if (intval($count) !== 1) {
-					throw new CException('Orphan block update affected '.intval($count).' rows for block '.$blockid.'.');
+					throw new CException(
+						'Orphan block update affected '.intval($count).' rows for block '.$blockid.
+						' with expected old category new. Current row snapshot: '.
+						$this->forwardCatchupStage1BlockFailureSnapshot($blockid)
+					);
 				}
 				$appliedOrphan++;
 			} else {
@@ -1167,6 +1174,54 @@ class BadpoolGuardCommand extends CConsoleCommand
 			'applied_orphan_count' => $appliedOrphan,
 			'inserted_earnings_count' => $inserted,
 		);
+	}
+
+	private function forwardCatchupStage1ExecuteGeneratedBlockUpdate($mutation, $oldCategory)
+	{
+		$sql = 'UPDATE '.$this->guard->qtable('blocks').' SET '.
+			$this->guard->qcol('txhash').'=:txhash, '.
+			$this->guard->qcol('amount').'=:amount, '.
+			$this->guard->qcol('confirmations').'=:confirmations, '.
+			$this->guard->qcol('category').'=:new_category '.
+			'WHERE '.$this->guard->qcol('id').'=:id AND '.$this->guard->qcol('category').'=:old_category';
+		return app()->db->createCommand($sql)->execute(array(
+			':txhash' => arraySafeVal($mutation, 'would_set_txhash'),
+			':amount' => arraySafeVal($mutation, 'would_set_amount'),
+			':confirmations' => arraySafeVal($mutation, 'would_set_confirmations'),
+			':new_category' => 'immature',
+			':id' => arraySafeVal($mutation, 'blockid'),
+			':old_category' => $oldCategory,
+		));
+	}
+
+	private function forwardCatchupStage1ExecuteOrphanBlockUpdate($blockid, $oldCategory)
+	{
+		$sql = 'UPDATE '.$this->guard->qtable('blocks').' SET '.
+			$this->guard->qcol('category').'=:new_category '.
+			'WHERE '.$this->guard->qcol('id').'=:id AND '.$this->guard->qcol('category').'=:old_category';
+		return app()->db->createCommand($sql)->execute(array(
+			':new_category' => 'orphan',
+			':id' => $blockid,
+			':old_category' => $oldCategory,
+		));
+	}
+
+	private function forwardCatchupStage1BlockFailureSnapshot($blockid)
+	{
+		$blockColumns = array('id', 'coin_id', 'userid', 'height', 'blockhash', 'txhash', 'category', 'amount', 'confirmations', 'time', 'difficulty');
+		$row = $this->guard->selectRow(
+			'SELECT '.$this->guard->selectColumns('blocks', $blockColumns).' FROM '.$this->guard->qtable('blocks').' WHERE '.$this->guard->qcol('id').'=:id',
+			array(':id' => $blockid)
+		);
+		if (!$row) {
+			return json_encode(array('id' => $blockid, 'found' => false));
+		}
+		$linked = $this->guard->selectRow(
+			'SELECT COUNT(*) AS row_count FROM '.$this->guard->qtable('earnings').' WHERE '.$this->guard->qcol('blockid').'=:blockid',
+			array(':blockid' => $blockid)
+		);
+		$row['earnings_count'] = intval(arraySafeVal($linked, 'row_count', 0));
+		return json_encode($row);
 	}
 
 	private function safetyScanReport()

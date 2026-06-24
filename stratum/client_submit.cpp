@@ -526,6 +526,8 @@ static void log_version_rolling_submit(const char *label, uint32_t template_vers
 static bool client_submit_version_rolling_allowed(YAAMP_CLIENT *client, uint32_t submitted_bits, uint32_t *mask,
 	bool *negotiated)
 {
+	if(mask) *mask = STRATUM_VERSION_ROLLING_MASK;
+	if(negotiated) *negotiated = false;
 	if(!client || !client->version_rolling_enabled) return false;
 
 	uint32_t selected_mask = client->version_rolling_mask;
@@ -559,8 +561,11 @@ static bool apply_sha256_version_rolling(YAAMP_CLIENT *client, YAAMP_JOB *job, c
 
 	if(!allowed)
 	{
-		log_version_rolling_submit(negotiated? "version_rolling_submit": "version_rolling_submit_fallback",
-			template_version, version_bits, mask, "-", false, "bits_outside_mask");
+		uint32_t outside_mask = version_bits & ~mask;
+		debuglog("%s template_version=%08x submitted_bits=%08x mask=%08x outside_mask=%08x "
+			"effective_version=- applied=false reason=bits_outside_mask\n",
+			negotiated? "version_rolling_submit": "version_rolling_submit_fallback",
+			template_version, version_bits, mask, outside_mask);
 		return false;
 	}
 

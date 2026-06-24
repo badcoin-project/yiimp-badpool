@@ -83,6 +83,8 @@ public:
 	int extranonce2size_reconnect;
 
 	bool extranonce_subscribe;
+	bool version_rolling_enabled;
+	uint32_t version_rolling_mask;
 	int submit_bad;
 
 	double speed;
