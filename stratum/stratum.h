@@ -107,6 +107,8 @@ extern uint64_t g_shares_counter;
 extern bool g_allow_rolltime;
 extern time_t g_last_broadcasted;
 
+#define STRATUM_VERSION_ROLLING_MASK 0x1fffe000U
+
 extern struct ifaddrs *g_ifaddr;
 
 extern pthread_mutex_t g_db_mutex;
