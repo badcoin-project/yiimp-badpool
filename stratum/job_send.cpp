@@ -1,7 +1,82 @@
-
 #include "stratum.h"
 
 static int g_job_next_id = 0;
+
+static bool sha256d_outbound_trace_enabled()
+{
+	return (g_current_algo && !strcmp(g_current_algo->name, "sha256")) || !strcmp(g_stratum_algo, "sha256");
+}
+
+static const char *sha256d_trace_safe_string(const char *input, char *output, size_t output_size)
+{
+	if(!output || !output_size) return "-";
+	if(!input)
+	{
+		snprintf(output, output_size, "-");
+		return output;
+	}
+
+	size_t o = 0;
+	for(size_t i = 0; input[i] && o + 1 < output_size; i++)
+	{
+		unsigned char c = (unsigned char)input[i];
+		output[o++] = (c <= 0x20 || c >= 0x7f)? '_': input[i];
+	}
+	output[o] = 0;
+	return output;
+}
+
+static const char *sha256d_trace_json_line(const char *input, char *output, size_t output_size)
+{
+	if(!output || !output_size) return "-";
+	if(!input)
+	{
+		snprintf(output, output_size, "-");
+		return output;
+	}
+
+	size_t o = 0;
+	for(size_t i = 0; input[i] && o + 1 < output_size; i++)
+	{
+		unsigned char c = (unsigned char)input[i];
+		if(c == '\n' || c == '\r') continue;
+		output[o++] = input[i];
+	}
+	output[o] = 0;
+	return output;
+}
+
+static void sha256d_log_notify_trace(YAAMP_CLIENT *client, YAAMP_JOB *job, const char *notify_json, const char *send_context)
+{
+	if(!sha256d_outbound_trace_enabled()) return;
+	if(!job || !job->templ) return;
+
+	YAAMP_JOB_TEMPLATE *templ = job->templ;
+	uint64_t coin_target = decode_compact(templ->nbits);
+	if(templ->nbits && !coin_target) coin_target = 0xFFFF000000000000ULL;
+	double coin_diff = target_to_diff(coin_target);
+	char safe_version[256];
+	char safe_json[YAAMP_SMALLBUFSIZE];
+
+	debuglog("SHA256D_NOTIFY_TRACE context=%s client_ip=%s userid=%d workerid=%d worker_version=%s "
+		"jobid=%x template_height=%d template_version=%s prevhash_be=%s nbits=%s clean_jobs=1 "
+		"coin_target=%016llx coin_diff=%.8f version_rolling_enabled=%d version_rolling_mask=%08x notify_json=%s\n",
+		send_context? send_context: "-",
+		(client && client->sock)? client->sock->ip: "-",
+		client? client->userid: 0,
+		client? client->workerid: 0,
+		sha256d_trace_safe_string(client? client->version: NULL, safe_version, sizeof(safe_version)),
+		job->id,
+		templ->height,
+		templ->version[0]? templ->version: "-",
+		templ->prevhash_be[0]? templ->prevhash_be: "-",
+		templ->nbits[0]? templ->nbits: "-",
+		(unsigned long long)coin_target,
+		coin_diff,
+		(client && client->version_rolling_enabled)? 1: 0,
+		client? client->version_rolling_mask: 0,
+		sha256d_trace_json_line(notify_json, safe_json, sizeof(safe_json)));
+}
 
 int job_get_jobid()
 {
@@ -73,6 +148,7 @@ void job_send_last(YAAMP_CLIENT *client)
 	char buffer[YAAMP_SMALLBUFSIZE];
 	job_mining_notify_buffer(job, buffer);
 
+	sha256d_log_notify_trace(client, job, buffer, "job_send_last");
 	socket_send_raw(client->sock, buffer, strlen(buffer));
 }
 
@@ -91,6 +167,7 @@ void job_send_jobid(YAAMP_CLIENT *client, int jobid)
 	YAAMP_JOB_TEMPLATE *templ = job->templ;
 	client->jobid_sent = job->id;
 
+	sha256d_log_notify_trace(client, job, buffer, "job_send_jobid");
 	socket_send_raw(client->sock, buffer, strlen(buffer));
 	object_unlock(job);
 }
@@ -128,6 +205,7 @@ void job_broadcast(YAAMP_JOB *job)
 
 		setsockopt(client->sock->sock, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
 
+		sha256d_log_notify_trace(client, job, buffer, "job_broadcast");
 		if (socket_send_raw(client->sock, buffer, strlen(buffer)) == -1) {
 			int err = errno;
 			client->broadcast_timeouts++;
@@ -183,7 +261,6 @@ void job_broadcast(YAAMP_JOB *job)
 
 
 
-
 //	double maxhash = 0;
 //	if(job->remote)
 //	{
@@ -203,4 +280,3 @@ void job_broadcast(YAAMP_JOB *job)
 //
 //		maxhash = coind_nethash(job->coind)*coind_profitability(job->coind)/(g_current_algo->profit? g_current_algo->profit: 1);
 //	}
-
