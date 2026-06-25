@@ -24,7 +24,7 @@ static const char *sha256d_trace_safe_string(const char *input, char *output, si
 	return output;
 }
 
-static void sha256d_log_set_difficulty_trace(YAAMP_CLIENT *client, double difficulty)
+static void sha256d_log_set_difficulty_trace(YAAMP_CLIENT *client, double difficulty, double difficulty_actual_before)
 {
 	if(!sha256d_outbound_trace_enabled()) return;
 
@@ -32,8 +32,10 @@ static void sha256d_log_set_difficulty_trace(YAAMP_CLIENT *client, double diffic
 	char params[64];
 	char set_difficulty_json[256];
 	uint64_t user_target = diff_to_target(difficulty);
-	double difficulty_actual_before = client? client->difficulty_actual: 0;
 	double difficulty_actual_after = client? client->difficulty_actual: 0;
+
+	if(difficulty_actual_before < 0)
+		difficulty_actual_before = difficulty_actual_after;
 
 	if(difficulty >= 1)
 		snprintf(params, sizeof(params), "[%.0f]", difficulty);
@@ -99,8 +101,9 @@ void client_change_difficulty(YAAMP_CLIENT *client, double difficulty)
 	uint64_t user_target = diff_to_target(difficulty);
 	if(user_target >= YAAMP_MINDIFF && user_target <= YAAMP_MAXDIFF)
 	{
+		double difficulty_actual_before = client->difficulty_actual;
 		client->difficulty_actual = difficulty;
-		client_send_difficulty(client, difficulty);
+		client_send_difficulty(client, difficulty, difficulty_actual_before);
 	}
 }
 
@@ -127,11 +130,11 @@ void client_adjust_difficulty(YAAMP_CLIENT *client)
 		client_change_difficulty(client, client->difficulty_actual/2);
 }
 
-int client_send_difficulty(YAAMP_CLIENT *client, double difficulty)
+int client_send_difficulty(YAAMP_CLIENT *client, double difficulty, double difficulty_actual_before)
 {
 //	debuglog("%s diff %f\n", client->sock->ip, difficulty);
 	client->shares_per_minute = YAAMP_SHAREPERSEC;
-	sha256d_log_set_difficulty_trace(client, difficulty);
+	sha256d_log_set_difficulty_trace(client, difficulty, difficulty_actual_before);
 
 	if(difficulty >= 1)
 		client_call(client, "mining.set_difficulty", "[%.0f]", difficulty);
