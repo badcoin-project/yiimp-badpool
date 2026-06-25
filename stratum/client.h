@@ -1,3 +1,4 @@
+
 //struct YAAMP_SOURCE
 //{
 //public:
