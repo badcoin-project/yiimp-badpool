@@ -1,3 +1,4 @@
+
 #include "stratum.h"
 
 static bool sha256d_outbound_trace_enabled()
@@ -160,6 +161,7 @@ void client_initialize_difficulty(YAAMP_CLIENT *client)
 	}
 
 }
+
 
 
 
