@@ -1,4 +1,3 @@
-
 //struct YAAMP_SOURCE
 //{
 //public:
@@ -136,7 +135,7 @@ bool client_find_my_ip(const char *ip);
 
 //////////////////////////////////////////////////////////////////////////
 
-int client_send_difficulty(YAAMP_CLIENT *client, double difficulty);
+int client_send_difficulty(YAAMP_CLIENT *client, double difficulty, double difficulty_actual_before=-1);
 double client_normalize_difficulty(double difficulty);
 
 void client_change_difficulty(YAAMP_CLIENT *client, double difficulty);
@@ -168,4 +167,3 @@ void *client_thread(void *p);
 void db_check_user_input(char* input);
 
 //void source_prune();
-
