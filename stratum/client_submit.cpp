@@ -592,7 +592,7 @@ static bool apply_sha256_version_rolling(YAAMP_CLIENT *client, YAAMP_JOB *job, c
 		return false;
 	}
 
-	uint32_t effective = (template_version & ~mask) | (version_bits & mask);
+	uint32_t effective = template_version | (version_bits & mask);
 	snprintf(effective_version, effective_version_size, "%08x", effective);
 	log_version_rolling_submit(negotiated? "version_rolling_submit": "version_rolling_submit_fallback",
 		template_version, version_bits, mask, effective_version, true, "-");
