@@ -6,6 +6,8 @@ This document describes the implemented guarded Stage 1 forward-catchup apply co
 
 Stage 1 is limited to importing selected already-classified forward-catchup block outcomes into block state and pending earnings state. It is not payout execution and does not authorize any later maturity, account-credit, payout-row, wallet-send, service, backend-loop, or share-deletion behavior.
 
+Stage 1 creates pending earnings only; it does not credit accounts, create payout rows, send wallet transactions, delete shares, run backend loops, or start the blocks service.
+
 ## Non-Payout Boundary
 
 The Stage 1 apply command is not a payout execution command.
@@ -13,6 +15,8 @@ The Stage 1 apply command is not a payout execution command.
 The command may only mutate selected block rows and pending earnings rows as described below. It must not perform account crediting, payout creation, wallet sends, wallet unlocks, payout retries, service orchestration, backend loop execution, or share deletion.
 
 ## Command Shape
+
+`--limit` is accepted only by Stage 1 dry-run and approval-package generation commands. The apply command does not accept a fresh `--limit`; apply scope is bound by the approved checksum set.
 
 The operator command shape is:
 
