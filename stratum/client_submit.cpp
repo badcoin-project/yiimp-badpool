@@ -514,6 +514,25 @@ static bool is_sha256_algo()
 	return g_current_algo && !strcmp(g_current_algo->name, "sha256");
 }
 
+static const char *log_safe_string(const char *input, char *output, size_t output_size)
+{
+	if(!output || !output_size) return "-";
+	if(!input)
+	{
+		snprintf(output, output_size, "-");
+		return output;
+	}
+
+	size_t o = 0;
+	for(size_t i = 0; input[i] && o + 1 < output_size; i++)
+	{
+		unsigned char c = (unsigned char)input[i];
+		output[o++] = (c <= 0x20 || c >= 0x7f)? '_': input[i];
+	}
+	output[o] = 0;
+	return output;
+}
+
 static void log_version_rolling_submit(const char *label, uint32_t template_version, uint32_t submitted_bits,
 	uint32_t mask, const char *effective_version, bool applied, const char *reason)
 {
@@ -537,11 +556,13 @@ static bool client_submit_version_rolling_allowed(YAAMP_CLIENT *client, uint32_t
 }
 
 static bool apply_sha256_version_rolling(YAAMP_CLIENT *client, YAAMP_JOB *job, const char *submitted_bits,
-	char *effective_version, size_t effective_version_size)
+	char *effective_version, size_t effective_version_size, uint32_t *submitted_version_bits_out = NULL,
+	uint32_t *version_mask_out = NULL)
 {
 	if(!job || !job->templ || !submitted_bits || !effective_version || effective_version_size < 9) return false;
 
 	uint32_t template_version = htoi(job->templ->version);
+	if(version_mask_out) *version_mask_out = STRATUM_VERSION_ROLLING_MASK;
 
 	if(strlen(submitted_bits) != 8 || !ishexa((char *)submitted_bits, 8))
 	{
@@ -555,6 +576,8 @@ static bool apply_sha256_version_rolling(YAAMP_CLIENT *client, YAAMP_JOB *job, c
 	uint32_t mask = STRATUM_VERSION_ROLLING_MASK;
 	bool negotiated = false;
 	bool allowed = client_submit_version_rolling_allowed(client, version_bits, &mask, &negotiated);
+	if(submitted_version_bits_out) *submitted_version_bits_out = version_bits;
+	if(version_mask_out) *version_mask_out = mask;
 
 	if(!negotiated)
 		allowed = (version_bits & ~mask) == 0;
@@ -574,6 +597,57 @@ static bool apply_sha256_version_rolling(YAAMP_CLIENT *client, YAAMP_JOB *job, c
 	log_version_rolling_submit(negotiated? "version_rolling_submit": "version_rolling_submit_fallback",
 		template_version, version_bits, mask, effective_version, true, "-");
 	return true;
+}
+
+static void log_sha256d_error26_submit_trace(YAAMP_CLIENT *client, YAAMP_JOB *job, YAAMP_JOB_VALUES *submitvalues,
+	const char *extranonce2, const char *ntime, const char *nonce, bool submit_param6_present,
+	uint32_t submitted_version_bits, uint32_t version_mask, const char *effective_version,
+	uint64_t hash_int, uint64_t user_target, uint64_t coin_target, double share_diff)
+{
+	if(!is_sha256_algo()) return;
+
+	YAAMP_JOB_TEMPLATE *templ = job? job->templ: NULL;
+	char safe_version[256];
+	char submitted_bits_text[16];
+
+	if(submit_param6_present)
+		snprintf(submitted_bits_text, sizeof(submitted_bits_text), "%08x", submitted_version_bits);
+	else
+		snprintf(submitted_bits_text, sizeof(submitted_bits_text), "-");
+
+	debuglog("SHA256D_ERROR26_SUBMIT_TRACE client_ip=%s userid=%d workerid=%d worker_version=%s "
+		"jobid=%x template_height=%d template_version=%s submitted_version_bits=%s version_mask=%08x "
+		"effective_version=%s extranonce1=%s extranonce2=%s extranonce2_len=%u ntime=%s nonce=%s "
+		"prevhash_be=%s merkleroot_be=%s nbits=%s header=%s header_be=%s hash_hex=%s hash_be=%s "
+		"hash_int=%016llx user_target=%016llx coin_target=%016llx difficulty_actual=%.8f share_diff=%.8f "
+		"reject_code=26\n",
+		(client && client->sock)? client->sock->ip: "-",
+		client? client->userid: 0,
+		client? client->workerid: 0,
+		log_safe_string(client? client->version: NULL, safe_version, sizeof(safe_version)),
+		job? job->id: 0,
+		templ? templ->height: 0,
+		(templ && templ->version[0])? templ->version: "-",
+		submitted_bits_text,
+		version_mask,
+		effective_version && effective_version[0]? effective_version: ((templ && templ->version[0])? templ->version: "-"),
+		client? client->extranonce1: "-",
+		extranonce2? extranonce2: "-",
+		extranonce2? (unsigned int)strlen(extranonce2): 0,
+		ntime? ntime: "-",
+		nonce? nonce: "-",
+		(templ && templ->prevhash_be[0])? templ->prevhash_be: "-",
+		(submitvalues && submitvalues->merkleroot_be[0])? submitvalues->merkleroot_be: "-",
+		(templ && templ->nbits[0])? templ->nbits: "-",
+		(submitvalues && submitvalues->header[0])? submitvalues->header: "-",
+		(submitvalues && submitvalues->header_be[0])? submitvalues->header_be: "-",
+		(submitvalues && submitvalues->hash_hex[0])? submitvalues->hash_hex: "-",
+		(submitvalues && submitvalues->hash_be[0])? submitvalues->hash_be: "-",
+		(unsigned long long)hash_int,
+		(unsigned long long)user_target,
+		(unsigned long long)coin_target,
+		client? client->difficulty_actual: 0,
+		share_diff);
 }
 
 bool client_submit(YAAMP_CLIENT *client, json_value *json_params)
@@ -644,10 +718,14 @@ bool client_submit(YAAMP_CLIENT *client, json_value *json_params)
 	YAAMP_JOB_TEMPLATE *templ = job->templ;
 	char effective_version[16] = { 0 };
 	const char *version_override = NULL;
+	bool submit_param6_present = submit_param6[0] != 0;
+	uint32_t submitted_version_bits = 0;
+	uint32_t version_mask = STRATUM_VERSION_ROLLING_MASK;
 
 	if(submit_param6[0] && is_sha256_algo() && !is_decred && !strstr(g_stratum_algo, "phi"))
 	{
-		if(!apply_sha256_version_rolling(client, job, submit_param6, effective_version, sizeof(effective_version)))
+		if(!apply_sha256_version_rolling(client, job, submit_param6, effective_version, sizeof(effective_version),
+			&submitted_version_bits, &version_mask))
 		{
 			client_submit_error(client, job, 20, "Invalid version rolling bits", extranonce2, ntime, nonce);
 			return true;
@@ -760,6 +838,10 @@ bool client_submit(YAAMP_CLIENT *client, json_value *json_params)
 	bool hash_gt_coin_target = hash_int > coin_target;
 	if(hash_gt_user_target && hash_gt_coin_target)
 	{
+		double share_diff = target_to_diff(hash_int);
+		log_sha256d_error26_submit_trace(client, job, &submitvalues, extranonce2, ntime, nonce,
+			submit_param6_present, submitted_version_bits, version_mask,
+			version_override? version_override: templ->version, hash_int, user_target, coin_target, share_diff);
 		log_share_decision_diag(client, job, "LOW_DIFFICULTY_REJECT", "code=26", hash_int, user_target, coin_target, 0);
 		client_submit_error_diag(client, job, 26, "Low difficulty share", extranonce2, ntime, nonce, true, true, hash_int, user_target, coin_target);
 		return true;
