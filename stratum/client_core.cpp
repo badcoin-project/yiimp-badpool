@@ -1,4 +1,3 @@
-
 #include "stratum.h"
 
 static int g_extraonce1_counter = 0;
@@ -20,6 +19,57 @@ void get_random_key(char *key)
 	int i3 = rand();
 	int i4 = rand();
 	sprintf(key, "%08x%08x%08x%08x", i1, i2, i3, i4);
+}
+
+static bool sha256d_outbound_trace_enabled()
+{
+	return (g_current_algo && !strcmp(g_current_algo->name, "sha256")) || !strcmp(g_stratum_algo, "sha256");
+}
+
+static const char *sha256d_trace_safe_string(const char *input, char *output, size_t output_size)
+{
+	if(!output || !output_size) return "-";
+	if(!input)
+	{
+		snprintf(output, output_size, "-");
+		return output;
+	}
+
+	size_t o = 0;
+	for(size_t i = 0; input[i] && o + 1 < output_size; i++)
+	{
+		unsigned char c = (unsigned char)input[i];
+		output[o++] = (c <= 0x20 || c >= 0x7f)? '_': input[i];
+	}
+	output[o] = 0;
+	return output;
+}
+
+static void sha256d_log_subscribe_trace(YAAMP_CLIENT *client, const char *response_payload, const char *response_id)
+{
+	if(!sha256d_outbound_trace_enabled()) return;
+	if(!response_payload || strncmp(response_payload, "[[[\"mining.set_difficulty\"", 26)) return;
+
+	char safe_version[256];
+	char subscribe_response_json[YAAMP_SMALLBUFSIZE];
+
+	snprintf(subscribe_response_json, sizeof(subscribe_response_json),
+		"{\"id\":%s,\"result\":%s,\"error\":null}", response_id? response_id: "0", response_payload);
+
+	debuglog("SHA256D_SUBSCRIBE_TRACE client_ip=%s userid=%d workerid=%d worker_version=%s "
+		"notify_id=%s extranonce1=%s extranonce2size=%d difficulty_actual=%.8f "
+		"version_rolling_enabled=%d version_rolling_mask=%08x subscribe_response_json=%s\n",
+		(client && client->sock)? client->sock->ip: "-",
+		client? client->userid: 0,
+		client? client->workerid: 0,
+		sha256d_trace_safe_string(client? client->version: NULL, safe_version, sizeof(safe_version)),
+		client? client->notify_id: "-",
+		client? client->extranonce1: "-",
+		client? client->extranonce2size: 0,
+		client? client->difficulty_actual: 0,
+		(client && client->version_rolling_enabled)? 1: 0,
+		client? client->version_rolling_mask: 0,
+		subscribe_response_json);
 }
 
 YAAMP_CLIENT *client_find_notify_id(const char *notify_id, bool reconnecting)
@@ -88,6 +138,7 @@ int client_send_result(YAAMP_CLIENT *client, const char *format, ...)
 	else
 		sprintf(buffer3, "%d", client->id_int);
 
+	sha256d_log_subscribe_trace(client, buffer, buffer3);
 	return socket_send(client->sock, "{\"id\":%s,\"result\":%s,\"error\":null}\n", buffer3, buffer);
 }
 
@@ -288,11 +339,11 @@ int hostname_to_ip(const char *hostname , char* ip)
     struct in_addr **addr_list;
     int i;
 
-    if(hostname[0]>='0' && hostname[0]<='9')
-    {
-    	strcpy(ip, hostname);
-    	return 0;
-    }
+	if(hostname[0]>='0' && hostname[0]<='9')
+	{
+		strcpy(ip, hostname);
+		return 0;
+	}
 
     if ( (he = gethostbyname( hostname ) ) == NULL)
     {
@@ -339,10 +390,3 @@ bool client_find_my_ip(const char *name)
 
 	return false;
 }
-
-
-
-
-
-
-
