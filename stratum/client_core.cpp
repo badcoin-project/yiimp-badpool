@@ -98,7 +98,7 @@ void client_sort()
 	{
 		YAAMP_CLIENT *client1 = (YAAMP_CLIENT *)li->data;
 		YAAMP_CLIENT *client2 = (YAAMP_CLIENT *)li->next->data;
-		
+
 //		if(client2->difficulty_actual > client1->difficulty_actual)
 		if(client2->speed > client1->speed*1.5)
 		{
@@ -368,7 +368,25 @@ bool client_find_my_ip(const char *name)
 {
 //	return false;
 	char ip[1024] = "";
-	hostname_to_ip(g_tcp_server, ip);
 
-	return strcmp(ip, name) == 0;
+	hostname_to_ip(name, ip);
+	if(!ip[0]) return false;
+
+	char host[NI_MAXHOST];
+	for(struct ifaddrs *ifa = g_ifaddr; ifa != NULL; ifa = ifa->ifa_next)
+	{
+		if(ifa->ifa_addr == NULL) continue;
+		host[0] = 0;
+
+		getnameinfo(ifa->ifa_addr, sizeof(struct sockaddr_in), host, NI_MAXHOST, NULL, 0, NI_NUMERICHOST);
+		if(!host[0]) continue;
+
+		if(!strcmp(host, ip))
+		{
+			debuglog("found my ip %s\n", ip);
+			return true;
+		}
+	}
+
+	return false;
 }
