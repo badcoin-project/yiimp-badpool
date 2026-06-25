@@ -1,5 +1,63 @@
-
 #include "stratum.h"
+
+static bool sha256d_outbound_trace_enabled()
+{
+	return (g_current_algo && !strcmp(g_current_algo->name, "sha256")) || !strcmp(g_stratum_algo, "sha256");
+}
+
+static const char *sha256d_trace_safe_string(const char *input, char *output, size_t output_size)
+{
+	if(!output || !output_size) return "-";
+	if(!input)
+	{
+		snprintf(output, output_size, "-");
+		return output;
+	}
+
+	size_t o = 0;
+	for(size_t i = 0; input[i] && o + 1 < output_size; i++)
+	{
+		unsigned char c = (unsigned char)input[i];
+		output[o++] = (c <= 0x20 || c >= 0x7f)? '_': input[i];
+	}
+	output[o] = 0;
+	return output;
+}
+
+static void sha256d_log_set_difficulty_trace(YAAMP_CLIENT *client, double difficulty)
+{
+	if(!sha256d_outbound_trace_enabled()) return;
+
+	char safe_version[256];
+	char params[64];
+	char set_difficulty_json[256];
+	uint64_t user_target = diff_to_target(difficulty);
+	double difficulty_actual_before = client? client->difficulty_actual: 0;
+	double difficulty_actual_after = client? client->difficulty_actual: 0;
+
+	if(difficulty >= 1)
+		snprintf(params, sizeof(params), "[%.0f]", difficulty);
+	else
+		snprintf(params, sizeof(params), "[%.3f]", difficulty);
+
+	snprintf(set_difficulty_json, sizeof(set_difficulty_json),
+		"{\"id\":null,\"method\":\"mining.set_difficulty\",\"params\":%s}", params);
+
+	debuglog("SHA256D_SET_DIFFICULTY_TRACE client_ip=%s userid=%d workerid=%d worker_version=%s "
+		"difficulty_sent=%.8f difficulty_actual_before=%.8f difficulty_actual_after=%.8f "
+		"user_target=%016llx g_stratum_min_diff=%.8f g_stratum_max_diff=%.8f set_difficulty_json=%s\n",
+		(client && client->sock)? client->sock->ip: "-",
+		client? client->userid: 0,
+		client? client->workerid: 0,
+		sha256d_trace_safe_string(client? client->version: NULL, safe_version, sizeof(safe_version)),
+		difficulty,
+		difficulty_actual_before,
+		difficulty_actual_after,
+		(unsigned long long)user_target,
+		g_stratum_min_diff,
+		g_stratum_max_diff,
+		set_difficulty_json);
+}
 
 double client_normalize_difficulty(double difficulty)
 {
@@ -73,6 +131,7 @@ int client_send_difficulty(YAAMP_CLIENT *client, double difficulty)
 {
 //	debuglog("%s diff %f\n", client->sock->ip, difficulty);
 	client->shares_per_minute = YAAMP_SHAREPERSEC;
+	sha256d_log_set_difficulty_trace(client, difficulty);
 
 	if(difficulty >= 1)
 		client_call(client, "mining.set_difficulty", "[%.0f]", difficulty);
@@ -98,9 +157,6 @@ void client_initialize_difficulty(YAAMP_CLIENT *client)
 	}
 
 }
-
-
-
 
 
 
