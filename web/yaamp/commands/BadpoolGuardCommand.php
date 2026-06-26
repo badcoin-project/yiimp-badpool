@@ -1266,7 +1266,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 		}
 		$coinId = intval(arraySafeVal($this->guard->getScope(), 'coin_id'));
 		$rows = $this->guard->selectAll("SELECT E.id AS earning_id,E.userid,E.coinid,E.blockid,E.amount,E.status,E.mature_time,B.id AS block_id,B.height AS block_height,B.coin_id AS block_coin_id,B.category AS block_category,B.confirmations AS confirmations,C.mature_blocks AS mature_blocks FROM earnings E INNER JOIN blocks B ON B.id=E.blockid INNER JOIN coins C ON C.id=B.coin_id WHERE E.status=0 AND B.coin_id=:coin_id AND E.coinid=:coin_id AND B.category='immature' ORDER BY B.height,E.id", array(':coin_id'=>$coinId));
-		$items = array(); $blocks = array(); $totalsByUser = array(); $total = 0.0; $heights = array(); $excluded = array(); $blockEarningIds = array();
+		$items = array(); $blocks = array(); $totalsByUser = array(); $total = 0.0; $heights = array(); $excluded = array();
 		foreach ($rows as $r) {
 			$proof = $this->maturityProof($r);
 			if ($proof['status'] !== 'pass') {
@@ -1275,16 +1275,15 @@ class BadpoolGuardCommand extends CConsoleCommand
 				continue;
 			}
 			$blockId = intval($r['block_id']);
-			if (!isset($blockEarningIds[$blockId])) $blockEarningIds[$blockId] = array();
-			$blockEarningIds[$blockId][] = intval($r['earning_id']);
 			$item = array('earning_id'=>intval($r['earning_id']),'linked_block_id'=>$blockId,'block_height'=>intval($r['block_height']),'userid'=>intval($r['userid']),'coinid'=>intval($r['coinid']),'amount'=>$this->decimalString($r['amount']),'current_earning_status'=>intval($r['status']),'current_earning_mature_time'=>intval($r['mature_time']),'current_block_category'=>$r['block_category'],'block_confirmations'=>intval($r['confirmations']),'coin_mature_blocks'=>intval($r['mature_blocks']),'maturity_proof_status'=>$proof['status'],'maturity_proof_reason'=>$proof['reason'],'projected_block_category'=>'generate','projected_earnings_status'=>1,'projected_mature_time_behavior'=>'set_to_current_unix_timestamp_at_apply');
-			$items[] = $item; $blocks[$blockId] = array('block_id'=>$blockId,'block_height'=>intval($r['block_height']),'current_category'=>$r['block_category'],'height'=>intval($r['block_height']),'coin_id'=>intval($r['block_coin_id']),'from_category'=>$r['block_category'],'to_category'=>'generate','confirmations'=>intval($r['confirmations']),'mature_blocks'=>intval($r['mature_blocks']),'maturity_proof_status'=>$proof['status'],'maturity_proof_reason'=>$proof['reason'],'projected_category'=>'generate','linked_earning_ids'=>array(),'total_amount'=>'0');
+			$items[] = $item;
+			if (!isset($blocks[$blockId])) $blocks[$blockId] = array('block_id'=>$blockId,'block_height'=>intval($r['block_height']),'current_category'=>$r['block_category'],'height'=>intval($r['block_height']),'coin_id'=>intval($r['block_coin_id']),'from_category'=>$r['block_category'],'to_category'=>'generate','confirmations'=>intval($r['confirmations']),'mature_blocks'=>intval($r['mature_blocks']),'maturity_proof_status'=>$proof['status'],'maturity_proof_reason'=>$proof['reason'],'projected_category'=>'generate','linked_earning_ids'=>array(),'total_amount'=>'0');
+			$blocks[$blockId]['linked_earning_ids'][] = intval($r['earning_id']);
 			$blocks[$blockId]['total_amount'] = $this->decimalAdd($blocks[$blockId]['total_amount'], $r['amount']);
 			$u=(string)$r['userid']; if(!isset($totalsByUser[$u])) $totalsByUser[$u]=array('userid'=>intval($r['userid']),'earning_count'=>0,'amount_total'=>'0'); $totalsByUser[$u]['earning_count']++; $totalsByUser[$u]['amount_total']=$this->decimalAdd($totalsByUser[$u]['amount_total'],$r['amount']);
 			$total += floatval($r['amount']); $heights[] = intval($r['block_height']);
 		}
 		if (empty($items) && count($rows) > 0 && empty($excluded['conservative_maturity_proof_unavailable'])) $excluded['conservative_maturity_proof_unavailable'] = 0;
-		foreach ($blockEarningIds as $blockId => $ids) if (isset($blocks[$blockId])) $blocks[$blockId]['linked_earning_ids'] = $ids;
 		$blocks = array_values($blocks); usort($blocks, array($this,'sortByBlockId'));
 		$report = $this->guard->baseReport();
 		$report['summary']['selection_criteria'] = array("earnings.status=0", "earnings.blockid=blocks.id", "blocks.coin_id=--coin-id", "blocks.category='immature'", "DB maturity proof confirmations >= mature_blocks");
