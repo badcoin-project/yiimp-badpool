@@ -45,6 +45,11 @@ badpool_expect_contains('maturity apply mutates only immature blocks', $command,
 badpool_expect_contains('maturity apply mutates only selected earnings', $command, "WHERE id=:id AND userid=:uid AND coinid=:cid AND blockid=:bid AND amount=:amt AND status=0", $failures);
 badpool_expect_contains('maturity confirmation required', $command, 'operator-confirms-maturity-transition', $failures);
 badpool_expect_contains('maturity checksum required', $command, 'projected-block-mutation-checksum', $failures);
+badpool_expect_not_contains('maturity block aggregate must not reset per selected earning', $command, '$items[] = $item; $blocks[$blockId] = array(', $failures);
+badpool_expect_not_contains('maturity block aggregate must not stage linked earning IDs separately', $command, '$blockEarningIds', $failures);
+badpool_expect_contains('maturity block aggregate initializes each block once', $command, 'if (!isset($blocks[$blockId])) $blocks[$blockId] = array(', $failures);
+badpool_expect_contains('maturity block aggregate appends every selected earning ID', $command, '$blocks[$blockId][\'linked_earning_ids\'][] = intval($r[\'earning_id\']);', $failures);
+badpool_expect_contains('maturity block aggregate accumulates every selected earning amount', $command, '$blocks[$blockId][\'total_amount\'] = $this->decimalAdd($blocks[$blockId][\'total_amount\'], $r[\'amount\']);', $failures);
 
 badpool_expect_contains('account credit dryrun selects clearable status1 rows', $command, 'E.status=1 AND E.mature_time<:delay AND E.coinid=:coin_id', $failures);
 badpool_expect_contains('account credit uses BackendClearEarnings conversion helper', $command, 'yaamp_convert_amount_user($coin,$r[\'amount\'],$user)', $failures);
