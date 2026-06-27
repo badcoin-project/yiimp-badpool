@@ -42,7 +42,8 @@ badpool_expect_contains('maturity missing mature blocks excluded', $command, 'mi
 badpool_expect_contains('maturity below mature blocks excluded', $command, 'confirmations_below_mature_blocks', $failures);
 badpool_expect_contains('maturity dryrun selects status0 immature rows', $command, "E.status=0 AND B.coin_id=:coin_id AND E.coinid=:coin_id AND B.category='immature'", $failures);
 badpool_expect_contains('maturity apply mutates only immature blocks', $command, "WHERE id=:id AND coin_id=:coin_id AND height=:height AND category='immature'", $failures);
-badpool_expect_contains('maturity apply mutates only selected earnings', $command, "WHERE id=:id AND userid=:uid AND coinid=:cid AND blockid=:bid AND amount=:amt AND status=0", $failures);
+badpool_expect_contains('maturity apply mutates only selected earnings by identity scope', $command, "WHERE id=:id AND userid=:uid AND coinid=:cid AND blockid=:bid AND status=0", $failures);
+badpool_expect_not_contains('maturity apply must not require exact amount equality', $command, "WHERE id=:id AND userid=:uid AND coinid=:cid AND blockid=:bid AND amount".'=:amt'." AND status=0", $failures);
 badpool_expect_contains('maturity confirmation required', $command, 'operator-confirms-maturity-transition', $failures);
 badpool_expect_contains('maturity checksum required', $command, 'projected-block-mutation-checksum', $failures);
 badpool_expect_not_contains('maturity block aggregate must not reset per selected earning', $command, '$items[] = $item; $blocks[$blockId] = array(', $failures);
@@ -53,7 +54,8 @@ badpool_expect_contains('maturity block aggregate accumulates every selected ear
 
 badpool_expect_contains('account credit dryrun selects clearable status1 rows', $command, 'E.status=1 AND E.mature_time<:delay AND E.coinid=:coin_id', $failures);
 badpool_expect_contains('account credit uses BackendClearEarnings conversion helper', $command, 'yaamp_convert_amount_user($coin,$r[\'amount\'],$user)', $failures);
-badpool_expect_contains('account credit apply guards selected earnings', $command, 'WHERE id=:id AND userid=:uid AND coinid=:cid AND blockid=:bid AND amount=:amt AND status=1 AND mature_time=:mt', $failures);
+badpool_expect_contains('account credit apply guards selected earnings by identity scope', $command, 'WHERE id=:id AND userid=:uid AND coinid=:cid AND blockid=:bid AND status=1 AND mature_time=:mt', $failures);
+badpool_expect_not_contains('account credit apply must not require exact amount equality', $command, 'WHERE id=:id AND userid=:uid AND coinid=:cid AND blockid=:bid AND amount'.'=:amt'.' AND status=1 AND mature_time=:mt', $failures);
 badpool_expect_contains('account credit apply guards selected accounts', $command, 'WHERE id=:id AND coinid=:coinid', $failures);
 badpool_expect_contains('account credit confirmation required', $command, 'operator-confirms-account-credit', $failures);
 badpool_expect_contains('account credit checksum required', $command, 'projected-account-credit-checksum', $failures);
