@@ -188,7 +188,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 			"       php yaamp/yiic.php badpoolguard payout-row-approval-package --coin-id=<id> [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard payout-row-apply --coin-id=<id> --selected-account-ids=<csv> --approval-package-checksum=<sha256> --selected-scope-checksum=<sha256> --projected-payout-row-checksum=<sha256> --projected-account-debit-checksum=<sha256> --operator-confirms-payout-row-creation=scrypt_balance_to_payout_rows_no_wallet_send --format=json\n".
 			"       php yaamp/yiic.php badpoolguard wallet-send-dryrun --coin-id=<id> --selected-payout-ids=<csv> --format=json\n".
-			"       php yaamp/yiic.php badpoolguard wallet-send-approval-package --coin-id=<id> --selected-payout-ids=<csv> --operator-confirms-wallet-send=selected_payout_rows_<ids>_exact_total_<amount> --format=json\n".
+			"       php yaamp/yiic.php badpoolguard wallet-send-approval-package --coin-id=<id> --selected-payout-ids=<csv> --format=json\n".
 			"       php yaamp/yiic.php badpoolguard payable-source-reconciliation-preview --coin-id=<id> [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard account-credit-transition-preview --coin-id=<id> [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard earnings-credit-readiness-preview --coin-id=<id> [--format=json|text]\n".
@@ -1294,6 +1294,11 @@ class BadpoolGuardCommand extends CConsoleCommand
 		$confirmation = 'selected_payout_rows_'.implode('_', $report['selected_payout_ids']).'_exact_total_'.$report['projected_total'];
 		$report['approval_package_type'] = 'wallet-send';
 		$report['approval_required'] = true;
+		$report['scope_binding'] = array(
+			'coin_id' => $report['coin_id'],
+			'selected_payout_ids' => $report['selected_payout_ids'],
+			'source' => 'walletSendBuildReadOnlyPackage',
+		);
 		$report['operator_confirmation_required'] = '--operator-confirms-wallet-send='.$confirmation;
 		$report['apply_command_shape'] = array(
 			'php', 'yaamp/yiic.php', 'badpoolguard', 'wallet-send-apply',
@@ -1313,7 +1318,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 		$report['warnings'][] = 'Approval package only: this package does not run backend loops.';
 		$report['warnings'][] = 'Approval package only: this package does not change services.';
 		$report['approval_package_checksum'] = $this->stableApprovalChecksum($report, array(
-			'approval_package_type', 'scope', 'selected_payout_ids', 'row_inventory_checksum',
+			'approval_package_type', 'scope_binding', 'selected_payout_ids', 'row_inventory_checksum',
 			'destination_plan_checksum', 'projected_total', 'projected_total_checksum',
 			'dry_run_safety_flags', 'apply_command_shape'
 		));

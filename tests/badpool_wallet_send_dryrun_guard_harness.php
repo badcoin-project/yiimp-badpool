@@ -28,7 +28,8 @@ expect_contains('action registered', $command, "'wallet-send-dryrun'", $failures
 expect_contains('approval package action registered', $command, "'wallet-send-approval-package'", $failures);
 expect_contains('help documents command', $command, 'badpoolguard wallet-send-dryrun --coin-id=<id> --selected-payout-ids=<csv> --format=json', $failures);
 expect_contains('help documents approval package', $command, 'badpoolguard wallet-send-approval-package --coin-id=<id> --selected-payout-ids=<csv>', $failures);
-expect_contains('help documents operator confirmation placeholder', $command, '--operator-confirms-wallet-send', $failures);
+expect_not_contains('approval package help must not accept operator confirmation input', $command, 'badpoolguard wallet-send-approval-package --coin-id=<id> --selected-payout-ids=<csv> --operator-confirms-wallet-send', $failures);
+expect_contains('operator confirmation retained as future apply placeholder', $command, '--operator-confirms-wallet-send', $failures);
 expect_contains('selected payout option allowed', $context, "'selected-payout-ids'", $failures);
 expect_contains('json required', $command, 'wallet-send-dryrun requires --format=json.', $failures);
 expect_contains('approval json required', $command, 'wallet-send-approval-package requires --format=json.', $failures);
@@ -52,7 +53,9 @@ expect_contains('approval row inventory checksum', $command, 'row_inventory_chec
 expect_contains('approval destination plan checksum', $command, 'destination_plan_checksum', $failures);
 expect_contains('approval package checksum', $command, 'approval_package_checksum', $failures);
 expect_contains('approval exact total sample', $command, 'selected_payout_rows_', $failures);
-expect_contains('approval checksum stable keys exclude generated_at/report_checksum', $command, "'approval_package_type', 'scope', 'selected_payout_ids', 'row_inventory_checksum'", $failures);
+expect_contains('approval checksum uses deterministic scope binding', $command, "'approval_package_type', 'scope_binding', 'selected_payout_ids', 'row_inventory_checksum'", $failures);
+expect_contains('approval package scope binding present', $command, "'source' => 'walletSendBuildReadOnlyPackage'", $failures);
+expect_not_contains('approval checksum must not bind full context scope', $command, "'approval_package_type', 'scope', 'selected_payout_ids', 'row_inventory_checksum'", $failures);
 foreach (array('wallet_rpc_send_performed','db_mutations','payout_rows_marked_completed','withdraw_rows_created','backend_loops_run','retry_delete_behavior','wallet_send_apply_available') as $flag) {
 	expect_contains("blocked flag $flag", $command, "['$flag'] = false", $failures);
 }
@@ -61,6 +64,8 @@ $end = strpos($command, 'private function payoutRowApprovalPackageReport', $star
 $dryrun = ($start === false || $end === false) ? '' : substr($command, $start, $end - $start);
 $exactSum = wallet_send_dryrun_exact_decimal_add_harness('209676.33670359474', '0.294463415249');
 if ($exactSum !== '209676.631167009989') $failures[] = 'exact decimal addition mismatch: expected 209676.631167009989 got '.$exactSum;
+$productionExactSum = wallet_send_dryrun_exact_decimal_add_harness('209676.33670359', '0.294463415249');
+if ($productionExactSum !== '209676.631167005249') $failures[] = 'PR59 production exact total mismatch: expected 209676.631167005249 got '.$productionExactSum;
 expect_contains('wallet-send-dryrun sums with exact helper', $dryrun, '$total = $this->walletSendDryrunDecimalAdd($total, $amount);', $failures);
 expect_not_contains('wallet-send-dryrun must not use float decimalAdd for projected_total_amount', $dryrun, '$total = $this->decimalAdd($total, $amount);', $failures);
 foreach (array('sendmany(', 'sendtoaddress', 'walletpassphrase', 'unlock', 'UPDATE payouts', 'INSERT INTO withdraws', 'DELETE FROM payouts', 'BackendPayments', 'BackendCoinPayments', 'startService(', 'stopService(', 'restartService(', 'createCommand()->update', 'createCommand()->insert', 'createCommand()->delete') as $forbidden) {
