@@ -23,6 +23,7 @@ class BadpoolGuardContext
 		'all-coins-preview',
 		'format',
 		'limit',
+		'selected-payout-ids',
 	);
 
 	private $dangerousOptions = array(
