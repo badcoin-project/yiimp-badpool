@@ -1,0 +1,29 @@
+<?php
+$root = dirname(__DIR__);
+$commandPath = $root.'/web/yaamp/commands/BadpoolGuardCommand.php';
+$failures = array();
+function expect_contains($label, $haystack, $needle, &$failures) { if (strpos($haystack, $needle) === false) $failures[] = "$label: missing expected text: $needle"; }
+function expect_not_contains($label, $haystack, $needle, &$failures) { if (strpos($haystack, $needle) !== false) $failures[] = "$label: found forbidden text: $needle"; }
+$command = is_file($commandPath) ? file_get_contents($commandPath) : '';
+foreach (array('payout-row-approval-package','payout-row-apply') as $action) { expect_contains("action registered: $action", $command, "'$action'", $failures); expect_contains("help documents: $action", $command, "badpoolguard $action", $failures); }
+foreach (array('approval-package-checksum','selected-scope-checksum','projected-payout-row-checksum','projected-account-debit-checksum') as $opt) expect_contains("exact checksum required: $opt", $command, $opt, $failures);
+expect_contains('operator confirmation required', $command, 'operator-confirms-payout-row-creation', $failures);
+expect_contains('operator confirmation exact string', $command, 'scrypt_balance_to_payout_rows_no_wallet_send', $failures);
+expect_contains('same source as preview', $command, 'same buildReadOnlyPayoutCandidates source as payout-candidates-preview', $failures);
+expect_contains('apply refuses empty selected account IDs', $command, 'selected_account_ids_required', $failures);
+expect_contains('apply transaction wrapped', $command, 'app()->db->beginTransaction()', $failures);
+expect_contains('payout row insert exists', $command, 'INSERT INTO payouts (account_id, idcoin, time, amount, completed, tx) VALUES', $failures);
+expect_contains('account debit guarded by account id coinid exact balance', $command, 'UPDATE accounts SET balance=:new_balance WHERE id=:id AND coinid=:coinid AND balance=:old_balance', $failures);
+expect_contains('balance changed refusal', $command, 'selected account balance changed before apply', $failures);
+expect_contains('before balances reported', $command, 'before_account_balances', $failures);
+expect_contains('after balances reported', $command, 'after_account_balances', $failures);
+expect_contains('payout count reported', $command, 'payout_count', $failures);
+expect_contains('withdraw rows not created', $command, 'withdraw_rows_created', $failures);
+expect_contains('payouts not marked completed', $command, 'payouts_marked_completed', $failures);
+expect_contains('old payouts not retried or deleted', $command, 'old_payouts_retried_or_deleted', $failures);
+$start = strpos($command, 'private function payoutRowApplyReport');
+$end = strpos($command, 'private function parsePayoutRowApplyOptions', $start);
+$apply = ($start === false || $end === false) ? '' : substr($command, $start, $end - $start);
+foreach (array('sendtoaddress','sendmany','wallet-rpc','WalletRPC','BackendPayments','delete()','DELETE FROM payouts','completed=1') as $forbidden) expect_not_contains('wallet send/retry/delete not used in apply path', $apply, $forbidden, $failures);
+if (!empty($failures)) { echo "Badpool payout-row apply guard harness FAILED\n"; foreach ($failures as $failure) echo " - $failure\n"; exit(1); }
+echo "Badpool payout-row apply guard harness passed\n";

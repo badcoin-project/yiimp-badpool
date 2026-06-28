@@ -21,6 +21,8 @@ class BadpoolGuardCommand extends CConsoleCommand
 		'payout-candidates-preview',
 		'payout-row-preflight-preview',
 		'payout-row-dryrun-plan',
+		'payout-row-approval-package',
+		'payout-row-apply',
 		'payable-source-reconciliation-preview',
 		'account-credit-transition-preview',
 		'earnings-credit-readiness-preview',
@@ -61,7 +63,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 		if ($action === 'forward-catchup-stage1-apply') {
 			$actionArgs = $this->forwardCatchupStage1ApplyContextArgs($args);
 		}
-		if ($action === 'earnings-maturity-transition-apply' || $action === 'account-credit-clear-apply') {
+		if ($action === 'earnings-maturity-transition-apply' || $action === 'account-credit-clear-apply' || $action === 'payout-row-apply') {
 			$actionArgs = $this->guardedApplyContextArgs($args);
 		}
 		$this->guard = BadpoolGuardContext::fromArgs($action, $actionArgs);
@@ -91,6 +93,12 @@ class BadpoolGuardCommand extends CConsoleCommand
 				break;
 			case 'payout-row-dryrun-plan':
 				$report = $this->payoutRowDryRunPlanReport();
+				break;
+			case 'payout-row-approval-package':
+				$report = $this->payoutRowApprovalPackageReport();
+				break;
+			case 'payout-row-apply':
+				$report = $this->payoutRowApplyReport($args);
 				break;
 			case 'payable-source-reconciliation-preview':
 				$report = $this->payableSourceReconciliationPreviewReport();
@@ -169,6 +177,8 @@ class BadpoolGuardCommand extends CConsoleCommand
 			"       php yaamp/yiic.php badpoolguard payout-candidates-preview --coin-id=<id> [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard payout-row-preflight-preview --coin-id=<id> [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard payout-row-dryrun-plan --coin-id=<id> [--format=json|text]\n".
+			"       php yaamp/yiic.php badpoolguard payout-row-approval-package --coin-id=<id> [--format=json|text]\n".
+			"       php yaamp/yiic.php badpoolguard payout-row-apply --coin-id=<id> --selected-account-ids=<csv> --approval-package-checksum=<sha256> --selected-scope-checksum=<sha256> --projected-payout-row-checksum=<sha256> --projected-account-debit-checksum=<sha256> --operator-confirms-payout-row-creation=scrypt_balance_to_payout_rows_no_wallet_send --format=json\n".
 			"       php yaamp/yiic.php badpoolguard payable-source-reconciliation-preview --coin-id=<id> [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard account-credit-transition-preview --coin-id=<id> [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard earnings-credit-readiness-preview --coin-id=<id> [--format=json|text]\n".
@@ -1257,6 +1267,24 @@ class BadpoolGuardCommand extends CConsoleCommand
 		return json_encode($row);
 	}
 
+
+
+	private function payoutRowApprovalPackageReport()
+	{
+		if ($this->guard->isAllCoinsPreview()) { $this->guard->addError('payout-row-approval-package requires --coin-id and refuses all-coin scope.'); return $this->guard->refusalReport(); }
+		$candidates = $this->buildReadOnlyPayoutCandidates(); $coinId = intval(arraySafeVal($this->guard->getScope(), 'coin_id')); $items = array();
+		foreach ($candidates as $c) $items[] = array('account_id'=>intval($c['account_id']),'account_coinid'=>intval($c['coin_id']),'current_balance'=>$this->decimalString($c['current_balance']),'payout_threshold'=>$this->decimalString($c['threshold']),'projected_payout_row_amount'=>$this->decimalString($c['projected_payout_amount']),'projected_account_debit_amount'=>$this->decimalString($c['projected_payout_amount']),'projected_remaining_balance'=>$this->decimalString($c['projected_remaining_balance']));
+		$r = $this->guard->baseReport(); $r['approval_package_type']='payout-row-creation'; $r['approval_required']=true; $r['scope_binding']=array('coin_id'=>$coinId,'source'=>'same buildReadOnlyPayoutCandidates source as payout-candidates-preview'); $r['safety_binding']=array('no_wallet_send'=>true,'no_withdraw_creation'=>true,'no_backend_loop'=>true,'no_share_deletion'=>true); $r['summary']['selected_account_count']=count($items); $r['summary']['projected_payout_total']=$this->sumColumn($items,'projected_payout_row_amount'); $r['items']['selected_accounts']=$items;
+		$r['selected_scope_checksum']=BadpoolGuardReport::checksum(array('coin_id'=>$coinId,'accounts'=>$items)); $r['projected_payout_row_checksum']=BadpoolGuardReport::checksum(array_map(function($i){return array('account_id'=>$i['account_id'],'idcoin'=>$i['account_coinid'],'amount'=>$i['projected_payout_row_amount'],'completed'=>0,'tx'=>null);}, $items)); $r['projected_account_debit_checksum']=BadpoolGuardReport::checksum(array_map(function($i){return array('account_id'=>$i['account_id'],'coinid'=>$i['account_coinid'],'from_balance'=>$i['current_balance'],'debit'=>$i['projected_account_debit_amount'],'to_balance'=>$i['projected_remaining_balance']);}, $items));
+		$r['apply_command_shape']=array('php','yaamp/yiic.php','badpoolguard','payout-row-apply','--coin-id='.$coinId,'--selected-account-ids='.$this->csvIds($items,'account_id'),'--approval-package-checksum=<approval_package_checksum>','--selected-scope-checksum='.arraySafeVal($r['selected_scope_checksum'],'value'),'--projected-payout-row-checksum='.arraySafeVal($r['projected_payout_row_checksum'],'value'),'--projected-account-debit-checksum='.arraySafeVal($r['projected_account_debit_checksum'],'value'),'--operator-confirms-payout-row-creation=scrypt_balance_to_payout_rows_no_wallet_send','--format=json');
+		$r=$this->guard->finalizeReport($r); unset($r['report_checksum']); $r['approval_package_checksum']=$this->stableApprovalChecksum($r,array('approval_package_type','scope_binding','safety_binding','selected_scope_checksum','projected_payout_row_checksum','projected_account_debit_checksum','items','apply_command_shape')); $r['report_checksum']=BadpoolGuardReport::checksum($r); return $r;
+	}
+	private function payoutRowApprovalForIds($ids) { $r=$this->payoutRowApprovalPackageReport(); $items=$this->filterRowsByIds(arraySafeVal(arraySafeVal($r,'items',array()),'selected_accounts',array()),'account_id',$ids); $r['items']['selected_accounts']=$items; $r['selected_scope_checksum']=BadpoolGuardReport::checksum(array('coin_id'=>arraySafeVal($this->guard->getScope(),'coin_id'),'accounts'=>$items)); $r['projected_payout_row_checksum']=BadpoolGuardReport::checksum(array_map(function($i){return array('account_id'=>$i['account_id'],'idcoin'=>$i['account_coinid'],'amount'=>$i['projected_payout_row_amount'],'completed'=>0,'tx'=>null);}, $items)); $r['projected_account_debit_checksum']=BadpoolGuardReport::checksum(array_map(function($i){return array('account_id'=>$i['account_id'],'coinid'=>$i['account_coinid'],'from_balance'=>$i['current_balance'],'debit'=>$i['projected_account_debit_amount'],'to_balance'=>$i['projected_remaining_balance']);}, $items)); $r['apply_command_shape']=$this->replacePayoutApplyScopeIds(arraySafeVal($r,'apply_command_shape',array()),$ids); unset($r['report_checksum']); $r['approval_package_checksum']=$this->stableApprovalChecksum($r,array('approval_package_type','scope_binding','safety_binding','selected_scope_checksum','projected_payout_row_checksum','projected_account_debit_checksum','items','apply_command_shape')); $r['report_checksum']=BadpoolGuardReport::checksum($r); return $r; }
+	private function payoutRowApplyReport($args) { $opts=$this->parsePayoutRowApplyOptions($args); $report=$this->guardedApplyBaseReport('payout-row',$opts); foreach(array('selected-account-ids','approval-package-checksum','selected-scope-checksum','projected-payout-row-checksum','projected-account-debit-checksum') as $r) if(!isset($opts[$r])||$opts[$r]==='') return $this->guardedApplyFail($report,'missing_required_checksum','Missing required --'.$r.'.'); if(isset($opts['__parse_error'])) return $this->guardedApplyFail($report,'invalid_option',$opts['__parse_error']); if(arraySafeVal($opts,'operator-confirms-payout-row-creation')!=='scrypt_balance_to_payout_rows_no_wallet_send') return $this->guardedApplyFail($report,'operator_confirmation_required','Missing exact --operator-confirms-payout-row-creation=scrypt_balance_to_payout_rows_no_wallet_send.'); $ids=$this->parseCsvIds(arraySafeVal($opts,'selected-account-ids','')); if(empty($ids)) return $this->guardedApplyFail($report,'selected_account_ids_required','Apply refuses without selected account IDs.'); $approval=$this->payoutRowApprovalForIds($ids); foreach(array('approval-package-checksum'=>'approval_package_checksum','selected-scope-checksum'=>'selected_scope_checksum','projected-payout-row-checksum'=>'projected_payout_row_checksum','projected-account-debit-checksum'=>'projected_account_debit_checksum') as $opt=>$field) if((string)$opts[$opt] !== (string)arraySafeVal(arraySafeVal($approval,$field,array()),'value')) return $this->guardedApplyFail($report,'checksum_mismatch','Expected checksum does not match freshly generated approval package state: --'.$opt.'.'); $before=$this->payoutRowAccountBalances($ids); $tx=app()->db->beginTransaction(); try{ $applied=$this->applyPayoutRows($approval); $tx->commit(); $after=$this->payoutRowAccountBalances($ids); return BadpoolGuardReport::finalize(array_merge($report,$applied,array('status'=>'pass','abort_reason'=>null,'before_account_balances'=>$before,'after_account_balances'=>$after,'wallet_rpc_used'=>false,'wallet_sends'=>false,'withdraw_rows_created'=>false,'backend_loops_run'=>false,'shares_deleted'=>false))); } catch(Exception $e){ if($tx->active)$tx->rollback(); return $this->guardedApplyFail($report,'mutation_failed_rolled_back',$e->getMessage()); } }
+	private function applyPayoutRows($approval) { $items=arraySafeVal(arraySafeVal($approval,'items',array()),'selected_accounts',array()); $n=0; foreach($items as $i){ app()->db->createCommand('INSERT INTO payouts (account_id, idcoin, time, amount, completed, tx) VALUES (:account_id, :idcoin, :time, :amount, 0, NULL)')->execute(array(':account_id'=>$i['account_id'],':idcoin'=>$i['account_coinid'],':time'=>time(),':amount'=>$i['projected_payout_row_amount'])); $u=app()->db->createCommand('UPDATE accounts SET balance=:new_balance WHERE id=:id AND coinid=:coinid AND balance=:old_balance')->execute(array(':new_balance'=>$i['projected_remaining_balance'],':id'=>$i['account_id'],':coinid'=>$i['account_coinid'],':old_balance'=>$i['current_balance'])); if($u!==1) throw new Exception('selected account balance changed before apply: '.$i['account_id']); $n++; } return array('payout_rows_inserted'=>$n,'payout_count'=>$n,'payout_rows_insert_only'=>true,'accounts_debited_to_projected_remaining_balance'=>true,'payouts_marked_completed'=>false,'old_payouts_retried_or_deleted'=>false); }
+	private function parsePayoutRowApplyOptions($args){ $allowed=array('coin-id','format','selected-account-ids','approval-package-checksum','selected-scope-checksum','projected-payout-row-checksum','projected-account-debit-checksum','operator-confirms-payout-row-creation'); $o=array(); foreach($args as $arg){ if(!preg_match('/^--([^=]+)=(.*)$/',$arg,$m)){ $o['__parse_error']='Unknown argument refused: '.$arg; continue; } $n=strtolower($m[1]); if(!in_array($n,$allowed,true)) $o['__parse_error']='Unknown option refused: --'.$m[1]; elseif(isset($o[$n])) $o['__parse_error']='Duplicate option refused: --'.$m[1]; else $o[$n]=$m[2]; } return $o; }
+	private function payoutRowAccountBalances($ids){ $out=array(); foreach($ids as $id){ $row=$this->guard->selectRow('SELECT id AS account_id, coinid, balance FROM accounts WHERE id=:id',array(':id'=>$id)); if($row)$out[]=$row; } return $out; }
+	private function replacePayoutApplyScopeIds($shape,$ids){ $csv='--selected-account-ids='.implode(',',$ids); foreach($shape as $k=>$v) if(strpos($v,'--selected-account-ids=')===0) $shape[$k]=$csv; return $shape; }
 
 	private function earningsMaturityTransitionDryrunReport()
 	{
