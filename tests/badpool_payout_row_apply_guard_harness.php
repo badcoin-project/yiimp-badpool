@@ -11,8 +11,18 @@ expect_contains('operator confirmation required', $command, 'operator-confirms-p
 expect_contains('operator confirmation exact string', $command, 'scrypt_balance_to_payout_rows_no_wallet_send', $failures);
 expect_contains('same source as preview', $command, 'same buildReadOnlyPayoutCandidates source as payout-candidates-preview', $failures);
 expect_contains('apply refuses empty selected account IDs', $command, 'selected_account_ids_required', $failures);
+expect_contains('apply rejects duplicate selected account IDs', $command, 'Duplicate selected account IDs are refused.', $failures);
+expect_contains('apply rejects missing noncandidate selected account IDs', $command, 'Every requested account ID must be present in current payout candidates.', $failures);
+expect_contains('apply uses scope mismatch abort reason', $command, 'selected_account_scope_mismatch', $failures);
+expect_contains('apply requires json format abort reason', $command, 'json_format_required', $failures);
 expect_contains('apply transaction wrapped', $command, 'app()->db->beginTransaction()', $failures);
 expect_contains('payout row insert exists', $command, 'INSERT INTO payouts (account_id, idcoin, time, amount, completed, tx) VALUES', $failures);
+expect_contains('payout schema preflight abort exists', $command, 'payout_schema_missing', $failures);
+expect_contains('accounts schema preflight abort exists', $command, 'accounts_schema_missing', $failures);
+expect_contains('payout schema preflight checks required columns', $command, "array('account_id', 'idcoin', 'time', 'amount', 'completed', 'tx')", $failures);
+expect_contains('payout schema uses columnExists', $command, "columnExists('payouts', \$column)", $failures);
+expect_contains('accounts schema preflight checks required columns', $command, "array('id', 'coinid', 'balance')", $failures);
+expect_contains('accounts schema uses columnExists', $command, "columnExists('accounts', \$column)", $failures);
 expect_contains('account debit guarded by account id coinid exact balance', $command, 'UPDATE accounts SET balance=:new_balance WHERE id=:id AND coinid=:coinid AND balance=:old_balance', $failures);
 expect_contains('balance changed refusal', $command, 'selected account balance changed before apply', $failures);
 expect_contains('before balances reported', $command, 'before_account_balances', $failures);
@@ -25,5 +35,8 @@ $start = strpos($command, 'private function payoutRowApplyReport');
 $end = strpos($command, 'private function parsePayoutRowApplyOptions', $start);
 $apply = ($start === false || $end === false) ? '' : substr($command, $start, $end - $start);
 foreach (array('sendtoaddress','sendmany','wallet-rpc','WalletRPC','BackendPayments','delete()','DELETE FROM payouts','completed=1') as $forbidden) expect_not_contains('wallet send/retry/delete not used in apply path', $apply, $forbidden, $failures);
+$schemaPreflight = strpos($command, 'payoutRowApplySchemaError');
+$transactionStart = strpos($command, 'app()->db->beginTransaction()', strpos($command, 'private function payoutRowApplyReport'));
+if ($schemaPreflight === false || $transactionStart === false || $schemaPreflight > $transactionStart) $failures[] = 'schema preflight must exist before payout-row apply transaction begins';
 if (!empty($failures)) { echo "Badpool payout-row apply guard harness FAILED\n"; foreach ($failures as $failure) echo " - $failure\n"; exit(1); }
 echo "Badpool payout-row apply guard harness passed\n";
