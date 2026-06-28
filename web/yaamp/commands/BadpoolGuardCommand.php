@@ -1313,6 +1313,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 			$this->guard->addError('Duplicate selected payout IDs are refused.');
 			return $this->guard->refusalReport();
 		}
+		sort($ids, SORT_NUMERIC);
 
 		$rows = $this->walletSendSelectedPayoutRows($ids);
 		if (count($rows) !== count($ids)) {

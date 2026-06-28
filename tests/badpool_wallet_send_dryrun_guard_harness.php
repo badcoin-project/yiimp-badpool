@@ -14,6 +14,7 @@ expect_contains('json required', $command, 'wallet-send-dryrun requires --format
 expect_contains('coin scoped to Badpool 1267', $command, 'coin-id 1267 only', $failures);
 expect_contains('non-empty selected payout ids', $command, 'wallet-send-dryrun requires non-empty --selected-payout-ids CSV', $failures);
 expect_contains('duplicate payout IDs refused', $command, 'Duplicate selected payout IDs are refused.', $failures);
+expect_contains('numeric selected payout ordering enforced', $command, 'sort($ids, SORT_NUMERIC);', $failures);
 expect_contains('broad scope refused', $command, 'refuses broad/all-coin scope', $failures);
 expect_contains('exact selected rows required', $command, 'Selected payout row count mismatch', $failures);
 expect_contains('joins accounts', $command, 'INNER JOIN accounts A ON A.id=P.account_id', $failures);
