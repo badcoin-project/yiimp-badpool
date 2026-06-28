@@ -25,11 +25,16 @@ function wallet_send_dryrun_exact_decimal_add_harness($a, $b) {
 $command = is_file($commandPath) ? file_get_contents($commandPath) : '';
 $context = is_file($contextPath) ? file_get_contents($contextPath) : '';
 expect_contains('action registered', $command, "'wallet-send-dryrun'", $failures);
+expect_contains('approval package action registered', $command, "'wallet-send-approval-package'", $failures);
 expect_contains('help documents command', $command, 'badpoolguard wallet-send-dryrun --coin-id=<id> --selected-payout-ids=<csv> --format=json', $failures);
+expect_contains('help documents approval package', $command, 'badpoolguard wallet-send-approval-package --coin-id=<id> --selected-payout-ids=<csv>', $failures);
+expect_contains('help documents operator confirmation placeholder', $command, '--operator-confirms-wallet-send', $failures);
 expect_contains('selected payout option allowed', $context, "'selected-payout-ids'", $failures);
 expect_contains('json required', $command, 'wallet-send-dryrun requires --format=json.', $failures);
+expect_contains('approval json required', $command, 'wallet-send-approval-package requires --format=json.', $failures);
 expect_contains('coin scoped to Badpool 1267', $command, 'coin-id 1267 only', $failures);
 expect_contains('non-empty selected payout ids', $command, 'wallet-send-dryrun requires non-empty --selected-payout-ids CSV', $failures);
+expect_contains('approval non-empty selected payout ids', $command, 'wallet-send-approval-package requires non-empty --selected-payout-ids CSV', $failures);
 expect_contains('duplicate payout IDs refused', $command, 'Duplicate selected payout IDs are refused.', $failures);
 expect_contains('numeric selected payout ordering enforced', $command, 'sort($ids, SORT_NUMERIC);', $failures);
 expect_contains('wallet-send-dryrun exact decimal helper present', $command, 'private function walletSendDryrunDecimalAdd', $failures);
@@ -43,18 +48,31 @@ expect_contains('recipient from username', $command, "'recipient' => (string)$".
 expect_contains('projected sendmany', $command, "'projected_send_method'] = 'sendmany'", $failures);
 expect_contains('row inventory checksum', $command, 'wallet_send_row_inventory_sha256', $failures);
 expect_contains('destination plan checksum', $command, 'wallet_send_destination_plan_sha256', $failures);
+expect_contains('approval row inventory checksum', $command, 'row_inventory_checksum', $failures);
+expect_contains('approval destination plan checksum', $command, 'destination_plan_checksum', $failures);
+expect_contains('approval package checksum', $command, 'approval_package_checksum', $failures);
+expect_contains('approval exact total sample', $command, 'selected_payout_rows_', $failures);
+expect_contains('approval checksum stable keys exclude generated_at/report_checksum', $command, "'approval_package_type', 'scope', 'selected_payout_ids', 'row_inventory_checksum'", $failures);
 foreach (array('wallet_rpc_send_performed','db_mutations','payout_rows_marked_completed','withdraw_rows_created','backend_loops_run','retry_delete_behavior','wallet_send_apply_available') as $flag) {
 	expect_contains("blocked flag $flag", $command, "['$flag'] = false", $failures);
 }
-$start = strpos($command, 'private function walletSendDryrunReport');
+$start = strpos($command, 'private function walletSendBuildReadOnlyPackage');
 $end = strpos($command, 'private function payoutRowApprovalPackageReport', $start);
 $dryrun = ($start === false || $end === false) ? '' : substr($command, $start, $end - $start);
 $exactSum = wallet_send_dryrun_exact_decimal_add_harness('209676.33670359474', '0.294463415249');
 if ($exactSum !== '209676.631167009989') $failures[] = 'exact decimal addition mismatch: expected 209676.631167009989 got '.$exactSum;
 expect_contains('wallet-send-dryrun sums with exact helper', $dryrun, '$total = $this->walletSendDryrunDecimalAdd($total, $amount);', $failures);
 expect_not_contains('wallet-send-dryrun must not use float decimalAdd for projected_total_amount', $dryrun, '$total = $this->decimalAdd($total, $amount);', $failures);
-foreach (array('sendmany(', 'sendtoaddress', 'walletpassphrase', 'unlock', 'UPDATE payouts', 'INSERT INTO withdraws', 'DELETE FROM payouts', 'BackendPayments', 'BackendCoinPayments', 'service', 'createCommand()->update', 'createCommand()->insert', 'createCommand()->delete') as $forbidden) {
-	expect_not_contains('wallet-send-dryrun mutation/send forbidden', $dryrun, $forbidden, $failures);
+foreach (array('sendmany(', 'sendtoaddress', 'walletpassphrase', 'unlock', 'UPDATE payouts', 'INSERT INTO withdraws', 'DELETE FROM payouts', 'BackendPayments', 'BackendCoinPayments', 'startService(', 'stopService(', 'restartService(', 'createCommand()->update', 'createCommand()->insert', 'createCommand()->delete') as $forbidden) {
+	expect_not_contains('wallet-send shared builder mutation/send forbidden', $dryrun, $forbidden, $failures);
 }
+$approvalStart = strpos($command, 'private function walletSendApprovalPackageReport');
+$approvalEnd = strpos($command, 'private function walletSendBuildReadOnlyPackage', $approvalStart);
+$approval = ($approvalStart === false || $approvalEnd === false) ? '' : substr($command, $approvalStart, $approvalEnd - $approvalStart);
+foreach (array('does not send wallet funds','does not mutate DB','does not mark payouts completed','does not create withdraw rows','does not run backend loops','does not change services') as $warning) {
+	expect_contains('approval warning '.$warning, $approval, $warning, $failures);
+}
+expect_contains('dryrun and approval share builder', $command, '$report = $this->walletSendBuildReadOnlyPackage(false);', $failures);
+expect_contains('approval uses shared builder', $command, '$report = $this->walletSendBuildReadOnlyPackage(true);', $failures);
 if (!empty($failures)) { echo "Badpool wallet-send dryrun guard harness FAILED\n"; foreach ($failures as $failure) echo " - $failure\n"; exit(1); }
 echo "Badpool wallet-send dryrun guard harness passed\n";
