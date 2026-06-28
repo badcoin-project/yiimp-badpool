@@ -1345,7 +1345,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 				'recipient' => (string)$row['username'],
 			);
 			$destinationPlan[] = array('recipient' => (string)$row['username'], 'amount' => $amount, 'source_payout_id' => $id);
-			$total = $this->decimalAdd($total, $amount);
+			$total = $this->walletSendDryrunDecimalAdd($total, $amount);
 		}
 		if (!$this->guard->isValid()) return $this->guard->refusalReport();
 
@@ -1358,6 +1358,54 @@ class BadpoolGuardCommand extends CConsoleCommand
 		$report['wallet_send_row_inventory_sha256'] = BadpoolGuardReport::checksum($rowInventory);
 		$report['wallet_send_destination_plan_sha256'] = BadpoolGuardReport::checksum($destinationPlan);
 		return $this->guard->finalizeReport($report);
+	}
+
+	private function walletSendDryrunDecimalAdd($a, $b)
+	{
+		$a = trim((string)$a);
+		$b = trim((string)$b);
+		if ($a === '') $a = '0';
+		if ($b === '') $b = '0';
+		if (!preg_match('/^\d+(?:\.\d+)?$/', $a) || !preg_match('/^\d+(?:\.\d+)?$/', $b)) {
+			throw new Exception('wallet-send-dryrun amount must be an unsigned decimal string.');
+		}
+
+		list($aWhole, $aFrac) = $this->walletSendDryrunDecimalParts($a);
+		list($bWhole, $bFrac) = $this->walletSendDryrunDecimalParts($b);
+		$scale = max(strlen($aFrac), strlen($bFrac));
+		$aDigits = ltrim($aWhole.str_pad($aFrac, $scale, '0'), '0');
+		$bDigits = ltrim($bWhole.str_pad($bFrac, $scale, '0'), '0');
+		if ($aDigits === '') $aDigits = '0';
+		if ($bDigits === '') $bDigits = '0';
+
+		$carry = 0;
+		$out = '';
+		$ai = strlen($aDigits) - 1;
+		$bi = strlen($bDigits) - 1;
+		while ($ai >= 0 || $bi >= 0 || $carry > 0) {
+			$sum = $carry;
+			if ($ai >= 0) $sum += ord($aDigits[$ai--]) - 48;
+			if ($bi >= 0) $sum += ord($bDigits[$bi--]) - 48;
+			$out = chr(48 + ($sum % 10)).$out;
+			$carry = intdiv($sum, 10);
+		}
+
+		if ($scale > 0) {
+			if (strlen($out) <= $scale) $out = str_pad($out, $scale + 1, '0', STR_PAD_LEFT);
+			$out = substr($out, 0, -$scale).'.'.substr($out, -$scale);
+			$out = rtrim($out, '0');
+			$out = rtrim($out, '.');
+		}
+		$out = ltrim($out, '0');
+		if ($out === '') return '0';
+		if ($out[0] === '.') $out = '0'.$out;
+		return $out;
+	}
+
+	private function walletSendDryrunDecimalParts($value)
+	{
+		$parts = explode('.', $value, 2);
+		return array($parts[0], isset($parts[1]) ? $parts[1] : '');
 	}
 
 	private function walletSendSelectedPayoutRows($ids)
