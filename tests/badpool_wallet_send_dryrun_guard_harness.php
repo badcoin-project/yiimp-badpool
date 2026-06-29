@@ -55,6 +55,8 @@ expect_contains('approval package checksum', $command, 'approval_package_checksu
 expect_contains('approval exact total sample', $command, 'selected_payout_rows_', $failures);
 expect_contains('approval checksum uses deterministic scope binding', $command, "'approval_package_type', 'scope_binding', 'selected_payout_ids', 'row_inventory_checksum'", $failures);
 expect_contains('approval package scope binding present', $command, "'source' => 'walletSendBuildReadOnlyPackage'", $failures);
+expect_contains('approval apply shape includes projected total option', $command, "'--projected-total='."."$"."report['projected_total']", $failures);
+expect_contains('approval apply shape includes projected total checksum option', $command, "'--projected-total-checksum='.arraySafeVal("."$"."report['projected_total_checksum'], 'value')", $failures);
 expect_not_contains('approval checksum must not bind full context scope', $command, "'approval_package_type', 'scope', 'selected_payout_ids', 'row_inventory_checksum'", $failures);
 foreach (array('wallet_rpc_send_performed','db_mutations','payout_rows_marked_completed','withdraw_rows_created','backend_loops_run','retry_delete_behavior','wallet_send_apply_available') as $flag) {
 	expect_contains("blocked flag $flag", $command, "['$flag'] = false", $failures);
