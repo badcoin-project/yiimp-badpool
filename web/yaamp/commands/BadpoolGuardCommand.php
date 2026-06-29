@@ -25,6 +25,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 		'payout-row-apply',
 		'wallet-send-dryrun',
 		'wallet-send-approval-package',
+		'wallet-send-apply',
 		'payable-source-reconciliation-preview',
 		'account-credit-transition-preview',
 		'earnings-credit-readiness-preview',
@@ -65,7 +66,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 		if ($action === 'forward-catchup-stage1-apply') {
 			$actionArgs = $this->forwardCatchupStage1ApplyContextArgs($args);
 		}
-		if ($action === 'earnings-maturity-transition-apply' || $action === 'account-credit-clear-apply' || $action === 'payout-row-apply') {
+		if ($action === 'earnings-maturity-transition-apply' || $action === 'account-credit-clear-apply' || $action === 'payout-row-apply' || $action === 'wallet-send-apply') {
 			$actionArgs = $this->guardedApplyContextArgs($args);
 		}
 		$this->guard = BadpoolGuardContext::fromArgs($action, $actionArgs);
@@ -107,6 +108,9 @@ class BadpoolGuardCommand extends CConsoleCommand
 				break;
 			case 'wallet-send-approval-package':
 				$report = $this->walletSendApprovalPackageReport();
+				break;
+			case 'wallet-send-apply':
+				$report = $this->walletSendApplyReport($args);
 				break;
 			case 'payable-source-reconciliation-preview':
 				$report = $this->payableSourceReconciliationPreviewReport();
@@ -189,6 +193,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 			"       php yaamp/yiic.php badpoolguard payout-row-apply --coin-id=<id> --selected-account-ids=<csv> --approval-package-checksum=<sha256> --selected-scope-checksum=<sha256> --projected-payout-row-checksum=<sha256> --projected-account-debit-checksum=<sha256> --operator-confirms-payout-row-creation=scrypt_balance_to_payout_rows_no_wallet_send --format=json\n".
 			"       php yaamp/yiic.php badpoolguard wallet-send-dryrun --coin-id=<id> --selected-payout-ids=<csv> --format=json\n".
 			"       php yaamp/yiic.php badpoolguard wallet-send-approval-package --coin-id=<id> --selected-payout-ids=<csv> --format=json\n".
+			"       php yaamp/yiic.php badpoolguard wallet-send-apply --coin-id=<id> --selected-payout-ids=<csv> --approval-package-checksum=<sha256> --row-inventory-checksum=<sha256> --destination-plan-checksum=<sha256> --projected-total=<decimal> --projected-total-checksum=<sha256> --operator-confirms-wallet-send=<confirmation-text> --format=json\n".
 			"       php yaamp/yiic.php badpoolguard payable-source-reconciliation-preview --coin-id=<id> [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard account-credit-transition-preview --coin-id=<id> [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard earnings-credit-readiness-preview --coin-id=<id> [--format=json|text]\n".
@@ -1279,6 +1284,39 @@ class BadpoolGuardCommand extends CConsoleCommand
 
 
 
+
+
+	private function walletSendApplyReport($args)
+	{
+		$opts = $this->parseWalletSendApplyOptions($args);
+		$report = $this->walletSendApplyBaseReport($opts);
+		if (isset($opts['__parse_error'])) return $this->walletSendApplyFail($report, 'invalid_option', $opts['__parse_error']);
+		if ($this->guard->getFormat() !== 'json') return $this->walletSendApplyFail($report, 'json_format_required', 'wallet-send-apply supports --format=json only.');
+		if ($this->guard->isAllCoinsPreview()) return $this->walletSendApplyFail($report, 'coin_id_required', 'wallet-send-apply requires --coin-id and refuses broad/all-coin scope.');
+		foreach (array('selected-payout-ids','approval-package-checksum','row-inventory-checksum','destination-plan-checksum','projected-total','projected-total-checksum','operator-confirms-wallet-send') as $r) if (!isset($opts[$r]) || $opts[$r] === '') return $this->walletSendApplyFail($report, 'missing_required_approval_binding', 'Missing required --'.$r.'.');
+		$ids = $this->parseCsvIds($opts['selected-payout-ids']);
+		if (empty($ids)) return $this->walletSendApplyFail($report, 'selected_payout_ids_required', 'wallet-send-apply refuses empty or missing --selected-payout-ids.');
+		if ($this->hasDuplicateIds($ids)) return $this->walletSendApplyFail($report, 'selected_payout_scope_mismatch', 'Duplicate selected payout IDs are refused.');
+		sort($ids, SORT_NUMERIC);
+		if ((string)$opts['selected-payout-ids'] !== implode(',', $ids)) return $this->walletSendApplyFail($report, 'selected_payout_scope_mismatch', 'Selected payout IDs must be explicit sorted CSV with no broad scope aliases.');
+		$approval = $this->walletSendBuildReadOnlyPackage(true);
+		if (!$this->guard->isValid()) return $this->walletSendApplyFail($report, 'live_inventory_recompute_failed', 'Fresh wallet-send approval package recompute failed.');
+		$expectedConfirm = 'selected_payout_rows_'.implode('_', $ids).'_exact_total_'.$approval['projected_total'];
+		if ((string)$opts['operator-confirms-wallet-send'] !== $expectedConfirm) return $this->walletSendApplyFail($report, 'operator_confirmation_required', 'Missing exact --operator-confirms-wallet-send='.$expectedConfirm.'.');
+		foreach (array('approval-package-checksum'=>'approval_package_checksum','row-inventory-checksum'=>'row_inventory_checksum','destination-plan-checksum'=>'destination_plan_checksum','projected-total-checksum'=>'projected_total_checksum') as $opt=>$field) if ((string)$opts[$opt] !== (string)arraySafeVal(arraySafeVal($approval, $field, array()), 'value')) return $this->walletSendApplyFail($report, 'checksum_mismatch', 'Expected checksum does not match freshly generated approval package state: --'.$opt.'.');
+		if ((string)$opts['projected-total'] !== (string)$approval['projected_total']) return $this->walletSendApplyFail($report, 'projected_total_mismatch', 'Projected total changed before apply.');
+		$destinationPlan = arraySafeVal($approval, 'destination_plan', array()); if (empty($destinationPlan)) return $this->walletSendApplyFail($report, 'empty_destination_plan', 'wallet-send-apply refuses an empty destination plan.');
+		$dests = $this->walletSendApplyDestinationMap($destinationPlan); $coin = (object)$this->guard->getCoin(); $remote = new WalletRPC($coin); $txid = $remote->badpoolGuardedSendmanyApply((string)arraySafeVal($coin, 'account', ''), $dests);
+		if (!$txid || !is_string($txid)) return $this->walletSendApplyFail($report, 'wallet_rpc_send_failed', 'Wallet RPC sendmany failed or returned no txid: '.json_encode($remote->error));
+		$tx = app()->db->beginTransaction();
+		try { $updated = $this->walletSendApplyMarkCompleted($ids, $txid); if ($updated !== count($ids)) throw new Exception('selected payout rows changed before post-send completion update'); $tx->commit(); $report = array_merge($report, array('status'=>'pass','reason'=>null,'coin_id'=>intval($opts['coin-id']),'selected_payout_ids'=>$ids,'row_inventory_checksum'=>$approval['row_inventory_checksum'],'destination_plan_checksum'=>$approval['destination_plan_checksum'],'projected_total'=>$approval['projected_total'],'projected_total_checksum'=>$approval['projected_total_checksum'],'approval_package_checksum'=>$approval['approval_package_checksum'],'wallet_rpc_send_performed'=>true,'db_mutations'=>true,'payout_rows_marked_completed'=>true,'withdraw_rows_created'=>false,'backend_loops_run'=>false,'service_change'=>false,'share_delete'=>false,'txid'=>$txid,'completed_payout_ids'=>$ids,'amount_sent_by_destination'=>$dests,'exact_total_sent'=>$approval['projected_total'])); return BadpoolGuardReport::finalize($report); }
+		catch (Exception $e) { if ($tx->active) $tx->rollback(); $report = array_merge($report, array('status'=>'critical','reason'=>'post_send_db_update_failed','wallet_rpc_send_performed'=>true,'txid'=>$txid,'selected_payout_ids'=>$ids,'db_mutations'=>'failed_or_partial','payout_rows_marked_completed'=>false,'manual_reconciliation_required'=>true)); $report['errors'][]=$e->getMessage(); return BadpoolGuardReport::finalize($report); }
+	}
+	private function parseWalletSendApplyOptions($args) { $allowed=array('coin-id','format','selected-payout-ids','approval-package-checksum','row-inventory-checksum','destination-plan-checksum','projected-total','projected-total-checksum','operator-confirms-wallet-send'); $o=array(); foreach($args as $arg){ if(!preg_match('/^--([^=]+)=(.*)$/',$arg,$m)){ $o['__parse_error']='Unknown argument refused: '.$arg; continue; } $n=strtolower($m[1]); if(!in_array($n,$allowed,true)) $o['__parse_error']='Unknown option refused: --'.$m[1]; elseif(isset($o[$n])) $o['__parse_error']='Duplicate option refused: --'.$m[1]; else $o[$n]=$m[2]; } return $o; }
+	private function walletSendApplyBaseReport($opts){ $r=$this->guard->baseReport('refused'); $r['command']='wallet-send-apply'; $r['wallet_rpc_primitive']='WalletRPC::badpoolGuardedSendmanyApply(sendmany)'; $r['amount_serialization']='destination_plan decimal strings are passed without float accumulation; CryptoNote amounts are converted to atomic integer strings by WalletRPC decimal parsing'; $r['wallet_rpc_send_performed']=false; $r['db_mutations']=false; $r['payout_rows_marked_completed']=false; $r['withdraw_rows_created']=false; $r['backend_loops_run']=false; $r['service_change']=false; $r['share_delete']=false; return $r; }
+	private function walletSendApplyFail($report,$reason,$msg){ $report['status']='refused'; $report['reason']=$reason; $report['wallet_rpc_send_performed']=false; $report['db_mutations']=false; $report['payout_rows_marked_completed']=false; $report['withdraw_rows_created']=false; $report['backend_loops_run']=false; $report['service_change']=false; $report['share_delete']=false; $report['errors'][]=$msg; return BadpoolGuardReport::finalize($report); }
+	private function walletSendApplyDestinationMap($plan){ $d=array(); foreach($plan as $row) $d[(string)$row['recipient']] = (string)$row['amount']; return $d; }
+	private function walletSendApplyMarkCompleted($ids,$txid){ $params=array(':tx'=>$txid); $ph=array(); foreach($ids as $i=>$id){ $k=':id'.$i; $ph[]=$k; $params[$k]=$id; } return app()->db->createCommand("UPDATE payouts SET completed=1, tx=:tx WHERE completed=0 AND (tx IS NULL OR tx='') AND id IN (".implode(',', $ph).")")->execute($params); }
 
 	private function walletSendDryrunReport()
 	{
