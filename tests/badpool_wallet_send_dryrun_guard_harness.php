@@ -66,9 +66,24 @@ $end = strpos($command, 'private function payoutRowApprovalPackageReport', $star
 $dryrun = ($start === false || $end === false) ? '' : substr($command, $start, $end - $start);
 $exactSum = wallet_send_dryrun_exact_decimal_add_harness('209676.33670359474', '0.294463415249');
 if ($exactSum !== '209676.631167009989') $failures[] = 'exact decimal addition mismatch: expected 209676.631167009989 got '.$exactSum;
+function wallet_send_project_8dp_harness($amount) { $parts=explode('.', $amount, 2); $whole=$parts[0]; $frac=str_pad(isset($parts[1])?$parts[1]:'', 9, '0'); $digits=ltrim($whole.substr($frac,0,8),'0'); if($digits==='')$digits='0'; if((ord($frac[8])-48)>=5){ $carry=1; $out=''; for($i=strlen($digits)-1;$i>=0;$i--){ $n=ord($digits[$i])-48+$carry; $out=chr(48+($n%10)).$out; $carry=$n>=10?1:0; } $digits=($carry?'1':'').$out; } if(strlen($digits)<=8)$digits=str_pad($digits,9,'0',STR_PAD_LEFT); return substr($digits,0,-8).'.'.substr($digits,-8); }
+if (wallet_send_project_8dp_harness('209676.33670359474') !== '209676.33670359') $failures[] = 'BTC projection fixture 512 failed';
+if (wallet_send_project_8dp_harness('0.294463415249') !== '0.29446342') $failures[] = 'BTC projection fixture 513 failed';
+if (wallet_send_dryrun_exact_decimal_add_harness('209676.33670359', '0.29446342') !== '209676.63116701') $failures[] = 'BTC projected total fixture failed';
 $productionExactSum = wallet_send_dryrun_exact_decimal_add_harness('209676.33670359', '0.294463415249');
 if ($productionExactSum !== '209676.631167005249') $failures[] = 'PR59 production exact total mismatch: expected 209676.631167005249 got '.$productionExactSum;
-expect_contains('wallet-send-dryrun sums with exact helper', $dryrun, '$total = $this->walletSendDryrunDecimalAdd($total, $amount);', $failures);
+expect_contains('BTC 8dp projection helper present', $command, 'private function walletSendProjectBtcAmount8dp', $failures);
+expect_contains('no float projection helper', $command, 'wallet-send BTC projection amount must be an unsigned decimal string', $failures);
+expect_contains('wallet_send_destination_plan included', $command, 'wallet_send_destination_plan', $failures);
+expect_contains('wallet_send_total included', $command, 'wallet_send_total', $failures);
+expect_contains('wallet_send_destination_plan_checksum included', $command, 'wallet_send_destination_plan_checksum', $failures);
+expect_contains('wallet_send_total_checksum included', $command, 'wallet_send_total_checksum', $failures);
+expect_contains('rounding report included', $command, 'wallet_send_rounding_report', $failures);
+expect_contains('approval apply shape includes wallet send total option', $command, "'--wallet-send-total='."."$"."report['wallet_send_total']", $failures);
+expect_contains('approval apply shape includes wallet send total checksum option', $command, "'--wallet-send-total-checksum='.arraySafeVal("."$"."report['wallet_send_total_checksum'], 'value')", $failures);
+expect_contains('approval apply shape includes wallet send destination plan checksum option', $command, "'--wallet-send-destination-plan-checksum='.arraySafeVal("."$"."report['wallet_send_destination_plan_checksum'], 'value')", $failures);
+expect_contains('wallet-send-dryrun sums raw total with exact helper', $dryrun, '$total = $this->walletSendDryrunDecimalAdd($total, $amount);', $failures);
+expect_contains('wallet-send-dryrun sums wallet total with exact helper', $dryrun, '$walletSendTotal = $this->walletSendDryrunDecimalAdd($walletSendTotal, $projectedAmount);', $failures);
 expect_not_contains('wallet-send-dryrun must not use float decimalAdd for projected_total_amount', $dryrun, '$total = $this->decimalAdd($total, $amount);', $failures);
 foreach (array('sendmany(', 'sendtoaddress', 'walletpassphrase', 'unlock', 'UPDATE payouts', 'INSERT INTO withdraws', 'DELETE FROM payouts', 'BackendPayments', 'BackendCoinPayments', 'startService(', 'stopService(', 'restartService(', 'createCommand()->update', 'createCommand()->insert', 'createCommand()->delete') as $forbidden) {
 	expect_not_contains('wallet-send shared builder mutation/send forbidden', $dryrun, $forbidden, $failures);
