@@ -196,7 +196,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 			"       php yaamp/yiic.php badpoolguard payout-row-apply --coin-id=<id> --selected-account-ids=<csv> --approval-package-checksum=<sha256> --selected-scope-checksum=<sha256> --projected-payout-row-checksum=<sha256> --projected-account-debit-checksum=<sha256> --operator-confirms-payout-row-creation=scrypt_balance_to_payout_rows_no_wallet_send --format=json\n".
 			"       php yaamp/yiic.php badpoolguard wallet-send-dryrun --coin-id=<id> --selected-payout-ids=<csv> --format=json\n".
 			"       php yaamp/yiic.php badpoolguard wallet-send-approval-package --coin-id=<id> --selected-payout-ids=<csv> --format=json\n".
-			"       php yaamp/yiic.php badpoolguard wallet-send-apply --coin-id=<id> --selected-payout-ids=<csv> --approval-package-checksum=<sha256> --row-inventory-checksum=<sha256> --destination-plan-checksum=<sha256> --projected-total=<decimal> --projected-total-checksum=<sha256> --operator-confirms-wallet-send=<confirmation-text> --format=json\n".
+			"       php yaamp/yiic.php badpoolguard wallet-send-apply --coin-id=<id> --selected-payout-ids=<csv> --approval-package-checksum=<sha256> --row-inventory-checksum=<sha256> --destination-plan-checksum=<sha256> --projected-total=<decimal> --projected-total-checksum=<sha256> --wallet-send-total=<decimal8> --wallet-send-total-checksum=<sha256> --wallet-send-destination-plan-checksum=<sha256> --operator-confirms-wallet-send=<confirmation-text> --format=json\n".
 			"       php yaamp/yiic.php badpoolguard payable-source-reconciliation-preview --coin-id=<id> [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard account-credit-transition-preview --coin-id=<id> [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard earnings-credit-readiness-preview --coin-id=<id> [--format=json|text]\n".
@@ -1305,7 +1305,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 		if (isset($opts['__parse_error'])) return $this->walletSendApplyFail($report, 'invalid_option', $opts['__parse_error']);
 		if ($this->guard->getFormat() !== 'json') return $this->walletSendApplyFail($report, 'json_format_required', 'wallet-send-apply supports --format=json only.');
 		if ($this->guard->isAllCoinsPreview()) return $this->walletSendApplyFail($report, 'coin_id_required', 'wallet-send-apply requires --coin-id and refuses broad/all-coin scope.');
-		foreach (array('selected-payout-ids','approval-package-checksum','row-inventory-checksum','destination-plan-checksum','projected-total','projected-total-checksum','operator-confirms-wallet-send') as $r) if (!isset($opts[$r]) || $opts[$r] === '') return $this->walletSendApplyFail($report, 'missing_required_approval_binding', 'Missing required --'.$r.'.');
+		foreach (array('selected-payout-ids','approval-package-checksum','row-inventory-checksum','destination-plan-checksum','projected-total','projected-total-checksum','wallet-send-total','wallet-send-total-checksum','wallet-send-destination-plan-checksum','operator-confirms-wallet-send') as $r) if (!isset($opts[$r]) || $opts[$r] === '') return $this->walletSendApplyFail($report, 'missing_required_approval_binding', 'Missing required --'.$r.'.');
 		$ids = $this->parseCsvIds($opts['selected-payout-ids']);
 		if (empty($ids)) return $this->walletSendApplyFail($report, 'selected_payout_ids_required', 'wallet-send-apply refuses empty or missing --selected-payout-ids.');
 		if ($this->hasDuplicateIds($ids)) return $this->walletSendApplyFail($report, 'selected_payout_scope_mismatch', 'Duplicate selected payout IDs are refused.');
@@ -1313,19 +1313,20 @@ class BadpoolGuardCommand extends CConsoleCommand
 		if ((string)$opts['selected-payout-ids'] !== implode(',', $ids)) return $this->walletSendApplyFail($report, 'selected_payout_scope_mismatch', 'Selected payout IDs must be explicit sorted CSV with no broad scope aliases.');
 		$approval = $this->walletSendApprovalPackageForIds($ids);
 		if (!$this->guard->isValid()) return $this->walletSendApplyFail($report, 'live_inventory_recompute_failed', 'Fresh wallet-send approval package recompute failed.');
-		$expectedConfirm = 'selected_payout_rows_'.implode('_', $ids).'_exact_total_'.$approval['projected_total'];
+		$expectedConfirm = 'selected_payout_rows_'.implode('_', $ids).'_exact_wallet_send_total_'.$approval['wallet_send_total'];
 		if ((string)$opts['operator-confirms-wallet-send'] !== $expectedConfirm) return $this->walletSendApplyFail($report, 'operator_confirmation_required', 'Missing exact --operator-confirms-wallet-send='.$expectedConfirm.'.');
-		foreach (array('approval-package-checksum'=>'approval_package_checksum','row-inventory-checksum'=>'row_inventory_checksum','destination-plan-checksum'=>'destination_plan_checksum','projected-total-checksum'=>'projected_total_checksum') as $opt=>$field) if ((string)$opts[$opt] !== (string)arraySafeVal(arraySafeVal($approval, $field, array()), 'value')) return $this->walletSendApplyFail($report, 'checksum_mismatch', 'Expected checksum does not match freshly generated approval package state: --'.$opt.'.');
+		foreach (array('approval-package-checksum'=>'approval_package_checksum','row-inventory-checksum'=>'row_inventory_checksum','destination-plan-checksum'=>'destination_plan_checksum','projected-total-checksum'=>'projected_total_checksum','wallet-send-total-checksum'=>'wallet_send_total_checksum','wallet-send-destination-plan-checksum'=>'wallet_send_destination_plan_checksum') as $opt=>$field) if ((string)$opts[$opt] !== (string)arraySafeVal(arraySafeVal($approval, $field, array()), 'value')) return $this->walletSendApplyFail($report, 'checksum_mismatch', 'Expected checksum does not match freshly generated approval package state: --'.$opt.'.');
 		if ((string)$opts['projected-total'] !== (string)$approval['projected_total']) return $this->walletSendApplyFail($report, 'projected_total_mismatch', 'Projected total changed before apply.');
-		$destinationPlan = arraySafeVal($approval, 'destination_plan', array()); if (empty($destinationPlan)) return $this->walletSendApplyFail($report, 'empty_destination_plan', 'wallet-send-apply refuses an empty destination plan.');
+		if ((string)$opts['wallet-send-total'] !== (string)$approval['wallet_send_total']) return $this->walletSendApplyFail($report, 'wallet_send_total_mismatch', 'Wallet-send total changed before apply.');
+		$destinationPlan = arraySafeVal($approval, 'wallet_send_destination_plan', array()); if (empty($destinationPlan)) return $this->walletSendApplyFail($report, 'empty_destination_plan', 'wallet-send-apply refuses an empty destination plan.');
 		$duplicateRecipient = $this->walletSendApplyDuplicateRecipient($destinationPlan); if ($duplicateRecipient !== null) return $this->walletSendApplyFail($report, 'duplicate_recipient_destination_refused', 'wallet-send-apply refuses duplicate recipient destination before wallet RPC send: '.$duplicateRecipient);
 		$dests = $this->walletSendApplyDestinationMap($destinationPlan); $coin = $this->walletSendApplyRpcCoin(intval($opts['coin-id'])); if (!$coin) return $this->walletSendApplyFail($report, 'wallet_rpc_coin_unavailable', 'Unable to load wallet RPC coin fields for apply.'); $remote = new WalletRPC($coin); $txid = $remote->badpoolGuardedSendmanyApply((string)$coin->account, $dests);
 		if (!$txid || !is_string($txid)) return $this->walletSendApplyFail($report, 'wallet_rpc_send_failed', 'Wallet RPC sendmany failed or returned no txid: '.json_encode($remote->error));
 		$tx = app()->db->beginTransaction();
-		try { $updated = $this->walletSendApplyMarkCompleted($ids, $txid, arraySafeVal(arraySafeVal($approval, 'row_inventory_checksum', array()), 'value'), arraySafeVal($approval, 'row_inventory', array())); if ($updated !== count($ids)) throw new Exception('selected payout rows changed before post-send completion update'); $tx->commit(); $report = array_merge($report, array('status'=>'pass','reason'=>null,'coin_id'=>intval($opts['coin-id']),'selected_payout_ids'=>$ids,'row_inventory_checksum'=>$approval['row_inventory_checksum'],'destination_plan_checksum'=>$approval['destination_plan_checksum'],'projected_total'=>$approval['projected_total'],'projected_total_checksum'=>$approval['projected_total_checksum'],'approval_package_checksum'=>$approval['approval_package_checksum'],'wallet_rpc_send_performed'=>true,'db_mutations'=>true,'payout_rows_marked_completed'=>true,'withdraw_rows_created'=>false,'backend_loops_run'=>false,'service_change'=>false,'share_delete'=>false,'txid'=>$txid,'completed_payout_ids'=>$ids,'amount_sent_by_destination'=>$dests,'exact_total_sent'=>$approval['projected_total'])); return BadpoolGuardReport::finalize($report); }
+		try { $updated = $this->walletSendApplyMarkCompleted($ids, $txid, arraySafeVal(arraySafeVal($approval, 'row_inventory_checksum', array()), 'value'), arraySafeVal($approval, 'row_inventory', array())); if ($updated !== count($ids)) throw new Exception('selected payout rows changed before post-send completion update'); $tx->commit(); $report = array_merge($report, array('status'=>'pass','reason'=>null,'coin_id'=>intval($opts['coin-id']),'selected_payout_ids'=>$ids,'row_inventory_checksum'=>$approval['row_inventory_checksum'],'destination_plan_checksum'=>$approval['destination_plan_checksum'],'projected_total'=>$approval['projected_total'],'projected_total_checksum'=>$approval['projected_total_checksum'],'wallet_send_total'=>$approval['wallet_send_total'],'wallet_send_total_checksum'=>$approval['wallet_send_total_checksum'],'wallet_send_destination_plan_checksum'=>$approval['wallet_send_destination_plan_checksum'],'approval_package_checksum'=>$approval['approval_package_checksum'],'wallet_rpc_send_performed'=>true,'db_mutations'=>true,'payout_rows_marked_completed'=>true,'withdraw_rows_created'=>false,'backend_loops_run'=>false,'service_change'=>false,'share_delete'=>false,'txid'=>$txid,'completed_payout_ids'=>$ids,'amount_sent_by_destination'=>$dests,'exact_total_sent'=>$approval['wallet_send_total'])); return BadpoolGuardReport::finalize($report); }
 		catch (Exception $e) { if ($tx->active) $tx->rollback(); $report = array_merge($report, array('status'=>'critical','reason'=>'post_send_db_update_failed','wallet_rpc_send_performed'=>true,'txid'=>$txid,'selected_payout_ids'=>$ids,'db_mutations'=>'failed_or_partial','payout_rows_marked_completed'=>false,'manual_reconciliation_required'=>true)); $report['errors'][]=$e->getMessage(); return BadpoolGuardReport::finalize($report); }
 	}
-	private function parseWalletSendApplyOptions($args) { $allowed=array('coin-id','format','selected-payout-ids','approval-package-checksum','row-inventory-checksum','destination-plan-checksum','projected-total','projected-total-checksum','operator-confirms-wallet-send'); $o=array(); foreach($args as $arg){ if(!preg_match('/^--([^=]+)=(.*)$/',$arg,$m)){ $o['__parse_error']='Unknown argument refused: '.$arg; continue; } $n=strtolower($m[1]); if(!in_array($n,$allowed,true)) $o['__parse_error']='Unknown option refused: --'.$m[1]; elseif(isset($o[$n])) $o['__parse_error']='Duplicate option refused: --'.$m[1]; else $o[$n]=$m[2]; } return $o; }
+	private function parseWalletSendApplyOptions($args) { $allowed=array('coin-id','format','selected-payout-ids','approval-package-checksum','row-inventory-checksum','destination-plan-checksum','projected-total','projected-total-checksum','wallet-send-total','wallet-send-total-checksum','wallet-send-destination-plan-checksum','operator-confirms-wallet-send'); $o=array(); foreach($args as $arg){ if(!preg_match('/^--([^=]+)=(.*)$/',$arg,$m)){ $o['__parse_error']='Unknown argument refused: '.$arg; continue; } $n=strtolower($m[1]); if(!in_array($n,$allowed,true)) $o['__parse_error']='Unknown option refused: --'.$m[1]; elseif(isset($o[$n])) $o['__parse_error']='Duplicate option refused: --'.$m[1]; else $o[$n]=$m[2]; } return $o; }
 	private function walletSendApplyBaseReport($opts){ $r=$this->guard->baseReport('refused'); $r['command']='wallet-send-apply'; $r['wallet_rpc_primitive']='WalletRPC::badpoolGuardedSendmanyApply(sendmany)'; $r['amount_serialization']='destination_plan decimal strings are passed without float accumulation; CryptoNote amounts are converted to atomic integer strings by WalletRPC decimal parsing'; $r['wallet_rpc_send_performed']=false; $r['db_mutations']=false; $r['payout_rows_marked_completed']=false; $r['withdraw_rows_created']=false; $r['backend_loops_run']=false; $r['service_change']=false; $r['share_delete']=false; return $r; }
 	private function walletSendApplyFail($report,$reason,$msg){ $report['status']='refused'; $report['reason']=$reason; $report['wallet_rpc_send_performed']=false; $report['db_mutations']=false; $report['payout_rows_marked_completed']=false; $report['withdraw_rows_created']=false; $report['backend_loops_run']=false; $report['service_change']=false; $report['share_delete']=false; $report['errors'][]=$msg; return BadpoolGuardReport::finalize($report); }
 	private function walletSendApplyDuplicateRecipient($plan){ $seen=array(); foreach($plan as $row){ $recipient=(string)arraySafeVal($row,'recipient',''); if(isset($seen[$recipient])) return $recipient; $seen[$recipient]=true; } return null; }
@@ -1346,7 +1347,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 	{
 		$report = $this->walletSendBuildReadOnlyPackage(true);
 		if (!$this->guard->isValid()) return $report;
-		$confirmation = 'selected_payout_rows_'.implode('_', $report['selected_payout_ids']).'_exact_total_'.$report['projected_total'];
+		$confirmation = 'selected_payout_rows_'.implode('_', $report['selected_payout_ids']).'_exact_wallet_send_total_'.$report['wallet_send_total'];
 		$report['approval_package_type'] = 'wallet-send';
 		$report['approval_required'] = true;
 		$report['scope_binding'] = array(
@@ -1364,6 +1365,9 @@ class BadpoolGuardCommand extends CConsoleCommand
 			'--destination-plan-checksum='.arraySafeVal($report['destination_plan_checksum'], 'value'),
 			'--projected-total='.$report['projected_total'],
 			'--projected-total-checksum='.arraySafeVal($report['projected_total_checksum'], 'value'),
+			'--wallet-send-total='.$report['wallet_send_total'],
+			'--wallet-send-total-checksum='.arraySafeVal($report['wallet_send_total_checksum'], 'value'),
+			'--wallet-send-destination-plan-checksum='.arraySafeVal($report['wallet_send_destination_plan_checksum'], 'value'),
 			$report['operator_confirmation_required'],
 			'--format=json'
 		);
@@ -1376,6 +1380,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 		$report['approval_package_checksum'] = $this->stableApprovalChecksum($report, array(
 			'approval_package_type', 'scope_binding', 'selected_payout_ids', 'row_inventory_checksum',
 			'destination_plan_checksum', 'projected_total', 'projected_total_checksum',
+			'wallet_send_destination_plan_checksum', 'wallet_send_total', 'wallet_send_total_checksum',
 			'dry_run_safety_flags', 'apply_command_shape'
 		));
 		$report['report_checksum'] = BadpoolGuardReport::checksum($report);
@@ -1415,7 +1420,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 		$rows = $this->walletSendSelectedPayoutRows($ids);
 		if (count($rows) !== count($ids)) { $this->guard->addError('Selected payout row count mismatch; every explicit payout ID must exist with joined account and coin rows.'); return $this->guard->refusalReport(); }
 		$rowById = array(); foreach ($rows as $row) $rowById[intval($row['payout_id'])] = $row;
-		$rowInventory = array(); $destinationPlan = array(); $total = '0';
+		$rowInventory = array(); $destinationPlan = array(); $walletSendDestinationPlan = array(); $roundingReport = array(); $total = '0'; $walletSendTotal = '0';
 		foreach ($ids as $id) {
 			$row = $rowById[$id]; $amount = (string)$row['amount'];
 			if (intval($row['payout_idcoin']) !== $coinId) $this->guard->addError('Selected payout row idcoin must match --coin-id for payout ID '.$id.'.');
@@ -1423,13 +1428,18 @@ class BadpoolGuardCommand extends CConsoleCommand
 			if ((string)arraySafeVal($row, 'tx', '') !== '') $this->guard->addError('Selected payout row must have tx NULL or empty for payout ID '.$id.'.');
 			if (intval($row['account_coinid']) !== intval($row['payout_idcoin'])) $this->guard->addError('Joined account coinid must equal payout idcoin for payout ID '.$id.'.');
 			$rowInventory[] = array('payout_id'=>$id,'idcoin'=>intval($row['payout_idcoin']),'account_id'=>intval($row['account_id']),'account_coinid'=>intval($row['account_coinid']),'coin_id'=>intval($row['coin_id']),'destination_field'=>'accounts.username','destination'=>(string)$row['username'],'recipient' => (string)$row['username'],'amount'=>$amount,'completed'=>intval($row['completed']),'tx'=>$row['tx']);
+			$projectedAmount = $this->walletSendProjectBtcAmount8dp($amount);
+			$delta = $this->walletSendDecimalSubtract($projectedAmount, $amount);
 			$destinationPlan[] = array('recipient' => (string)$row['username'],'amount'=>$amount,'payout_ids'=>array($id),'projected_send_amount'=>$amount);
+			$walletSendDestinationPlan[] = array('recipient' => (string)$row['username'],'payout_ids'=>array($id),'raw_amount'=>$amount,'amount'=>$projectedAmount,'projected_send_amount'=>$projectedAmount,'rounding_delta'=>$delta);
+			$roundingReport[] = array('payout_id'=>$id,'recipient'=>(string)$row['username'],'raw_amount'=>$amount,'wallet_send_amount'=>$projectedAmount,'rounding_delta'=>$delta,'nonzero_delta'=>($delta !== '0'));
 			$total = $this->walletSendDryrunDecimalAdd($total, $amount);
+			$walletSendTotal = $this->walletSendDryrunDecimalAdd($walletSendTotal, $projectedAmount);
 		}
 		if (!$this->guard->isValid()) return $this->guard->refusalReport();
-		$report['coin_id'] = $coinId; $report['selected_payout_ids'] = $ids; $report['selected_payout_count'] = count($ids); $report['projected_total'] = $total; $report['projected_total_amount'] = $total; $report['row_inventory'] = $rowInventory; $report['destination_plan'] = $destinationPlan;
-		$report['row_inventory_checksum'] = BadpoolGuardReport::checksum($rowInventory); $report['destination_plan_checksum'] = BadpoolGuardReport::checksum($destinationPlan); $report['projected_total_checksum'] = BadpoolGuardReport::checksum(array('projected_total'=>$total));
-		$report['wallet_send_row_inventory_sha256'] = $report['row_inventory_checksum']; $report['wallet_send_destination_plan_sha256'] = $report['destination_plan_checksum'];
+		$report['coin_id'] = $coinId; $report['selected_payout_ids'] = $ids; $report['selected_payout_count'] = count($ids); $report['projected_total'] = $total; $report['projected_total_amount'] = $total; $report['wallet_send_total'] = $walletSendTotal; $report['row_inventory'] = $rowInventory; $report['destination_plan'] = $destinationPlan; $report['wallet_send_destination_plan'] = $walletSendDestinationPlan; $report['wallet_send_rounding_report'] = array('per_destination'=>$roundingReport,'aggregate_delta'=>$this->walletSendDecimalSubtract($walletSendTotal, $total));
+		$report['row_inventory_checksum'] = BadpoolGuardReport::checksum($rowInventory); $report['destination_plan_checksum'] = BadpoolGuardReport::checksum($destinationPlan); $report['projected_total_checksum'] = BadpoolGuardReport::checksum(array('projected_total'=>$total)); $report['wallet_send_destination_plan_checksum'] = BadpoolGuardReport::checksum($walletSendDestinationPlan); $report['wallet_send_total_checksum'] = BadpoolGuardReport::checksum(array('wallet_send_total'=>$walletSendTotal));
+		$report['wallet_send_row_inventory_sha256'] = $report['row_inventory_checksum']; $report['wallet_send_destination_plan_sha256'] = $report['destination_plan_checksum']; $report['wallet_send_projected_destination_plan_sha256'] = $report['wallet_send_destination_plan_checksum'];
 		return $report;
 	}
 
@@ -1475,6 +1485,69 @@ class BadpoolGuardCommand extends CConsoleCommand
 		return $out;
 	}
 
+
+	private function walletSendProjectBtcAmount8dp($amount)
+	{
+		$amount = trim((string)$amount);
+		if (!preg_match('/^\d+(?:\.\d+)?$/', $amount)) throw new Exception('wallet-send BTC projection amount must be an unsigned decimal string.');
+		list($whole, $frac) = $this->walletSendDryrunDecimalParts($amount);
+		$frac = str_pad($frac, 9, '0');
+		$firstEight = substr($frac, 0, 8);
+		$roundDigit = ord($frac[8]) - 48;
+		$digits = ltrim($whole.$firstEight, '0');
+		if ($digits === '') $digits = '0';
+		if ($roundDigit >= 5) $digits = $this->walletSendIncrementDigits($digits);
+		if (strlen($digits) <= 8) $digits = str_pad($digits, 9, '0', STR_PAD_LEFT);
+		return substr($digits, 0, -8).'.'.substr($digits, -8);
+	}
+
+	private function walletSendIncrementDigits($digits)
+	{
+		$carry = 1;
+		$out = '';
+		for ($i = strlen($digits) - 1; $i >= 0; $i--) {
+			$n = ord($digits[$i]) - 48 + $carry;
+			$out = chr(48 + ($n % 10)).$out;
+			$carry = $n >= 10 ? 1 : 0;
+		}
+		if ($carry) $out = '1'.$out;
+		return $out;
+	}
+
+	private function walletSendDecimalSubtract($a, $b)
+	{
+		$a = trim((string)$a); $b = trim((string)$b);
+		if (!preg_match('/^\d+(?:\.\d+)?$/', $a) || !preg_match('/^\d+(?:\.\d+)?$/', $b)) throw new Exception('wallet-send decimal subtract requires unsigned decimal strings.');
+		$cmp = $this->walletSendDecimalCompare($a, $b);
+		if ($cmp === 0) return '0';
+		$neg = $cmp < 0;
+		if ($neg) { $tmp = $a; $a = $b; $b = $tmp; }
+		list($aw, $af) = $this->walletSendDryrunDecimalParts($a); list($bw, $bf) = $this->walletSendDryrunDecimalParts($b);
+		$scale = max(strlen($af), strlen($bf));
+		$ad = ltrim($aw.str_pad($af, $scale, '0'), '0'); $bd = ltrim($bw.str_pad($bf, $scale, '0'), '0');
+		if ($ad === '') $ad = '0'; if ($bd === '') $bd = '0';
+		$borrow = 0; $out = '';
+		for ($i = strlen($ad) - 1, $j = strlen($bd) - 1; $i >= 0; $i--, $j--) {
+			$n = ord($ad[$i]) - 48 - $borrow - ($j >= 0 ? ord($bd[$j]) - 48 : 0);
+			if ($n < 0) { $n += 10; $borrow = 1; } else $borrow = 0;
+			$out = chr(48 + $n).$out;
+		}
+		if ($scale > 0) { if (strlen($out) <= $scale) $out = str_pad($out, $scale + 1, '0', STR_PAD_LEFT); $out = substr($out, 0, -$scale).'.'.substr($out, -$scale); $out = rtrim(rtrim($out, '0'), '.'); }
+		$out = ltrim($out, '0'); if ($out === '') $out = '0'; if ($out[0] === '.') $out = '0'.$out;
+		return $neg ? '-'.$out : $out;
+	}
+
+	private function walletSendDecimalCompare($a, $b)
+	{
+		list($aw, $af) = $this->walletSendDryrunDecimalParts($a); list($bw, $bf) = $this->walletSendDryrunDecimalParts($b);
+		$aw = ltrim($aw, '0'); $bw = ltrim($bw, '0'); if ($aw === '') $aw = '0'; if ($bw === '') $bw = '0';
+		if (strlen($aw) !== strlen($bw)) return strlen($aw) > strlen($bw) ? 1 : -1;
+		if ($aw !== $bw) return strcmp($aw, $bw) > 0 ? 1 : -1;
+		$scale = max(strlen($af), strlen($bf)); $af = str_pad($af, $scale, '0'); $bf = str_pad($bf, $scale, '0');
+		if ($af === $bf) return 0;
+		return strcmp($af, $bf) > 0 ? 1 : -1;
+	}
+
 	private function walletSendDryrunDecimalParts($value)
 	{
 		$parts = explode('.', $value, 2);
@@ -1486,7 +1559,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 		$params = array();
 		$placeholders = array();
 		foreach ($ids as $i => $id) { $key = ':payout_id_'.$i; $placeholders[] = $key; $params[$key] = $id; }
-		return $this->guard->selectAll('SELECT P.id AS payout_id, P.account_id, P.idcoin AS payout_idcoin, P.amount, P.completed, P.tx, A.username, A.coinid AS account_coinid, C.id AS coin_id, C.symbol FROM payouts P INNER JOIN accounts A ON A.id=P.account_id INNER JOIN coins C ON C.id=P.idcoin WHERE P.id IN ('.implode(',', $placeholders).') ORDER BY P.id', $params);
+		return $this->guard->selectAll('SELECT P.id AS payout_id, P.account_id, P.idcoin AS payout_idcoin, P.amount, P.completed, P.tx, A.username, A.coinid AS account_coinid, C.id AS coin_id, C.symbol, C.rpcencoding FROM payouts P INNER JOIN accounts A ON A.id=P.account_id INNER JOIN coins C ON C.id=P.idcoin WHERE P.id IN ('.implode(',', $placeholders).') ORDER BY P.id', $params);
 	}
 
 	private function payoutRowApprovalPackageReport()
