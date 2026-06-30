@@ -1362,6 +1362,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 			'--approval-package-checksum=<approval_package_checksum>',
 			'--row-inventory-checksum='.arraySafeVal($report['row_inventory_checksum'], 'value'),
 			'--destination-plan-checksum='.arraySafeVal($report['destination_plan_checksum'], 'value'),
+			'--projected-total='.$report['projected_total'],
 			'--projected-total-checksum='.arraySafeVal($report['projected_total_checksum'], 'value'),
 			$report['operator_confirmation_required'],
 			'--format=json'
