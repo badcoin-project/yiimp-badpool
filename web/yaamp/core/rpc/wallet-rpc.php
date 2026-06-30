@@ -55,47 +55,6 @@ class WalletRPC {
 		}
 	}
 
-
-	function badpoolGuardedSendmanyApply($account, $dests)
-	{
-		if (!is_array($dests) || empty($dests)) {
-			$this->error = 'badpool guarded sendmany requires a non-empty destination map';
-			return false;
-		}
-		foreach ($dests as $address => $amount) {
-			if (!is_string($address) || $address === '' || !is_string($amount) || !preg_match('/^\d+(?:\.\d+)?$/', $amount)) {
-				$this->error = 'badpool guarded sendmany requires string address keys and unsigned decimal string amounts';
-				return false;
-			}
-		}
-		if ($this->type == 'CryptoNote') {
-			$destinations = array();
-			foreach ($dests as $address => $amount) {
-				$destinations[] = (object)array('amount' => $this->badpoolDecimalToAtomicString($amount, 12), 'address' => $address);
-			}
-			$res = $this->rpc_wallet->transfer(array('mixin'=>0, 'destinations'=>$destinations));
-			$this->error = $this->rpc_wallet->error;
-			return $res;
-		}
-		if ($this->type == 'Bitcoin') {
-			$res = $this->rpc->sendmany((string)$account, $dests);
-			$this->error = $this->rpc->error;
-			return $res;
-		}
-		$this->error = 'badpool guarded sendmany unsupported wallet type: '.$this->type;
-		return false;
-	}
-
-	private function badpoolDecimalToAtomicString($amount, $scale)
-	{
-		$parts = explode('.', $amount, 2);
-		$whole = ltrim($parts[0], '0');
-		$frac = isset($parts[1]) ? $parts[1] : '';
-		if (strlen($frac) > $scale) throw new Exception('amount has too many decimal places for wallet atomic scale');
-		$digits = ltrim(($whole === '' ? '0' : $whole).str_pad($frac, $scale, '0'), '0');
-		return $digits === '' ? '0' : $digits;
-	}
-
 	function __call($method, $params)
 	{
 		if (badpool_wallet_send_guard_is_send_method($method)) {
