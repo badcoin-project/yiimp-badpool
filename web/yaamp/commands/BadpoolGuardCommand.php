@@ -1322,8 +1322,9 @@ class BadpoolGuardCommand extends CConsoleCommand
 		$duplicateRecipient = $this->walletSendApplyDuplicateRecipient($destinationPlan); if ($duplicateRecipient !== null) return $this->walletSendApplyFail($report, 'duplicate_recipient_destination_refused', 'wallet-send-apply refuses duplicate recipient destination before wallet RPC send: '.$duplicateRecipient);
 		$dests = $this->walletSendApplyDestinationMap($destinationPlan); $coin = $this->walletSendApplyRpcCoin(intval($opts['coin-id'])); if (!$coin) return $this->walletSendApplyFail($report, 'wallet_rpc_coin_unavailable', 'Unable to load wallet RPC coin fields for apply.'); $remote = new WalletRPC($coin); $txid = $remote->badpoolGuardedSendmanyApply((string)$coin->account, $dests);
 		if (!$txid || !is_string($txid)) return $this->walletSendApplyFail($report, 'wallet_rpc_send_failed', 'Wallet RPC sendmany failed or returned no txid: '.json_encode($remote->error));
-		$tx = app()->db->beginTransaction();
+		$tx = null;
 		try {
+			$tx = app()->db->beginTransaction();
 			$updated = $this->walletSendApplyMarkCompleted($ids, $txid, arraySafeVal(arraySafeVal($approval, 'row_inventory_checksum', array()), 'value'), arraySafeVal($approval, 'row_inventory', array()));
 			if ($updated !== count($ids)) throw new Exception('selected payout rows changed before post-send completion update; expected '.count($ids).' guarded row updates, got '.$updated);
 			$tx->commit();
@@ -1331,7 +1332,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 			return BadpoolGuardReport::finalize($report);
 		}
 		catch (Exception $e) {
-			if ($tx->active) $tx->rollback();
+			if ($tx !== null && $tx->active) $tx->rollback();
 			return $this->walletSendApplyPostSendDbFailureReport($report, $txid, $ids, $approval, $e);
 		}
 	}

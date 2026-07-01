@@ -46,6 +46,12 @@ expect_contains('update guards account id', $apply, 'account_id=:account_id', $f
 expect_contains('update guards amount', $apply, 'amount=:amount', $failures);
 expect_contains('failure no send flag', $command, "'wallet_rpc_send_performed']=false", $failures);
 expect_contains('db transaction', $apply, 'beginTransaction()', $failures);
+$tryPos = strpos($apply, 'try {');
+$beginTxPos = strpos($apply, 'beginTransaction()');
+$catchPos = strpos($apply, 'catch (Exception $e)');
+if(!($tryPos !== false && $beginTxPos !== false && $catchPos !== false && $tryPos < $beginTxPos && $beginTxPos < $catchPos)) $failures[]='beginTransaction must be inside the post-send try/catch closeout section';
+expect_contains('transaction initialized nullable before try', $apply, '$tx = null;', $failures);
+expect_contains('null-safe transaction rollback', $apply, '$tx !== null && $tx->active', $failures);
 expect_contains('hold reconciliation', $apply, "'status'=>'hold'", $failures);
 expect_contains('send success reported', $apply, "'wallet_send_success'=>true", $failures);
 expect_contains('db completion success reported', $apply, "'db_completion_success'=>true", $failures);
