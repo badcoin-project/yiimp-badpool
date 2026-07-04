@@ -16,7 +16,7 @@ The command may only mutate selected block rows and pending earnings rows as des
 
 ## Command Shape
 
-`--limit` is accepted only by Stage 1 dry-run and approval-package generation commands. The apply command does not accept a fresh `--limit`; apply scope is bound by the approved checksum set.
+`--limit` is accepted by Stage 1 dry-run, approval-package generation, and apply. Apply requires the reviewed `--limit` and `--selected-count`; apply scope is bound by the approved checksum set and must not silently fall back to the default limit.
 
 The operator command shape is:
 
