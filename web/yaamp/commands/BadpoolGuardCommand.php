@@ -207,7 +207,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 			"       php yaamp/yiic.php badpoolguard forward-catchup-approval-package --coin-id=<id> [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard forward-catchup-stage1-apply-dryrun --coin-id=<id> [--limit=<n>] [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard forward-catchup-stage1-apply-approval-package --coin-id=<id> [--limit=<n>] [--format=json|text]\n".
-			"       php yaamp/yiic.php badpoolguard forward-catchup-stage1-apply --coin-id=<id> --approval-package-checksum=<sha256> --batch-scope-checksum=<sha256> --projected-mutation-checksum=<sha256> --projected-earnings-checksum=<sha256> --operator-confirms-attribution-model=block_userid_single_recipient --format=json\n".
+			"       php yaamp/yiic.php badpoolguard forward-catchup-stage1-apply --coin-id=<id> --limit=<approved_n> --selected-count=<approved_n> --approval-package-checksum=<sha256> --batch-scope-checksum=<sha256> --projected-mutation-checksum=<sha256> --projected-earnings-checksum=<sha256> --operator-confirms-attribution-model=block_userid_single_recipient --format=json\n".
 			"       php yaamp/yiic.php badpoolguard earnings-maturity-transition-dryrun --coin-id=<id> [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard earnings-maturity-transition-approval-package --coin-id=<id> [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard earnings-maturity-transition-apply --coin-id=<id> --selected-earning-ids=<csv> --approval-package-checksum=<sha256> --selected-scope-checksum=<sha256> --projected-block-mutation-checksum=<sha256> --projected-earnings-mutation-checksum=<sha256> --operator-confirms-maturity-transition=scrypt_status0_to_status1 --format=json\n".
@@ -790,13 +790,15 @@ class BadpoolGuardCommand extends CConsoleCommand
 			'badpoolguard',
 			'forward-catchup-stage1-apply',
 			'--coin-id='.arraySafeVal($this->guard->getScope(), 'coin_id'),
+			'--limit='.arraySafeVal(arraySafeVal(arraySafeVal($dryrun, 'summary', array()), 'limit', array()), 'requested'),
+			'--selected-count='.arraySafeVal($totals, 'selected_count'),
 			'--approval-package-checksum=<approval_package_checksum>',
 			'--batch-scope-checksum='.$batchScopeChecksumValue,
 			'--projected-mutation-checksum='.$projectedMutationChecksumValue,
 			'--projected-earnings-checksum='.$projectedEarningsChecksumValue,
 			'--operator-confirms-attribution-model=block_userid_single_recipient',
 		);
-		$applyScopeBinding = 'Apply does not accept --limit; the selected batch is bound by approval, batch scope, projected mutation, and projected earnings checksums.';
+		$applyScopeBinding = 'Apply requires the reviewed --limit and --selected-count; the selected batch is bound by approval, batch scope, projected mutation, and projected earnings checksums and must not fall back to the default limit.';
 		$mandatoryApplyGates = array(
 			'current block category must still be new',
 			'no linked earnings',
@@ -893,7 +895,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 	{
 		$options = $this->forwardCatchupStage1ApplyOptions($args);
 		$report = $this->forwardCatchupStage1ApplyBaseReport($options);
-		$required = array('approval-package-checksum', 'batch-scope-checksum', 'projected-mutation-checksum', 'projected-earnings-checksum');
+		$required = array('limit', 'selected-count', 'approval-package-checksum', 'batch-scope-checksum', 'projected-mutation-checksum', 'projected-earnings-checksum');
 
 		if (isset($options['__parse_error'])) {
 			return $this->forwardCatchupStage1ApplyFail($report, 'invalid_option', $options['__parse_error']);
@@ -909,6 +911,9 @@ class BadpoolGuardCommand extends CConsoleCommand
 				return $this->forwardCatchupStage1ApplyFail($report, 'missing_required_checksum', 'Missing required --'.$name.'.');
 			}
 		}
+		if (!preg_match('/^[0-9]+$/', (string)arraySafeVal($options, 'selected-count')) || intval(arraySafeVal($options, 'selected-count')) <= 0) {
+			return $this->forwardCatchupStage1ApplyFail($report, 'invalid_selected_count', 'Invalid --selected-count. Expected the positive selected_count from the reviewed approval package.');
+		}
 		if (arraySafeVal($options, 'operator-confirms-attribution-model') !== 'block_userid_single_recipient') {
 			return $this->forwardCatchupStage1ApplyFail($report, 'attribution_confirmation_required', 'Missing exact --operator-confirms-attribution-model=block_userid_single_recipient.');
 		}
@@ -919,6 +924,12 @@ class BadpoolGuardCommand extends CConsoleCommand
 		}
 
 		$report = $this->forwardCatchupStage1ApplyPopulateFromApproval($report, $approval);
+		$report['package_selected_count'] = intval(arraySafeVal($options, 'selected-count'));
+		$report['regenerated_selected_count'] = intval(arraySafeVal($report, 'selected_count', 0));
+		$report['validation_limit'] = intval(arraySafeVal($options, 'limit', 0));
+		if ($report['package_selected_count'] !== $report['regenerated_selected_count']) {
+			return $this->forwardCatchupStage1ApplyFail($report, 'scope_mismatch', 'Approved package selected_count does not match regenerated selected_count: package_selected_count='.(string)$report['package_selected_count'].' regenerated_selected_count='.(string)$report['regenerated_selected_count'].'.');
+		}
 		$checks = array(
 			'approval-package-checksum' => arraySafeVal(arraySafeVal($approval, 'approval_package_checksum', array()), 'value'),
 			'batch-scope-checksum' => arraySafeVal(arraySafeVal($approval, 'batch_scope_checksum', array()), 'value'),
@@ -965,7 +976,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 
 	private function forwardCatchupStage1ApplyContextArgs($args)
 	{
-		$allowed = array('coin-id', 'format');
+		$allowed = array('coin-id', 'format', 'limit');
 		$result = array();
 		foreach ($args as $arg) {
 			if (preg_match('/^--([^=]+)(=.*)?$/', $arg, $m) && in_array(strtolower($m[1]), $allowed, true)) {
@@ -978,7 +989,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 	private function forwardCatchupStage1ApplyOptions($args)
 	{
 		$options = array();
-		$allowed = array('coin-id', 'format', 'approval-package-checksum', 'batch-scope-checksum', 'projected-mutation-checksum', 'projected-earnings-checksum', 'operator-confirms-attribution-model');
+		$allowed = array('coin-id', 'format', 'limit', 'selected-count', 'approval-package-checksum', 'batch-scope-checksum', 'projected-mutation-checksum', 'projected-earnings-checksum', 'operator-confirms-attribution-model');
 		foreach ($args as $arg) {
 			if (preg_match('/^--([^=]+)=(.*)$/', $arg, $m)) {
 				$name = strtolower($m[1]);
@@ -1003,6 +1014,9 @@ class BadpoolGuardCommand extends CConsoleCommand
 		$report['stage'] = 'forward-catchup-stage1-apply';
 		$report['coin_id'] = arraySafeVal($this->guard->getScope(), 'coin_id');
 		$report['selected_count'] = 0;
+		$report['package_selected_count'] = arraySafeVal($options, 'selected-count');
+		$report['regenerated_selected_count'] = 0;
+		$report['validation_limit'] = arraySafeVal($options, 'limit');
 		$report['applied_generated_count'] = 0;
 		$report['applied_orphan_count'] = 0;
 		$report['inserted_earnings_count'] = 0;

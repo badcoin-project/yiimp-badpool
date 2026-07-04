@@ -83,7 +83,11 @@ expect_order('duplicate earning protection before insert', $command, "Duplicate 
 expect_order('generated update before pending earning insert', $command, 'forwardCatchupStage1ExecuteGeneratedBlockUpdate', "createCommand()->insert('earnings', \$row)", $failures);
 
 expect_contains('apply parser rejects unknown options', $command, "Unknown option refused: --", $failures);
-expect_contains('apply parser allowed options omit limit', $command, "\$allowed = array('coin-id', 'format', 'approval-package-checksum', 'batch-scope-checksum', 'projected-mutation-checksum', 'projected-earnings-checksum', 'operator-confirms-attribution-model');", $failures);
+expect_contains('apply context forwards approved limit', $command, "\$allowed = array('coin-id', 'format', 'limit');", $failures);
+expect_contains('apply parser allows approved limit and selected count', $command, "\$allowed = array('coin-id', 'format', 'limit', 'selected-count', 'approval-package-checksum', 'batch-scope-checksum', 'projected-mutation-checksum', 'projected-earnings-checksum', 'operator-confirms-attribution-model');", $failures);
+expect_contains('scope mismatch failure is preserved', $command, "'scope_mismatch'", $failures);
+expect_contains('package selected count reported', $command, "'package_selected_count'", $failures);
+expect_contains('regenerated selected count reported', $command, "'regenerated_selected_count'", $failures);
 expect_contains('missing checksum failure is preserved', $command, "'missing_required_checksum'", $failures);
 expect_contains('checksum mismatch failure is preserved', $command, "'checksum_mismatch'", $failures);
 expect_contains('attribution failure is preserved', $command, "'attribution_confirmation_required'", $failures);
@@ -93,10 +97,11 @@ expect_contains('approval apply command has approval checksum', $command, "--app
 $applyShapeStart = strpos($command, '$applyCommandShape = array(');
 $applyShapeEnd = strpos($command, ');', $applyShapeStart);
 $applyShape = ($applyShapeStart === false || $applyShapeEnd === false) ? '' : substr($command, $applyShapeStart, $applyShapeEnd - $applyShapeStart);
-expect_not_contains('apply command shape must not include limit', $applyShape, '--limit', $failures);
+expect_contains('apply command shape includes approved limit', $applyShape, '--limit=', $failures);
+expect_contains('apply command shape includes selected count', $applyShape, '--selected-count=', $failures);
 
-expect_contains('docs dry-run limit only', $doc, '`--limit` is accepted only by Stage 1 dry-run and approval-package generation commands.', $failures);
-expect_contains('docs apply scope checksum bound', $doc, 'The apply command does not accept a fresh `--limit`; apply scope is bound by the approved checksum set.', $failures);
+expect_contains('docs apply requires reviewed limit', $doc, 'Apply requires the reviewed `--limit` and `--selected-count`', $failures);
+expect_contains('docs apply no default fallback', $doc, 'must not silently fall back to the default limit', $failures);
 expect_contains('docs pending earnings only', $doc, 'Stage 1 creates pending earnings only; it does not credit accounts, create payout rows, send wallet transactions, delete shares, run backend loops, or start the blocks service.', $failures);
 
 if (!empty($failures)) {
