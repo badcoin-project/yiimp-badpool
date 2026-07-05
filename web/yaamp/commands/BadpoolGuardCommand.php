@@ -960,11 +960,25 @@ class BadpoolGuardCommand extends CConsoleCommand
 		try {
 			$applied = $this->forwardCatchupStage1ApplyMutations($mutations, $earnings);
 			$tx->commit();
-			$report['status'] = 'pass';
 			$report['applied_generated_count'] = $applied['applied_generated_count'];
 			$report['applied_orphan_count'] = $applied['applied_orphan_count'];
 			$report['inserted_earnings_count'] = $applied['inserted_earnings_count'];
-			$report['abort_reason'] = null;
+			$report['db_mutations'] = $this->forwardCatchupStage1ApplyDidMutate($applied);
+			$report['command_validation_status'] = 'pass';
+			$report['db_mutation_status'] = $report['db_mutations'] ? 'performed' : 'none';
+			$verification = $this->forwardCatchupStage1ApplyCloseoutVerification($mutations, $applied);
+			$report['post_apply_db_verification'] = $verification;
+			$report['post_apply_db_verification_status'] = arraySafeVal($verification, 'status');
+			$report['final_batch_reconciliation_status'] = arraySafeVal($verification, 'status') === 'pass' ? 'pass' : 'hold';
+			if (arraySafeVal($verification, 'status') === 'pass') {
+				$report['status'] = 'pass';
+				$report['abort_reason'] = null;
+			} else {
+				$report['status'] = 'hold';
+				$report['abort_reason'] = 'post_apply_closeout_verification_failed';
+				$report['affected_block_ids'] = arraySafeVal($verification, 'affected_block_ids', array());
+				$report['manual_verification_required'] = true;
+			}
 			return $report;
 		} catch (Exception $e) {
 			if ($tx->active) {
@@ -1020,6 +1034,11 @@ class BadpoolGuardCommand extends CConsoleCommand
 		$report['applied_generated_count'] = 0;
 		$report['applied_orphan_count'] = 0;
 		$report['inserted_earnings_count'] = 0;
+		$report['db_mutations'] = false;
+		$report['command_validation_status'] = 'not_passed';
+		$report['db_mutation_status'] = 'none';
+		$report['post_apply_db_verification_status'] = 'not_run';
+		$report['final_batch_reconciliation_status'] = 'not_reconciled';
 		$report['projected_pending_earnings_rows'] = 0;
 		$report['projected_pending_earnings_amount_gross'] = 0.0;
 		$report['approval_package_checksum'] = arraySafeVal($options, 'approval-package-checksum');
@@ -1048,6 +1067,11 @@ class BadpoolGuardCommand extends CConsoleCommand
 	private function forwardCatchupStage1ApplyFail($report, $reason, $message)
 	{
 		$report['status'] = 'fail';
+		$report['db_mutations'] = false;
+		$report['command_validation_status'] = 'fail';
+		$report['db_mutation_status'] = 'none';
+		$report['post_apply_db_verification_status'] = 'not_run';
+		$report['final_batch_reconciliation_status'] = 'not_reconciled';
 		$report['abort_reason'] = $reason;
 		$this->guard->addError($message);
 		return $report;
@@ -1249,6 +1273,74 @@ class BadpoolGuardCommand extends CConsoleCommand
 			'applied_orphan_count' => $appliedOrphan,
 			'inserted_earnings_count' => $inserted,
 		);
+	}
+
+	private function forwardCatchupStage1ApplyDidMutate($applied)
+	{
+		return intval(arraySafeVal($applied, 'applied_generated_count', 0)) > 0
+			|| intval(arraySafeVal($applied, 'applied_orphan_count', 0)) > 0
+			|| intval(arraySafeVal($applied, 'inserted_earnings_count', 0)) > 0;
+	}
+
+	private function forwardCatchupStage1ApplyCloseoutVerification($mutations, $applied)
+	{
+		$generatedIds = array();
+		$orphanIds = array();
+		foreach ($mutations as $mutation) {
+			$class = arraySafeVal($mutation, 'classification');
+			$blockid = intval(arraySafeVal($mutation, 'blockid'));
+			if ($class === 'stage1_import_generate' || $class === 'stage1_import_immature') {
+				$generatedIds[] = $blockid;
+			} elseif ($class === 'stage1_mark_orphan_no_earnings') {
+				$orphanIds[] = $blockid;
+			}
+		}
+		$generatedImmature = $this->forwardCatchupStage1CountBlocksInCategory($generatedIds, 'immature');
+		$orphanNow = $this->forwardCatchupStage1CountBlocksInCategory($orphanIds, 'orphan');
+		$stillNew = $this->forwardCatchupStage1CountBlocksInCategory(array_merge($generatedIds, $orphanIds), 'new');
+		$linkedEarnings = $this->forwardCatchupStage1CountLinkedEarnings($generatedIds);
+		$pass = $generatedImmature === intval(arraySafeVal($applied, 'applied_generated_count', 0))
+			&& $orphanNow === intval(arraySafeVal($applied, 'applied_orphan_count', 0))
+			&& $linkedEarnings === intval(arraySafeVal($applied, 'inserted_earnings_count', 0))
+			&& $stillNew === 0;
+		return array(
+			'status' => $pass ? 'pass' : 'hold',
+			'affected_block_ids' => array_merge($generatedIds, $orphanIds),
+			'expected_inserted_earnings_count' => intval(arraySafeVal($applied, 'inserted_earnings_count', 0)),
+			'linked_earnings_count' => $linkedEarnings,
+			'selected_blocks_still_new' => $stillNew,
+			'selected_blocks_now_immature' => $generatedImmature,
+			'selected_blocks_now_orphan' => $orphanNow,
+		);
+	}
+
+	private function forwardCatchupStage1CountBlocksInCategory($blockIds, $category)
+	{
+		if (empty($blockIds)) return 0;
+		$params = array(':category' => $category);
+		$placeholders = $this->forwardCatchupStage1IdPlaceholders($blockIds, 'b', $params);
+		$row = $this->guard->selectRow('SELECT COUNT(*) AS row_count FROM '.$this->guard->qtable('blocks').' WHERE '.$this->guard->qcol('id').' IN ('.implode(',', $placeholders).') AND '.$this->guard->qcol('category').'=:category', $params);
+		return intval(arraySafeVal($row, 'row_count', 0));
+	}
+
+	private function forwardCatchupStage1CountLinkedEarnings($blockIds)
+	{
+		if (empty($blockIds)) return 0;
+		$params = array();
+		$placeholders = $this->forwardCatchupStage1IdPlaceholders($blockIds, 'e', $params);
+		$row = $this->guard->selectRow('SELECT COUNT(*) AS row_count FROM '.$this->guard->qtable('earnings').' WHERE '.$this->guard->qcol('blockid').' IN ('.implode(',', $placeholders).')', $params);
+		return intval(arraySafeVal($row, 'row_count', 0));
+	}
+
+	private function forwardCatchupStage1IdPlaceholders($ids, $prefix, &$params)
+	{
+		$placeholders = array();
+		foreach (array_values($ids) as $i => $id) {
+			$key = ':'.$prefix.$i;
+			$placeholders[] = $key;
+			$params[$key] = intval($id);
+		}
+		return $placeholders;
 	}
 
 	private function forwardCatchupStage1ExecuteGeneratedBlockUpdate($mutation, $oldCategory)
