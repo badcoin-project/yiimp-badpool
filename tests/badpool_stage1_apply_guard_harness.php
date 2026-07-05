@@ -104,6 +104,22 @@ expect_contains('docs apply requires reviewed limit', $doc, 'Apply requires the 
 expect_contains('docs apply no default fallback', $doc, 'must not silently fall back to the default limit', $failures);
 expect_contains('docs pending earnings only', $doc, 'Stage 1 creates pending earnings only; it does not credit accounts, create payout rows, send wallet transactions, delete shares, run backend loops, or start the blocks service.', $failures);
 
+expect_contains('apply base starts with db mutations false', $command, "\$report['db_mutations'] = false;", $failures);
+expect_contains('apply success reports mutation flag from applied counts', $command, "\$report['db_mutations'] = \$this->forwardCatchupStage1ApplyDidMutate(\$applied);", $failures);
+expect_contains('inserted earnings imply db mutation helper', $command, "intval(arraySafeVal(\$applied, 'inserted_earnings_count', 0)) > 0", $failures);
+expect_contains('orphan mutation implies db mutation helper', $command, "intval(arraySafeVal(\$applied, 'applied_orphan_count', 0)) > 0", $failures);
+expect_contains('generated mutation implies db mutation helper', $command, "intval(arraySafeVal(\$applied, 'applied_generated_count', 0)) > 0", $failures);
+expect_contains('apply command validation status separated', $command, "\$report['command_validation_status'] = 'pass';", $failures);
+expect_contains('apply db mutation status separated', $command, "\$report['db_mutation_status'] = \$report['db_mutations'] ? 'performed' : 'none';", $failures);
+expect_contains('apply post verification status separated', $command, "\$report['post_apply_db_verification_status'] = arraySafeVal(\$verification, 'status');", $failures);
+expect_contains('apply final reconciliation status separated', $command, "\$report['final_batch_reconciliation_status'] = arraySafeVal(\$verification, 'status') === 'pass' ? 'pass' : 'hold';", $failures);
+expect_contains('apply closeout verification can hold after mutation', $command, "\$report['status'] = 'hold';", $failures);
+expect_contains('apply hold includes affected block ids', $command, "\$report['affected_block_ids'] = arraySafeVal(\$verification, 'affected_block_ids', array());", $failures);
+expect_contains('apply hold preserves inserted earnings count', $command, "\$report['inserted_earnings_count'] = \$applied['inserted_earnings_count'];", $failures);
+expect_contains('failed/refused apply reports no db mutation', $command, "\$report['db_mutations'] = false;", $failures);
+expect_contains('closeout checks selected blocks still new', $command, "'selected_blocks_still_new' => \$stillNew", $failures);
+expect_contains('closeout checks linked earnings count', $command, "'linked_earnings_count' => \$linkedEarnings", $failures);
+
 if (!empty($failures)) {
 	echo "Badpool Stage 1 apply guard harness FAILED\n";
 	foreach ($failures as $failure) {
