@@ -9,6 +9,16 @@ foreach (array('payout-row-approval-package','payout-row-apply') as $action) { e
 foreach (array('approval-package-checksum','selected-scope-checksum','projected-payout-row-checksum','projected-account-debit-checksum') as $opt) expect_contains("exact checksum required: $opt", $command, $opt, $failures);
 expect_contains('operator confirmation required', $command, 'operator-confirms-payout-row-creation', $failures);
 expect_contains('operator confirmation exact string', $command, 'scrypt_balance_to_payout_rows_no_wallet_send', $failures);
+expect_contains('apply report schema constant', $command, "const APPLY_SCHEMA = 'badpool.guardrail.apply.v1';", $failures);
+expect_contains('apply report mode constant', $command, "const APPLY_MODE = 'guarded-apply';", $failures);
+expect_contains('apply base report marks mutating schema', $command, "\$r['schema']=self::APPLY_SCHEMA", $failures);
+expect_contains('apply base report marks guarded mode', $command, "\$r['mode']=self::APPLY_MODE", $failures);
+expect_contains('apply base report is not read only', $command, "\$r['read_only']=false", $failures);
+expect_contains('read-only base schema preserved', file_get_contents($root.'/web/yaamp/core/backend/BadpoolGuardContext.php'), "const SCHEMA = 'badpool.guardrail.preview.v1';", $failures);
+expect_contains('read-only base mode preserved', file_get_contents($root.'/web/yaamp/core/backend/BadpoolGuardContext.php'), "const MODE = 'read-only-preview';", $failures);
+expect_contains('operator web cwd constant', $command, "const OPERATOR_WEB_CWD = '/srv/badpool/yiimp-badpool/web';", $failures);
+expect_contains('payout apply command cd prefix', $command, "array('cd',self::OPERATOR_WEB_CWD,'&&','php','yaamp/yiic.php','badpoolguard','payout-row-apply'", $failures);
+expect_contains('payout apply committed mutation label', $command, "'db_mutations'=>'guarded_transaction_committed'", $failures);
 expect_contains('same source as preview', $command, 'same buildReadOnlyPayoutCandidates source as payout-candidates-preview', $failures);
 expect_contains('apply refuses empty selected account IDs', $command, 'selected_account_ids_required', $failures);
 expect_contains('apply rejects duplicate selected account IDs', $command, 'Duplicate selected account IDs are refused.', $failures);
