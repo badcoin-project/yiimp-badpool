@@ -788,10 +788,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 		$projectedMutationChecksumValue = arraySafeVal(arraySafeVal($dryrun, 'projected_mutation_checksum', array()), 'value');
 		$projectedEarningsChecksumValue = arraySafeVal(arraySafeVal($dryrun, 'projected_earnings_checksum', array()), 'value');
 		$applyCommandShape = array(
-			'php',
-			'yaamp/yiic.php',
-			'badpoolguard',
-			'forward-catchup-stage1-apply',
+			'cd', self::OPERATOR_WEB_CWD, '&&', 'php', 'yaamp/yiic.php', 'badpoolguard', 'forward-catchup-stage1-apply',
 			'--coin-id='.arraySafeVal($this->guard->getScope(), 'coin_id'),
 			'--limit='.arraySafeVal(arraySafeVal(arraySafeVal($dryrun, 'summary', array()), 'limit', array()), 'requested'),
 			'--selected-count='.arraySafeVal($totals, 'selected_count'),
