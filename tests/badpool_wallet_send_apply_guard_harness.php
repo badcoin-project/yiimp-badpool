@@ -54,6 +54,7 @@ expect_contains('update guards idcoin', $apply, 'idcoin=:idcoin', $failures);
 expect_contains('update guards account id', $apply, 'account_id=:account_id', $failures);
 expect_contains('update guards amount', $apply, 'amount=:amount', $failures);
 expect_contains('failure no send flag', $command, "'wallet_rpc_send_performed']=false", $failures);
+expect_contains('pre-send failures explicitly report no wallet sends', $command, "\$report['wallet_sends']=false", $failures);
 expect_contains('db transaction', $apply, 'beginTransaction()', $failures);
 $tryPos = strpos($apply, 'try {');
 $beginTxPos = strpos($apply, 'beginTransaction()');
@@ -62,6 +63,7 @@ if(!($tryPos !== false && $beginTxPos !== false && $catchPos !== false && $tryPo
 expect_contains('transaction initialized nullable before try', $apply, '$tx = null;', $failures);
 expect_contains('null-safe transaction rollback', $apply, '$tx !== null && $tx->active', $failures);
 expect_contains('hold reconciliation', $apply, "'status'=>'hold'", $failures);
+expect_contains('success reports top-level wallet sends', $apply, "'wallet_sends'=>true", $failures);
 expect_contains('send success reported', $apply, "'wallet_send_success'=>true", $failures);
 expect_contains('wallet send performed reported', $apply, "'wallet_rpc_send_performed'=>true", $failures);
 expect_contains('db completion success reported', $apply, "'db_completion_success'=>true", $failures);
@@ -71,6 +73,7 @@ expect_contains('payout rows marked completed reported', $apply, "'payout_rows_m
 expect_contains('db completion failure reported', $apply, "'db_completion_success'=>false", $failures);
 expect_contains('full batch unreconciled on failure', $apply, "'full_batch_reconciled'=>false", $failures);
 expect_contains('manual reconciliation required', $apply, 'manual_reconciliation_required', $failures);
+expect_contains('post-send hold reports top-level wallet sends', $apply, "'wallet_sends'=>true,'wallet_rpc_send_performed'=>true,'wallet_send_success'=>true,'db_completion_success'=>false", $failures);
 expect_contains('affected payout IDs in failure', $apply, 'affected_payout_ids', $failures);
 expect_contains('post-send failure detail', $apply, 'post_send_db_completion_failure', $failures);
 expect_contains('do not retry warning', $apply, 'DO NOT RETRY wallet-send-apply', $failures);
