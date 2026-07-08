@@ -1023,7 +1023,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 
 	private function forwardCatchupStage1ApplyBaseReport($options)
 	{
-		$report = $this->guard->baseReport('fail');
+		$report = $this->applyBaseReport('forward-catchup-stage1-apply', 'fail');
 		$report['read_only'] = false;
 		$report['stage'] = 'forward-catchup-stage1-apply';
 		$report['coin_id'] = arraySafeVal($this->guard->getScope(), 'coin_id');
