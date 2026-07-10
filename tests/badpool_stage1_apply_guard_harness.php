@@ -105,6 +105,7 @@ expect_contains('docs apply no default fallback', $doc, 'must not silently fall 
 expect_contains('docs pending earnings only', $doc, 'Stage 1 creates pending earnings only; it does not credit accounts, create payout rows, send wallet transactions, delete shares, run backend loops, or start the blocks service.', $failures);
 
 expect_contains('apply base starts with db mutations false', $command, "\$report['db_mutations'] = false;", $failures);
+expect_contains('stage1 apply uses apply base report', $command, "\$report = \$this->applyBaseReport('forward-catchup-stage1-apply', 'fail');", $failures);
 expect_contains('apply success reports mutation flag from applied counts', $command, "\$report['db_mutations'] = \$this->forwardCatchupStage1ApplyDidMutate(\$applied);", $failures);
 expect_contains('inserted earnings imply db mutation helper', $command, "intval(arraySafeVal(\$applied, 'inserted_earnings_count', 0)) > 0", $failures);
 expect_contains('orphan mutation implies db mutation helper', $command, "intval(arraySafeVal(\$applied, 'applied_orphan_count', 0)) > 0", $failures);

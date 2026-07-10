@@ -788,10 +788,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 		$projectedMutationChecksumValue = arraySafeVal(arraySafeVal($dryrun, 'projected_mutation_checksum', array()), 'value');
 		$projectedEarningsChecksumValue = arraySafeVal(arraySafeVal($dryrun, 'projected_earnings_checksum', array()), 'value');
 		$applyCommandShape = array(
-			'php',
-			'yaamp/yiic.php',
-			'badpoolguard',
-			'forward-catchup-stage1-apply',
+			'cd', self::OPERATOR_WEB_CWD, '&&', 'php', 'yaamp/yiic.php', 'badpoolguard', 'forward-catchup-stage1-apply',
 			'--coin-id='.arraySafeVal($this->guard->getScope(), 'coin_id'),
 			'--limit='.arraySafeVal(arraySafeVal(arraySafeVal($dryrun, 'summary', array()), 'limit', array()), 'requested'),
 			'--selected-count='.arraySafeVal($totals, 'selected_count'),
@@ -1026,7 +1023,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 
 	private function forwardCatchupStage1ApplyBaseReport($options)
 	{
-		$report = $this->guard->baseReport('fail');
+		$report = $this->applyBaseReport('forward-catchup-stage1-apply', 'fail');
 		$report['read_only'] = false;
 		$report['stage'] = 'forward-catchup-stage1-apply';
 		$report['coin_id'] = arraySafeVal($this->guard->getScope(), 'coin_id');
@@ -1845,7 +1842,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 	private function earningsMaturityTransitionApprovalPackageReport()
 	{
 		$dryrun = $this->earningsMaturityTransitionDryrunReport(); if (!$this->guard->isValid()) return $dryrun;
-		$cmd = array('php','yaamp/yiic.php','badpoolguard','earnings-maturity-transition-apply','--coin-id='.arraySafeVal($this->guard->getScope(),'coin_id'),'--selected-earning-ids='.$this->csvIds(arraySafeVal(arraySafeVal($dryrun,'items',array()),'selected_earnings',array()), 'earning_id'),'--approval-package-checksum=<approval_package_checksum>','--selected-scope-checksum='.arraySafeVal(arraySafeVal($dryrun,'selected_scope_checksum',array()),'value'),'--projected-block-mutation-checksum='.arraySafeVal(arraySafeVal($dryrun,'projected_block_mutation_checksum',array()),'value'),'--projected-earnings-mutation-checksum='.arraySafeVal(arraySafeVal($dryrun,'projected_earnings_mutation_checksum',array()),'value'),'--operator-confirms-maturity-transition=scrypt_status0_to_status1','--format=json');
+		$cmd = array('cd', self::OPERATOR_WEB_CWD, '&&', 'php', 'yaamp/yiic.php', 'badpoolguard', 'earnings-maturity-transition-apply','--coin-id='.arraySafeVal($this->guard->getScope(),'coin_id'),'--selected-earning-ids='.$this->csvIds(arraySafeVal(arraySafeVal($dryrun,'items',array()),'selected_earnings',array()), 'earning_id'),'--approval-package-checksum=<approval_package_checksum>','--selected-scope-checksum='.arraySafeVal(arraySafeVal($dryrun,'selected_scope_checksum',array()),'value'),'--projected-block-mutation-checksum='.arraySafeVal(arraySafeVal($dryrun,'projected_block_mutation_checksum',array()),'value'),'--projected-earnings-mutation-checksum='.arraySafeVal(arraySafeVal($dryrun,'projected_earnings_mutation_checksum',array()),'value'),'--operator-confirms-maturity-transition=scrypt_status0_to_status1','--format=json');
 		$dryrun['approval_package_type']='earnings-maturity-transition'; $dryrun['approval_required']=true; $dryrun['apply_command_shape']=$cmd; $dryrun['apply_scope_binding']='Apply does not accept --limit; exact selected earning and block rows are bound by stable checksums.'; $dryrun['warnings'][]='No account balance mutation; no payout rows; no wallet sends; no backend loops.'; unset($dryrun['report_checksum']); $dryrun['approval_package_checksum']=$this->stableApprovalChecksum($dryrun, array('approval_package_type','scope','selected_scope_checksum','projected_block_mutation_checksum','projected_earnings_mutation_checksum','items','apply_command_shape','apply_scope_binding')); $dryrun['report_checksum']=BadpoolGuardReport::checksum($dryrun); return $dryrun;
 	}
 
@@ -1864,7 +1861,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 	private function accountCreditClearApprovalPackageReport()
 	{
 		$dryrun=$this->accountCreditClearDryrunReport(); if(!$this->guard->isValid()) return $dryrun;
-		$cmd=array('php','yaamp/yiic.php','badpoolguard','account-credit-clear-apply','--coin-id='.arraySafeVal($this->guard->getScope(),'coin_id'),'--selected-earning-ids='.$this->csvIds(arraySafeVal(arraySafeVal($dryrun,'items',array()),'selected_earnings',array()), 'earning_id'),'--approval-package-checksum=<approval_package_checksum>','--selected-earnings-scope-checksum='.arraySafeVal(arraySafeVal($dryrun,'selected_earnings_scope_checksum',array()),'value'),'--projected-earnings-mutation-checksum='.arraySafeVal(arraySafeVal($dryrun,'projected_earnings_mutation_checksum',array()),'value'),'--projected-account-credit-checksum='.arraySafeVal(arraySafeVal($dryrun,'projected_account_credit_checksum',array()),'value'),'--operator-confirms-account-credit=scrypt_status1_to_status2_balance_increment','--format=json');
+		$cmd=array('cd', self::OPERATOR_WEB_CWD, '&&', 'php', 'yaamp/yiic.php', 'badpoolguard', 'account-credit-clear-apply','--coin-id='.arraySafeVal($this->guard->getScope(),'coin_id'),'--selected-earning-ids='.$this->csvIds(arraySafeVal(arraySafeVal($dryrun,'items',array()),'selected_earnings',array()), 'earning_id'),'--approval-package-checksum=<approval_package_checksum>','--selected-earnings-scope-checksum='.arraySafeVal(arraySafeVal($dryrun,'selected_earnings_scope_checksum',array()),'value'),'--projected-earnings-mutation-checksum='.arraySafeVal(arraySafeVal($dryrun,'projected_earnings_mutation_checksum',array()),'value'),'--projected-account-credit-checksum='.arraySafeVal(arraySafeVal($dryrun,'projected_account_credit_checksum',array()),'value'),'--operator-confirms-account-credit=scrypt_status1_to_status2_balance_increment','--format=json');
 		$dryrun['approval_package_type']='account-credit-clear'; $dryrun['approval_required']=true; $dryrun['apply_command_shape']=$cmd; $dryrun['apply_scope_binding']='Apply does not accept --limit; exact selected mature earnings and account credit projections are bound by stable checksums.'; $dryrun['warnings'][]='No payout rows; no wallet sends; no backend loops; no share deletion.'; unset($dryrun['report_checksum']); $dryrun['approval_package_checksum']=$this->stableApprovalChecksum($dryrun,array('approval_package_type','scope','selected_earnings_scope_checksum','projected_earnings_mutation_checksum','projected_account_credit_checksum','items','apply_command_shape','apply_scope_binding')); $dryrun['report_checksum']=BadpoolGuardReport::checksum($dryrun); return $dryrun;
 	}
 
