@@ -14,8 +14,8 @@ php yaamp/yiic.php badpoolguard forward-catchup-stage1-drain-apply --coin-id=126
 * Coin-scoped only: `--coin-id` is required and all-coin mutation is refused.
 * `--batch-limit` is capped at 50.
 * `--max-batches` is required and capped by `FORWARD_CATCHUP_STAGE1_DRAIN_SAFE_MAX_BATCHES` unless code and tests are intentionally changed.
-* Plan is read-only and does not execute apply logic.
-* Apply uses `schema=badpool.guardrail.apply.v1` and `mode=guarded-apply`.
+* Plan is read-only and does not execute apply logic; plan output keeps total_inserted_earnings at 0 and sets `read_only=true`, `apply_commands_executed=false`, and `total_inserted_earnings=0`; projected row counts are reported separately under `total_projected_earnings` and per-batch `projected_earnings_rows`.
+* Apply uses `schema=badpool.guardrail.apply.v1` and `mode=guarded-apply`. Its output starts with `apply_commands_executed=false` and flips it to `true` only immediately before the guarded Stage1 mutation helper is invoked; actual inserted rows are reported as `total_inserted_earnings` and per-batch `inserted_earnings_count`.
 * Hard boundary: no maturity transition, no account-credit, no payout-row creation, no wallet-send, no backend loop start, no service/cron changes, and no share deletion.
 
 ## Summary JSON shape
@@ -33,8 +33,10 @@ php yaamp/yiic.php badpoolguard forward-catchup-stage1-drain-apply --coin-id=126
   "total_selected": 150,
   "total_generated": 147,
   "total_orphan": 3,
+  "total_projected_earnings": 147,
   "total_inserted_earnings": 147,
   "total_projected_pending_amount": 318114.1474558799,
+  "apply_commands_executed": true,
   "final_preview_selected_count": 6,
   "stop_reason": "max_batches_reached",
   "errors": [],
@@ -44,6 +46,7 @@ php yaamp/yiic.php badpoolguard forward-catchup-stage1-drain-apply --coin-id=126
       "batch_number": 1,
       "selected_count": 50,
       "projected_generated_rows": 49,
+      "projected_earnings_rows": 49,
       "projected_orphan_rows": 1,
       "projected_pending_amount": 106038.04915195997,
       "approval_package_checksum": {"value": "..."},
@@ -56,3 +59,9 @@ php yaamp/yiic.php badpoolguard forward-catchup-stage1-drain-apply --coin-id=126
   ]
 }
 ```
+
+
+## Plan versus apply report contract
+
+* `forward-catchup-stage1-drain-plan` is a read-only projection. It reports planned work only: `total_projected_earnings` and per-batch `projected_earnings_rows` may be non-zero, while `total_inserted_earnings`, every per-batch `inserted_earnings_count`, and `apply_commands_executed` remain `0`/`false`.
+* `forward-catchup-stage1-drain-apply` reports both projection and execution. Each batch carries `projected_earnings_rows` from the fresh approval package and `inserted_earnings_count` from the guarded mutation result. The summary keeps those streams separate as `total_projected_earnings` and `total_inserted_earnings`.

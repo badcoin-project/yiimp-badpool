@@ -2026,6 +2026,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 			$batch['approval_package_checksum'] = arraySafeVal($approval, 'approval_package_checksum');
 			$tx = app()->db->beginTransaction();
 			try {
+				$report['apply_commands_executed'] = true;
 				$applied = $this->forwardCatchupStage1ApplyMutations($mutations, $earnings);
 				$tx->commit();
 			} catch (Exception $e) {
@@ -2038,7 +2039,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 			$batch['inserted_earnings_count'] = intval($applied['inserted_earnings_count']);
 			$batch['post_apply_db_verification'] = $verification;
 			$batch['reconciliation_status'] = arraySafeVal($verification, 'status') === 'pass' ? 'pass' : 'hold';
-			if ($batch['inserted_earnings_count'] !== $batch['projected_generated_rows'] || $batch['reconciliation_status'] !== 'pass') return $this->forwardCatchupStage1DrainFail($report, 'post_apply_verification_failure', 'Post-apply verification failed.');
+			if ($batch['inserted_earnings_count'] !== $batch['projected_earnings_rows'] || $batch['reconciliation_status'] !== 'pass') return $this->forwardCatchupStage1DrainFail($report, 'post_apply_verification_failure', 'Post-apply verification failed.');
 			$report['per_batch'][] = $batch;
 			$report['batches_attempted'] = $i;
 			$report['batches_applied']++;
@@ -2097,7 +2098,8 @@ class BadpoolGuardCommand extends CConsoleCommand
 		$report['coin_id'] = arraySafeVal($this->guard->getScope(), 'coin_id');
 		$report['batch_limit'] = intval(arraySafeVal($options, 'batch-limit', self::FORWARD_CATCHUP_STAGE1_DRYRUN_MAX_LIMIT));
 		$report['max_batches'] = intval(arraySafeVal($options, 'max-batches', 0));
-		foreach (array('batches_attempted','batches_applied','total_selected','total_generated','total_orphan','total_inserted_earnings','final_preview_selected_count') as $k) $report[$k] = 0;
+		foreach (array('batches_attempted','batches_applied','total_selected','total_generated','total_orphan','total_projected_earnings','total_inserted_earnings','final_preview_selected_count') as $k) $report[$k] = 0;
+		$report['apply_commands_executed'] = false;
 		$report['total_projected_pending_amount'] = 0.0;
 		$report['stop_reason'] = null;
 		$report['per_batch'] = array();
@@ -2108,7 +2110,8 @@ class BadpoolGuardCommand extends CConsoleCommand
 	private function forwardCatchupStage1DrainBatchSummary($number, $classified, $plan, $totals)
 	{
 		$generated = intval(arraySafeVal($totals, 'stage1_import_generate_count', 0)) + intval(arraySafeVal($totals, 'stage1_import_immature_count', 0));
-		return array('batch_number'=>$number,'selected_count'=>intval(arraySafeVal($totals,'selected_count',0)),'projected_generated_rows'=>$generated,'projected_orphan_rows'=>intval(arraySafeVal($totals,'stage1_mark_orphan_no_earnings_count',0)),'projected_pending_amount'=>floatval(arraySafeVal($totals,'projected_pending_earnings_amount_gross',0)),'batch_scope_checksum'=>BadpoolGuardReport::checksum(array('blocks'=>$this->forwardCatchupStage1BatchScopeBlocks($classified))),'projected_mutation_checksum'=>BadpoolGuardReport::checksum($this->forwardCatchupStage1StableProjectedMutations(arraySafeVal($plan,'projected_block_mutations',array()))),'projected_earnings_checksum'=>BadpoolGuardReport::checksum(arraySafeVal($plan,'projected_pending_earnings',array())),'reconciliation_status'=>'planned');
+		$projectedEarnings = arraySafeVal($plan, 'projected_pending_earnings', array());
+		return array('batch_number'=>$number,'selected_count'=>intval(arraySafeVal($totals,'selected_count',0)),'projected_generated_rows'=>$generated,'projected_earnings_rows'=>count($projectedEarnings),'projected_orphan_rows'=>intval(arraySafeVal($totals,'stage1_mark_orphan_no_earnings_count',0)),'projected_pending_amount'=>floatval(arraySafeVal($totals,'projected_pending_earnings_amount_gross',0)),'batch_scope_checksum'=>BadpoolGuardReport::checksum(array('blocks'=>$this->forwardCatchupStage1BatchScopeBlocks($classified))),'projected_mutation_checksum'=>BadpoolGuardReport::checksum($this->forwardCatchupStage1StableProjectedMutations(arraySafeVal($plan,'projected_block_mutations',array()))),'projected_earnings_checksum'=>BadpoolGuardReport::checksum($projectedEarnings),'inserted_earnings_count'=>0,'reconciliation_status'=>'planned');
 	}
 
 	private function forwardCatchupStage1DrainAddTotals(&$report, $batch)
@@ -2116,7 +2119,8 @@ class BadpoolGuardCommand extends CConsoleCommand
 		$report['total_selected'] += intval($batch['selected_count']);
 		$report['total_generated'] += intval($batch['projected_generated_rows']);
 		$report['total_orphan'] += intval($batch['projected_orphan_rows']);
-		$report['total_inserted_earnings'] += intval(arraySafeVal($batch, 'inserted_earnings_count', $batch['projected_generated_rows']));
+		$report['total_projected_earnings'] += intval(arraySafeVal($batch, 'projected_earnings_rows', $batch['projected_generated_rows']));
+		$report['total_inserted_earnings'] += intval(arraySafeVal($batch, 'inserted_earnings_count', 0));
 		$report['total_projected_pending_amount'] += floatval($batch['projected_pending_amount']);
 	}
 
