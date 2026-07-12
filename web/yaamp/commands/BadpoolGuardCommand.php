@@ -48,6 +48,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 		'account-credit-clear-apply',
 		'safety-scan',
 		'guard-context',
+		'status-runner',
 	);
 
 	public function run($args)
@@ -66,6 +67,9 @@ class BadpoolGuardCommand extends CConsoleCommand
 		}
 
 		$actionArgs = $args;
+		if ($action === 'status-runner') {
+			$actionArgs = $this->statusRunnerContextArgs($args);
+		}
 		if ($action === 'forward-catchup-stage1-apply') {
 			$actionArgs = $this->forwardCatchupStage1ApplyContextArgs($args);
 		}
@@ -175,6 +179,9 @@ class BadpoolGuardCommand extends CConsoleCommand
 			case 'guard-context':
 				$report = $this->guardContextReport();
 				break;
+			case 'status-runner':
+				$report = $this->statusRunnerReport();
+				break;
 			default:
 				$this->guard->addError("Unhandled action: $action");
 				$report = $this->guard->refusalReport();
@@ -219,8 +226,157 @@ class BadpoolGuardCommand extends CConsoleCommand
 			"       php yaamp/yiic.php badpoolguard account-credit-clear-apply --coin-id=<id> --selected-earning-ids=<csv> --approval-package-checksum=<sha256> --selected-earnings-scope-checksum=<sha256> --projected-earnings-mutation-checksum=<sha256> --projected-account-credit-checksum=<sha256> --operator-confirms-account-credit=scrypt_status1_to_status2_balance_increment --format=json\n".
 			"       php yaamp/yiic.php badpoolguard safety-scan --coin-id=<id> [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard guard-context --coin-id=<id> [--format=json|text]\n".
+			"       php yaamp/yiic.php badpoolguard status-runner [--coin-id=<id>] [--algo=<algo>] --format=json\n".
 			"       php yaamp/yiic.php badpoolguard overview --all-coins-preview [--format=json|text]\n\n".
 			"Read-only preview only. No wallet reads, wallet sends, DB writes, share cleanup, payout retry/delete, or service actions are available.\n";
+	}
+
+
+	private function statusRunnerReport()
+	{
+		$report = $this->guard->baseReport();
+		$report['schema'] = 'badpool.guardrail.status_runner.v1';
+		$report['command_shape'] = 'php yaamp/yiic.php badpoolguard status-runner --format=json';
+		$report['optional_filters'] = array('--coin-id=<id>', '--algo=<algo>');
+		$report['read_only'] = true;
+		$report['wallet_reads'] = false;
+		$report['wallet_sends'] = false;
+		$report['db_mutations'] = false;
+		$report['payout_rows_created'] = false;
+		$report['account_credits_created'] = false;
+		$report['backend_loops_run'] = false;
+		$report['shares_deleted'] = false;
+		$report['apply_commands_executed'] = false;
+		$report['summary']['coin_count'] = 0;
+		$report['summary']['blocked_reason_values'] = $this->statusRunnerBlockedReasonValues();
+		$report['summary']['next_safe_action_values'] = $this->statusRunnerNextSafeActionValues();
+		$report['items']['algos'] = array();
+
+		foreach ($this->statusRunnerCoinRows() as $coin) {
+			$row = $this->statusRunnerAlgoStatus($coin);
+			$decision = $this->statusRunnerDecision($row);
+			$row['blocked_reason'] = $decision['blocked_reason'];
+			$row['next_safe_action'] = $decision['next_safe_action'];
+			$report['items']['algos'][] = $row;
+		}
+		$report['summary']['coin_count'] = count($report['items']['algos']);
+		return $this->guard->finalizeReport($report);
+	}
+
+	private function statusRunnerContextArgs($args)
+	{
+		$out = array();
+		$hasScope = false;
+		foreach ($args as $arg) {
+			if (preg_match('/^--coin-id=/i', $arg)) $hasScope = true;
+			if (preg_match('/^--(coin-id|algo|format)(=.*)?$/i', $arg)) $out[] = $arg;
+		}
+		if (!$hasScope) $out[] = '--all-coins-preview';
+		return $out;
+	}
+
+	private function statusRunnerCoinRows()
+	{
+		if (!$this->guard->tableExists('coins')) return array();
+		$ids = array(1266, 1267, 1268, 1269, 1270);
+		$params = array();
+		$placeholders = array();
+		foreach ($ids as $i => $id) { $k=':id'.$i; $placeholders[]=$k; $params[$k]=$id; }
+		$where = 'id IN ('.implode(',', $placeholders).')';
+		$scope = $this->guard->getScope();
+		if (!arraySafeVal($scope, 'all_coins_preview', false)) { $where .= ' AND id=:coin_id'; $params[':coin_id'] = intval(arraySafeVal($scope, 'coin_id')); }
+		$algo = $this->guard->getOption('algo');
+		if ($algo !== null) { $where .= ' AND LOWER(algo)=LOWER(:algo)'; $params[':algo'] = (string)$algo; }
+		return $this->guard->selectAll("SELECT id, symbol, symbol2, algo FROM coins WHERE $where ORDER BY id", $params);
+	}
+
+	private function statusRunnerAlgoStatus($coin)
+	{
+		$coinId = intval(arraySafeVal($coin, 'id'));
+		$row = array(
+			'coin_id' => $coinId,
+			'symbol' => arraySafeVal($coin, 'symbol', arraySafeVal($coin, 'symbol2', '')),
+			'algo' => arraySafeVal($coin, 'algo', ''),
+			'blocks_total' => 0,
+			'latest_block_height' => null,
+			'stage1_selected_count' => 0,
+			'stage1_pending_amount' => '0',
+			'maturity_selected_count' => 0,
+			'maturity_selected_amount' => '0',
+			'account_credit_selected_count' => 0,
+			'account_credit_projected_total' => '0',
+			'payout_candidate_count' => 0,
+			'payout_candidate_amount' => '0',
+			'account_balance_count' => 0,
+			'account_balance_total' => '0',
+			'payout_rows_count' => 0,
+			'max_payout_id' => null,
+			'withdraw_rows_count' => 0,
+		);
+		if ($this->guard->tableExists('blocks')) {
+			$b = $this->guard->selectRow('SELECT COUNT(*) AS c, MAX(height) AS h FROM blocks WHERE coin_id=:coin_id', array(':coin_id'=>$coinId));
+			$row['blocks_total'] = intval(arraySafeVal($b, 'c', 0)); $row['latest_block_height'] = arraySafeVal($b, 'h');
+			$blockAmount = $this->guard->columnExists('blocks', 'amount') ? 'SUM(amount)' : '0';
+			$s = $this->guard->selectRow("SELECT COUNT(*) AS c, $blockAmount AS a FROM blocks WHERE coin_id=:coin_id AND category IN ('new','immature')", array(':coin_id'=>$coinId));
+			$row['stage1_selected_count'] = intval(arraySafeVal($s, 'c', 0)); $row['stage1_pending_amount'] = (string)arraySafeVal($s, 'a', '0');
+		}
+		if ($this->guard->tableExists('earnings')) {
+			$m = $this->guard->selectRow('SELECT COUNT(*) AS c, SUM(amount) AS a FROM earnings WHERE coinid=:coin_id AND status=0', array(':coin_id'=>$coinId));
+			$row['maturity_selected_count'] = intval(arraySafeVal($m, 'c', 0)); $row['maturity_selected_amount'] = (string)arraySafeVal($m, 'a', '0');
+			$ac = $this->guard->selectRow('SELECT COUNT(*) AS c, SUM(amount) AS a FROM earnings WHERE coinid=:coin_id AND status=1', array(':coin_id'=>$coinId));
+			$row['account_credit_selected_count'] = intval(arraySafeVal($ac, 'c', 0)); $row['account_credit_projected_total'] = (string)arraySafeVal($ac, 'a', '0');
+		}
+		if ($this->guard->tableExists('accounts')) {
+			$a = $this->guard->selectRow('SELECT COUNT(*) AS c, SUM(balance) AS a FROM accounts WHERE coinid=:coin_id AND balance > 0', array(':coin_id'=>$coinId));
+			$row['account_balance_count'] = intval(arraySafeVal($a, 'c', 0)); $row['account_balance_total'] = (string)arraySafeVal($a, 'a', '0');
+			$p = $this->statusRunnerPayoutCandidatesForCoin($coinId);
+			$row['payout_candidate_count'] = intval(arraySafeVal($p, 'c', 0)); $row['payout_candidate_amount'] = (string)arraySafeVal($p, 'a', '0');
+		}
+		if ($this->guard->tableExists('payouts')) {
+			$p = $this->statusRunnerPayoutRowsForCoin($coinId);
+			$row['payout_rows_count'] = intval(arraySafeVal($p, 'c', 0)); $row['max_payout_id'] = arraySafeVal($p, 'max_id');
+		}
+		if ($this->guard->tableExists('withdraws')) { $w = $this->guard->selectRow('SELECT COUNT(*) AS c FROM withdraws'); $row['withdraw_rows_count'] = intval(arraySafeVal($w, 'c', 0)); }
+		return $row;
+	}
+
+	private function statusRunnerPayoutCandidatesForCoin($coinId)
+	{
+		$paymentsMinimum = sprintf('%.12f', defined('YAAMP_PAYMENTS_MINI') ? floatval(YAAMP_PAYMENTS_MINI) : 0.0);
+		return $this->guard->selectRow("SELECT COUNT(*) AS c, SUM(A.balance) AS a FROM accounts A INNER JOIN coins C ON C.id=A.coinid WHERE A.coinid=:coin_id AND A.balance > GREATEST($paymentsMinimum, IFNULL(C.payout_min,0), IFNULL(C.txfee,0))", array(':coin_id'=>$coinId));
+	}
+
+	private function statusRunnerPayoutRowsForCoin($coinId)
+	{
+		$completedWhere = $this->guard->columnExists('payouts', 'completed') ? ' AND IFNULL(completed,0)=0' : '';
+		if ($this->guard->columnExists('payouts', 'idcoin')) return $this->guard->selectRow("SELECT COUNT(*) AS c, MAX(id) AS max_id FROM payouts WHERE idcoin=:coin_id$completedWhere", array(':coin_id'=>$coinId));
+		if (!$this->guard->columnExists('payouts', 'account_id') || !$this->guard->tableExists('accounts')) return array('c'=>0, 'max_id'=>null);
+		$completedWhere = $this->guard->columnExists('payouts', 'completed') ? ' AND IFNULL(P.completed,0)=0' : '';
+		return $this->guard->selectRow("SELECT COUNT(*) AS c, MAX(P.id) AS max_id FROM payouts P INNER JOIN accounts A ON A.id=P.account_id WHERE A.coinid=:coin_id$completedWhere", array(':coin_id'=>$coinId));
+	}
+
+	private function statusRunnerDecision($row)
+	{
+		if (intval($row['blocks_total']) <= 0) return array('blocked_reason'=>'no_blocks', 'next_safe_action'=>'none');
+		$signals = 0;
+		foreach (array('stage1_selected_count','maturity_selected_count','account_credit_selected_count','payout_candidate_count','payout_rows_count') as $k) if (intval($row[$k]) > 0) $signals++;
+		if ($signals > 1) return array('blocked_reason'=>'hold_unknown', 'next_safe_action'=>'investigate_hold');
+		if (intval($row['payout_rows_count']) > 0) return array('blocked_reason'=>'wallet_send_ready', 'next_safe_action'=>'run_wallet_send_package');
+		if (intval($row['payout_candidate_count']) > 0) return array('blocked_reason'=>'payout_row_ready', 'next_safe_action'=>'run_payout_row_package');
+		if (intval($row['account_credit_selected_count']) > 0) return array('blocked_reason'=>'account_credit_ready', 'next_safe_action'=>'run_account_credit_package');
+		if (intval($row['maturity_selected_count']) > 0) return array('blocked_reason'=>'maturity_ready', 'next_safe_action'=>'run_maturity_package');
+		if (intval($row['stage1_selected_count']) > 0) return array('blocked_reason'=>'stage1_ready', 'next_safe_action'=>'run_stage1_package');
+		return array('blocked_reason'=>'no_current_action', 'next_safe_action'=>'none');
+	}
+
+	private function statusRunnerBlockedReasonValues()
+	{
+		return array('no_blocks','no_current_action','stage1_ready','maturity_wait','maturity_ready','payment_delay_wait','account_credit_ready','payout_row_ready','wallet_send_ready','unresolved_attribution','hold_unknown');
+	}
+
+	private function statusRunnerNextSafeActionValues()
+	{
+		return array('none','run_stage1_package','run_maturity_package','wait_payment_delay','run_account_credit_package','run_payout_row_package','run_wallet_send_package','investigate_hold');
 	}
 
 	private function overviewReport()
