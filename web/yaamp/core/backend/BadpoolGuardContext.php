@@ -24,6 +24,7 @@ class BadpoolGuardContext
 		'format',
 		'limit',
 		'selected-payout-ids',
+		'algo',
 	);
 
 	private $dangerousOptions = array(
@@ -301,8 +302,12 @@ class BadpoolGuardContext
 			return;
 		}
 		if (!$hasCoinId && !$allCoins) {
-			$this->addError('Refusing implicit all-coin preview. Pass --coin-id=<id> or --all-coins-preview.');
-			return;
+			if ($this->command === 'status-runner') {
+				$allCoins = true;
+			} else {
+				$this->addError('Refusing implicit all-coin preview. Pass --coin-id=<id> or --all-coins-preview.');
+				return;
+			}
 		}
 
 		if ($allCoins) {
