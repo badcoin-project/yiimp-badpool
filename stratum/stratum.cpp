@@ -50,6 +50,8 @@ bool g_debuglog_socket;
 bool g_debuglog_rpc;
 bool g_debuglog_list;
 bool g_debuglog_remote;
+bool g_debuglog_block_path;
+bool g_debuglog_block_path_verbose;
 
 bool g_autoexchange = true;
 
@@ -71,6 +73,7 @@ volatile bool g_exiting = false;
 
 void *stratum_thread(void *p);
 void *monitor_thread(void *p);
+void block_path_maybe_log_summary();
 
 ////////////////////////////////////////////////////////////////////////////////////////
 
@@ -287,6 +290,9 @@ int main(int argc, char **argv)
 	g_debuglog_rpc = iniparser_getint(ini, "DEBUGLOG:rpc", false);
 	g_debuglog_list = iniparser_getint(ini, "DEBUGLOG:list", false);
 	g_debuglog_remote = iniparser_getint(ini, "DEBUGLOG:remote", false);
+	g_debuglog_block_path = iniparser_getint(ini, "DEBUGLOG:block_path", false);
+	g_debuglog_block_path_verbose = iniparser_getint(ini, "DEBUGLOG:block_path_verbose", false);
+	if(g_debuglog_block_path_verbose) g_debuglog_block_path = true;
 
 	iniparser_freedict(ini);
 
@@ -361,6 +367,7 @@ int main(int argc, char **argv)
 
 		block_prune(db);
 		submit_prune(db);
+		block_path_maybe_log_summary();
 
 		sleep(1);
 		job_signal();

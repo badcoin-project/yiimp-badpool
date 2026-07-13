@@ -1,5 +1,225 @@
-
 #include "stratum.h"
+#include <atomic>
+
+extern bool g_debuglog_block_path;
+extern bool g_debuglog_block_path_verbose;
+
+#define BLOCK_PATH_SCHEMA "badpool.stratum.blockpath.v1"
+
+struct BLOCK_PATH_CONTEXT
+{
+	char trace_id[64];
+	char algo[64];
+	int coin_id;
+	int height;
+	int jobid;
+	int userid;
+	int workerid;
+	char nbits[17];
+	char target_hex[65];
+	char hash_be[65];
+	uint64_t hash_int_legacy;
+	uint64_t coin_target_legacy;
+	bool full_block_target;
+	char submit_method[32];
+};
+
+static std::atomic<unsigned long long> block_path_trace_sequence(0);
+static std::atomic<unsigned long long> block_path_shares_accepted(0);
+static std::atomic<unsigned long long> block_path_shares_rejected(0);
+static std::atomic<unsigned long long> block_path_target_checks(0);
+static std::atomic<unsigned long long> block_path_target_false(0);
+static std::atomic<unsigned long long> block_path_candidates(0);
+static std::atomic<unsigned long long> block_path_submit_begins(0);
+static std::atomic<unsigned long long> block_path_submit_returns(0);
+static std::atomic<unsigned long long> block_path_submit_accepts(0);
+static std::atomic<unsigned long long> block_path_submit_rejects(0);
+static std::atomic<unsigned long long> block_path_submit_no_answer(0);
+static std::atomic<unsigned long long> block_path_block_add_calls(0);
+static std::atomic<long long> block_path_last_summary(0);
+static std::atomic<int> block_path_last_coin_id(0);
+static std::atomic<int> block_path_last_height(0);
+
+static const char *block_path_nonempty(const char *value)
+{
+	return value && value[0]? value: "-";
+}
+
+static const char *block_path_submit_method(YAAMP_COIND *coind)
+{
+	if(!coind) return "unknown";
+	if(coind->usegetwork) return "getwork";
+	if(coind->hassubmitblock) return "submitblock";
+	return "submitblocktemplate";
+}
+
+static void block_path_context_init(BLOCK_PATH_CONTEXT *ctx, YAAMP_CLIENT *client, YAAMP_JOB *job,
+	YAAMP_JOB_VALUES *submitvalues, uint64_t hash_int, uint64_t coin_target,
+	bool full_block_target, const char *target_hex)
+{
+	memset(ctx, 0, sizeof(*ctx));
+	unsigned long long sequence = block_path_trace_sequence.fetch_add(1) + 1;
+	snprintf(ctx->trace_id, sizeof(ctx->trace_id), "%d-%llu", (int)getpid(), sequence);
+	snprintf(ctx->algo, sizeof(ctx->algo), "%s", g_current_algo? g_current_algo->name: g_stratum_algo);
+	ctx->coin_id = job && job->coind? job->coind->id: 0;
+	ctx->height = job && job->templ? job->templ->height: 0;
+	ctx->jobid = job? job->id: 0;
+	ctx->userid = client? client->userid: 0;
+	ctx->workerid = client? client->workerid: 0;
+	snprintf(ctx->nbits, sizeof(ctx->nbits), "%s",
+		(job && job->templ && job->templ->nbits[0])? job->templ->nbits: "-");
+	snprintf(ctx->target_hex, sizeof(ctx->target_hex), "%s", target_hex && target_hex[0]? target_hex: "-");
+	snprintf(ctx->hash_be, sizeof(ctx->hash_be), "%s",
+		submitvalues && submitvalues->hash_be[0]? submitvalues->hash_be: "-");
+	ctx->hash_int_legacy = hash_int;
+	ctx->coin_target_legacy = coin_target;
+	ctx->full_block_target = full_block_target;
+	snprintf(ctx->submit_method, sizeof(ctx->submit_method), "%s",
+		block_path_submit_method(job? job->coind: NULL));
+}
+
+static void block_path_record_share(bool accepted)
+{
+	if(accepted) block_path_shares_accepted.fetch_add(1);
+	else block_path_shares_rejected.fetch_add(1);
+}
+
+static void block_path_record_target(const BLOCK_PATH_CONTEXT *ctx)
+{
+	block_path_target_checks.fetch_add(1);
+	if(ctx->full_block_target) block_path_candidates.fetch_add(1);
+	else block_path_target_false.fetch_add(1);
+	block_path_last_coin_id.store(ctx->coin_id);
+	block_path_last_height.store(ctx->height);
+}
+
+static void block_path_log_target(const BLOCK_PATH_CONTEXT *ctx)
+{
+	if(!ctx->full_block_target && !g_debuglog_block_path) return;
+	const char *format =
+		"STRATUM_BLOCK_TARGET_DIAG schema=%s trace_id=%s algo=%s coin_id=%d height=%d jobid=%x "
+		"userid=%d workerid=%d nbits=%s target_compare=nbits_256 target_hex=%s hash_be=%s "
+		"hash_int_legacy=%016llx coin_target_legacy=%016llx full_block_target=%d\n";
+	if(ctx->full_block_target)
+		stratumlog(format, BLOCK_PATH_SCHEMA, ctx->trace_id, ctx->algo, ctx->coin_id, ctx->height, ctx->jobid,
+			ctx->userid, ctx->workerid, ctx->nbits, ctx->target_hex, ctx->hash_be,
+			(unsigned long long)ctx->hash_int_legacy,
+			(unsigned long long)ctx->coin_target_legacy, 1);
+	else
+		debuglog(format, BLOCK_PATH_SCHEMA, ctx->trace_id, ctx->algo, ctx->coin_id, ctx->height, ctx->jobid,
+			ctx->userid, ctx->workerid, ctx->nbits, ctx->target_hex, ctx->hash_be,
+			(unsigned long long)ctx->hash_int_legacy,
+			(unsigned long long)ctx->coin_target_legacy, 0);
+}
+
+static void block_path_log_candidate(const BLOCK_PATH_CONTEXT *ctx)
+{
+	stratumlog(
+		"STRATUM_BLOCK_CANDIDATE_DETECTED schema=%s trace_id=%s algo=%s coin_id=%d height=%d jobid=%x "
+		"userid=%d workerid=%d nbits=%s target_compare=nbits_256 target_hex=%s hash_be=%s "
+		"hash_int_legacy=%016llx coin_target_legacy=%016llx full_block_target=1 block_hex_len=0 "
+		"block_hex_state=not_built submit_method=%s\n",
+		BLOCK_PATH_SCHEMA, ctx->trace_id, ctx->algo, ctx->coin_id, ctx->height, ctx->jobid,
+		ctx->userid, ctx->workerid, ctx->nbits, ctx->target_hex, ctx->hash_be,
+		(unsigned long long)ctx->hash_int_legacy,
+		(unsigned long long)ctx->coin_target_legacy, ctx->submit_method);
+}
+
+static void block_path_log_submit_begin(const BLOCK_PATH_CONTEXT *ctx, size_t block_hex_len)
+{
+	block_path_submit_begins.fetch_add(1);
+	stratumlog(
+		"STRATUM_COIND_SUBMIT_BEGIN schema=%s trace_id=%s algo=%s coin_id=%d height=%d jobid=%x "
+		"userid=%d workerid=%d nbits=%s target_compare=nbits_256 target_hex=%s hash_be=%s "
+		"full_block_target=1 block_hex_len=%zu submit_method=%s rpc_returned=pending accepted=pending\n",
+		BLOCK_PATH_SCHEMA, ctx->trace_id, ctx->algo, ctx->coin_id, ctx->height, ctx->jobid,
+		ctx->userid, ctx->workerid, ctx->nbits, ctx->target_hex, ctx->hash_be,
+		block_hex_len, ctx->submit_method);
+}
+
+static void block_path_log_submit_returned(const BLOCK_PATH_CONTEXT *ctx, size_t block_hex_len,
+	const STRATUM_COIND_SUBMIT_OBSERVATION *observation)
+{
+	block_path_submit_returns.fetch_add(1);
+	if(observation && observation->accepted) block_path_submit_accepts.fetch_add(1);
+	else block_path_submit_rejects.fetch_add(1);
+	if(!observation || !observation->rpc_returned) block_path_submit_no_answer.fetch_add(1);
+
+	stratumlog(
+		"STRATUM_COIND_SUBMIT_RETURNED schema=%s trace_id=%s algo=%s coin_id=%d height=%d jobid=%x "
+		"userid=%d workerid=%d nbits=%s target_compare=nbits_256 target_hex=%s hash_be=%s "
+		"full_block_target=1 block_hex_len=%zu submit_method=%s rpc_returned=%d accepted=%d "
+		"result_type=%s result_value=%s error_type=%s error_code=%s error_message=%s elapsed_us=%llu\n",
+		BLOCK_PATH_SCHEMA, ctx->trace_id, ctx->algo, ctx->coin_id, ctx->height, ctx->jobid,
+		ctx->userid, ctx->workerid, ctx->nbits, ctx->target_hex, ctx->hash_be,
+		block_hex_len, observation? block_path_nonempty(observation->method): ctx->submit_method,
+		(observation && observation->rpc_returned)? 1: 0,
+		(observation && observation->accepted)? 1: 0,
+		observation? block_path_nonempty(observation->result_type): "missing",
+		observation? block_path_nonempty(observation->result_value): "-",
+		observation? block_path_nonempty(observation->error_type): "missing",
+		observation? block_path_nonempty(observation->error_code): "-",
+		observation? block_path_nonempty(observation->error_message): "-",
+		(unsigned long long)(observation? observation->elapsed_us: 0));
+}
+
+static void block_path_log_block_add_begin(const BLOCK_PATH_CONTEXT *ctx)
+{
+	block_path_block_add_calls.fetch_add(1);
+	stratumlog(
+		"STRATUM_BLOCK_ADD_BEGIN schema=%s trace_id=%s algo=%s coin_id=%d height=%d jobid=%x "
+		"userid=%d workerid=%d queue_state=append_pending db_write_performed=false\n",
+		BLOCK_PATH_SCHEMA, ctx->trace_id, ctx->algo, ctx->coin_id, ctx->height, ctx->jobid,
+		ctx->userid, ctx->workerid);
+}
+
+static void block_path_log_block_add_returned(const BLOCK_PATH_CONTEXT *ctx)
+{
+	stratumlog(
+		"STRATUM_BLOCK_ADD_RETURNED schema=%s trace_id=%s algo=%s coin_id=%d height=%d jobid=%x "
+		"userid=%d workerid=%d queue_state=appended_in_memory db_write_performed=false\n",
+		BLOCK_PATH_SCHEMA, ctx->trace_id, ctx->algo, ctx->coin_id, ctx->height, ctx->jobid,
+		ctx->userid, ctx->workerid);
+}
+
+void block_path_maybe_log_summary()
+{
+	long long now = (long long)time(NULL);
+	long long previous = block_path_last_summary.load();
+	if(previous == 0)
+	{
+		block_path_last_summary.compare_exchange_strong(previous, now);
+		return;
+	}
+	if(now - previous < 60) return;
+	if(!block_path_last_summary.compare_exchange_strong(previous, now)) return;
+
+	unsigned long long shares_accepted = block_path_shares_accepted.exchange(0);
+	unsigned long long shares_rejected = block_path_shares_rejected.exchange(0);
+	unsigned long long target_checks = block_path_target_checks.exchange(0);
+	unsigned long long target_false = block_path_target_false.exchange(0);
+	unsigned long long candidates = block_path_candidates.exchange(0);
+	unsigned long long submit_begins = block_path_submit_begins.exchange(0);
+	unsigned long long submit_returns = block_path_submit_returns.exchange(0);
+	unsigned long long submit_accepts = block_path_submit_accepts.exchange(0);
+	unsigned long long submit_rejects = block_path_submit_rejects.exchange(0);
+	unsigned long long submit_no_answer = block_path_submit_no_answer.exchange(0);
+	unsigned long long block_add_calls = block_path_block_add_calls.exchange(0);
+
+	if(!(shares_accepted || shares_rejected || target_checks || candidates ||
+		submit_begins || submit_returns || block_add_calls)) return;
+	stratumlog(
+		"STRATUM_BLOCK_PATH_SUMMARY schema=%s algo=%s coin_id=%d height=%d interval_seconds=%lld "
+		"shares_accepted=%llu shares_rejected=%llu block_target_checks=%llu block_target_false=%llu "
+		"candidates_detected=%llu submit_begins=%llu submit_returns=%llu submit_accepts=%llu "
+		"submit_rejects=%llu submit_no_answer=%llu block_add_calls=%llu\n",
+		BLOCK_PATH_SCHEMA, g_current_algo? g_current_algo->name: g_stratum_algo,
+		block_path_last_coin_id.load(), block_path_last_height.load(), now - previous,
+		shares_accepted, shares_rejected, target_checks, target_false, candidates,
+		submit_begins, submit_returns, submit_accepts, submit_rejects,
+		submit_no_answer, block_add_calls);
+}
+
 // --- YESCRYPT DEBUG HELPER ---
 static void debug_hex(const char* label, const unsigned char* data, int len)
 {
@@ -63,7 +283,7 @@ void build_submit_values(YAAMP_JOB_VALUES *submitvalues, YAAMP_JOB_TEMPLATE *tem
 	int header_len = strlen(submitvalues->header)/2;
 	g_current_algo->hash_function((char *)submitvalues->header_bin, (char *)submitvalues->hash_bin, header_len);
 
-    if (!strcmp(g_stratum_algo, "yescrypt")) {
+    if ((g_debuglog_hash || g_debuglog_block_path_verbose) && !strcmp(g_stratum_algo, "yescrypt")) {
         debuglog("=== YESCRYPT HASH DEBUG ===");
         debug_hex("header_bin", submitvalues->header_bin, header_len);
         debug_hex("hash_bin", submitvalues->hash_bin, 32);
@@ -149,7 +369,7 @@ static void build_submit_values_decred(YAAMP_JOB_VALUES *submitvalues, YAAMP_JOB
 	int header_len = strlen(submitvalues->header)/2;
 	g_current_algo->hash_function((char *)submitvalues->header_bin, (char *)submitvalues->hash_bin, header_len);
 
-    if (!strcmp(g_stratum_algo, "yescrypt")) {
+    if ((g_debuglog_hash || g_debuglog_block_path_verbose) && !strcmp(g_stratum_algo, "yescrypt")) {
         debuglog("=== YESCRYPT HASH DEBUG ===");
         debug_hex("header_bin", submitvalues->header_bin, header_len);
         debug_hex("hash_bin", submitvalues->hash_bin, 32);
@@ -175,7 +395,13 @@ static void client_do_submit(YAAMP_CLIENT *client, YAAMP_JOB *job, YAAMP_JOB_VAL
 	uint64_t coin_target = decode_compact(templ->nbits);
 	if (templ->nbits && !coin_target) coin_target = 0xFFFF000000000000ULL;
 
-        bool full_block_target = hash_meets_target_from_nbits(submitvalues->hash_be, templ->nbits, NULL);
+	char block_target_hex[65] = { 0 };
+	bool full_block_target = hash_meets_target_from_nbits(submitvalues->hash_be, templ->nbits, block_target_hex);
+	BLOCK_PATH_CONTEXT block_path;
+	block_path_context_init(&block_path, client, job, submitvalues, hash_int, coin_target, full_block_target, block_target_hex);
+	block_path_record_target(&block_path);
+	block_path_log_target(&block_path);
+	if(full_block_target) block_path_log_candidate(&block_path);
 
 	int block_size = YAAMP_SMALLBUFSIZE;
 	vector<string>::const_iterator i;
@@ -278,7 +504,11 @@ static void client_do_submit(YAAMP_CLIENT *client, YAAMP_JOB *job, YAAMP_JOB_VAL
 				snprintf(block_hex, block_size, "%s", hex);
 		}
 
-		bool b = coind_submit(coind, block_hex);
+		size_t block_hex_len = strlen(block_hex);
+		block_path_log_submit_begin(&block_path, block_hex_len);
+		STRATUM_COIND_SUBMIT_OBSERVATION submit_observation;
+		bool b = coind_submit(coind, block_hex, &submit_observation);
+		block_path_log_submit_returned(&block_path, block_hex_len, &submit_observation);
 		if(b)
 		{
 			debuglog("*** ACCEPTED %s %d (diff %g) by %s (id: %d)\n", coind->name, templ->height,
@@ -305,9 +535,11 @@ static void client_do_submit(YAAMP_CLIENT *client, YAAMP_JOB *job, YAAMP_JOB_VAL
 				strcpy(hash1, submitvalues->hash_hex);
 			}
 
+			block_path_log_block_add_begin(&block_path);
 			block_add(client->userid, client->workerid, coind->id, templ->height,
 				target_to_diff(coin_target), target_to_diff(hash_int),
 				hash1, submitvalues->hash_be, templ->has_segwit_txs);
+			block_path_log_block_add_returned(&block_path);
 
 			if(!strcmp("DCR", coind->rpcencoding)) {
 				// delay between dcrd and dcrwallet
@@ -377,7 +609,7 @@ static bool share_decision_diag_rate_limited(const char *decision)
 static void log_share_decision_diag(YAAMP_CLIENT *client, YAAMP_JOB *job, const char *decision, const char *result,
 	uint64_t hash_int, uint64_t user_target, uint64_t coin_target, double share_diff)
 {
-	if(!g_debuglog_hash) return;
+	if(!(g_debuglog_hash || g_debuglog_block_path_verbose)) return;
 	if(share_decision_diag_rate_limited(decision)) return;
 
 	YAAMP_JOB_TEMPLATE *templ = job? job->templ: NULL;
@@ -406,7 +638,7 @@ static void log_share_decision_diag(YAAMP_CLIENT *client, YAAMP_JOB *job, const 
 
 static bool submit_reject_diag_enabled()
 {
-	return g_debuglog_hash;
+	return g_debuglog_hash || g_debuglog_block_path_verbose;
 }
 
 static bool submit_reject_diag_code_selected(int id)
@@ -471,6 +703,7 @@ void client_submit_error(YAAMP_CLIENT *client, YAAMP_JOB *job, int id, const cha
 
 	else
 	{
+		block_path_record_share(false);
 		client_send_error(client, id, message);
 		share_add(client, job, false, extranonce2, ntime, nonce, 0, id);
 
@@ -819,17 +1052,15 @@ bool client_submit(YAAMP_CLIENT *client, json_value *json_params)
 	}
 
 	uint64_t hash_int = get_hash_difficulty(submitvalues.hash_bin);
-	debuglog("POOL hash_hex=%s\n", submitvalues.hash_hex);
-	debuglog("POOL hash_be=%s\n", submitvalues.hash_be);
-	
 	uint64_t user_target = diff_to_target(client->difficulty_actual);
 	uint64_t coin_target = decode_compact(templ->nbits);
 	if (templ->nbits && !coin_target) coin_target = 0xFFFF000000000000ULL;
-	
-	debuglog("POOL user_target=%016llx\n", (unsigned long long)user_target);
-	debuglog("POOL coin_target=%016llx\n", (unsigned long long)coin_target);
 
-	if (g_debuglog_hash) {
+	if (g_debuglog_hash || g_debuglog_block_path_verbose) {
+		debuglog("POOL hash_hex=%s\n", submitvalues.hash_hex);
+		debuglog("POOL hash_be=%s\n", submitvalues.hash_be);
+		debuglog("POOL user_target=%016llx\n", (unsigned long long)user_target);
+		debuglog("POOL coin_target=%016llx\n", (unsigned long long)coin_target);
 		debuglog("%016llx actual\n", hash_int);
 		debuglog("%016llx target\n", user_target);
 		debuglog("%016llx coin\n", coin_target);
@@ -884,6 +1115,7 @@ bool client_submit(YAAMP_CLIENT *client, json_value *json_params)
 
 	log_share_decision_diag(client, job, "SHARE_ADD_BEGIN", "valid_true", hash_int, user_target, coin_target, share_diff);
 	share_add(client, job, true, extranonce2, ntime, nonce, share_diff, 0);
+	block_path_record_share(true);
 	log_share_decision_diag(client, job, "SHARE_ADD_DONE", "reached_after_share_add", hash_int, user_target, coin_target, share_diff);
 	object_unlock(job);
 
