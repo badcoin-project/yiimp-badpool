@@ -80,6 +80,19 @@ public:
 
 //////////////////////////////////////////////////////////////////////////
 
+struct STRATUM_COIND_SUBMIT_OBSERVATION
+{
+	char method[32];
+	bool rpc_returned;
+	bool accepted;
+	char result_type[32];
+	char result_value[192];
+	char error_type[32];
+	char error_code[64];
+	char error_message[192];
+	uint64_t elapsed_us;
+};
+
 inline void coind_delete(YAAMP_OBJECT *object)
 {
 	YAAMP_COIND *coind = (YAAMP_COIND *)object;
@@ -98,6 +111,7 @@ bool coind_can_mine(YAAMP_COIND *coind, bool isaux=false);
 void coind_sort();
 
 bool coind_submit(YAAMP_COIND *coind, const char *block);
+bool coind_submit(YAAMP_COIND *coind, const char *block, STRATUM_COIND_SUBMIT_OBSERVATION *observation);
 bool coind_submitgetauxblock(YAAMP_COIND *coind, const char *hash, const char *block);
 
 void coind_init(YAAMP_COIND *coind);

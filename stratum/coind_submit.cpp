@@ -1,4 +1,3 @@
-
 #include "stratum.h"
 
 static const char *submitblock_json_type_name(json_value *json)
@@ -17,6 +16,21 @@ static const char *submitblock_json_type_name(json_value *json)
 	}
 }
 
+static void submitblock_copy_sanitized(const char *input, char *out, size_t outlen)
+{
+	if(!out || !outlen) return;
+	out[0] = '\0';
+	if(!input) return;
+
+	size_t o = 0;
+	for(size_t i = 0; input[i] && o + 1 < outlen && o < 160; i++)
+	{
+		unsigned char c = (unsigned char)input[i];
+		out[o++] = (c <= 0x20 || c >= 0x7f)? '_': input[i];
+	}
+	out[o] = '\0';
+}
+
 static void submitblock_json_scalar_value(json_value *json, char *out, size_t outlen)
 {
 	if(!out || !outlen) return;
@@ -26,7 +40,7 @@ static void submitblock_json_scalar_value(json_value *json, char *out, size_t ou
 	switch(json->type)
 	{
 		case json_string:
-			snprintf(out, outlen, "%.160s", json->u.string.ptr? json->u.string.ptr: "");
+			submitblock_copy_sanitized(json->u.string.ptr, out, outlen);
 			break;
 		case json_boolean:
 			snprintf(out, outlen, "%s", json->u.boolean? "true": "false");
@@ -42,14 +56,65 @@ static void submitblock_json_scalar_value(json_value *json, char *out, size_t ou
 	}
 }
 
-static void log_submitblock_response(YAAMP_COIND *coind, const char *method, json_value *json_result, json_value *json_error, bool returned_success)
+static uint64_t submitblock_monotonic_us()
+{
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return (uint64_t)ts.tv_sec * 1000000ULL + (uint64_t)ts.tv_nsec / 1000ULL;
+}
+
+static void submit_observation_init(STRATUM_COIND_SUBMIT_OBSERVATION *observation, const char *method)
+{
+	if(!observation) return;
+	memset(observation, 0, sizeof(*observation));
+	snprintf(observation->method, sizeof(observation->method), "%s", method? method: "unknown");
+	snprintf(observation->result_type, sizeof(observation->result_type), "missing");
+	snprintf(observation->error_type, sizeof(observation->error_type), "missing");
+}
+
+static void submit_observation_failure(STRATUM_COIND_SUBMIT_OBSERVATION *observation,
+	const char *error_type, const char *error_code, const char *error_message, uint64_t started_us)
+{
+	if(!observation) return;
+	observation->rpc_returned = false;
+	observation->accepted = false;
+	snprintf(observation->error_type, sizeof(observation->error_type), "%s", error_type? error_type: "unknown");
+	snprintf(observation->error_code, sizeof(observation->error_code), "%s", error_code? error_code: "-");
+	submitblock_copy_sanitized(error_message, observation->error_message, sizeof(observation->error_message));
+	observation->elapsed_us = submitblock_monotonic_us() - started_us;
+}
+
+static void submit_observation_json(STRATUM_COIND_SUBMIT_OBSERVATION *observation,
+	json_value *json_result, json_value *json_error, bool accepted, uint64_t started_us)
+{
+	if(!observation) return;
+	observation->rpc_returned = true;
+	observation->accepted = accepted;
+	snprintf(observation->result_type, sizeof(observation->result_type), "%s", submitblock_json_type_name(json_result));
+	snprintf(observation->error_type, sizeof(observation->error_type), "%s", submitblock_json_type_name(json_error));
+	submitblock_json_scalar_value(json_result, observation->result_value, sizeof(observation->result_value));
+	submitblock_json_scalar_value(
+		(json_error && json_error->type == json_object)? json_get_val(json_error, "code"): NULL,
+		observation->error_code, sizeof(observation->error_code));
+	submitblock_json_scalar_value(
+		(json_error && json_error->type == json_object)? json_get_val(json_error, "message"): NULL,
+		observation->error_message, sizeof(observation->error_message));
+	observation->elapsed_us = submitblock_monotonic_us() - started_us;
+}
+
+static void log_submitblock_response(YAAMP_COIND *coind, const char *method,
+	json_value *json_result, json_value *json_error, bool returned_success)
 {
 	char result_value[192];
 	char error_code[64];
 	char error_message[192];
 	submitblock_json_scalar_value(json_result, result_value, sizeof(result_value));
-	submitblock_json_scalar_value((json_error && json_error->type == json_object)? json_get_val(json_error, "code"): NULL, error_code, sizeof(error_code));
-	submitblock_json_scalar_value((json_error && json_error->type == json_object)? json_get_val(json_error, "message"): NULL, error_message, sizeof(error_message));
+	submitblock_json_scalar_value(
+		(json_error && json_error->type == json_object)? json_get_val(json_error, "code"): NULL,
+		error_code, sizeof(error_code));
+	submitblock_json_scalar_value(
+		(json_error && json_error->type == json_object)? json_get_val(json_error, "message"): NULL,
+		error_message, sizeof(error_message));
 
 	stratumlog("submitblock_observe method=%s algo=%s coinid=%d coin=%s symbol=%s height=%d "
 		"result_type=%s result_value=%s error_type=%s error_code=%s error_message=%s return_success=%d\n",
@@ -67,98 +132,131 @@ static void log_submitblock_response(YAAMP_COIND *coind, const char *method, jso
 		returned_success? 1: 0);
 }
 
-bool coind_submitwork(YAAMP_COIND *coind, const char *block)
+static bool coind_submitwork_observed(YAAMP_COIND *coind, const char *block,
+	STRATUM_COIND_SUBMIT_OBSERVATION *observation)
 {
+	const uint64_t started_us = submitblock_monotonic_us();
+	submit_observation_init(observation, "getwork");
 	int paramlen = strlen(block);
 
 	char *params = (char *)malloc(paramlen+1024);
-	if(!params) {
+	if(!params)
+	{
 		debuglog("%s: OOM!\n", __func__);
+		submit_observation_failure(observation, "local", "ENOMEM", "submit_params_allocation_failed", started_us);
 		return false;
 	}
 
 	sprintf(params, "[\"%s\"]", block);
 	json_value *json = rpc_call(&coind->rpc, "getwork", params);
-	if(!json) {
+	if(!json)
+	{
 		debuglog("%s: retry\n", __func__);
 		usleep(500*YAAMP_MS);
 		json = rpc_call(&coind->rpc, "getwork", params);
 	}
 	free(params);
 
-	if(!json) {
+	if(!json)
+	{
 		debuglog("%s: error, no answer\n", __func__);
+		submit_observation_failure(observation, "transport", "NO_RESPONSE", "rpc_call_returned_no_response", started_us);
 		return false;
 	}
 
-	json_value *json_res = json_get_object(json, "result");
-
-	bool b = json_res && json_res->type == json_boolean && json_res->u.boolean;
-	json_value_free(json_res);
-
-	return b;
-}
-
-bool coind_submitblock(YAAMP_COIND *coind, const char *block)
-{
-	int paramlen = strlen(block);
-
-	char *params = (char *)malloc(paramlen+1024);
-	if(!params) return false;
-
-	sprintf(params, "[\"%s\"]", block);
-	json_value *json = rpc_call(&coind->rpc, "submitblock", params);
-
-	free(params);
-	if(!json) return false;
-
 	json_value *json_error = json_get_object(json, "error");
 	json_value *json_result = json_get_object(json, "result");
-	bool has_error = json_error && json_error->type != json_null;
-	bool b = !has_error && json_result && json_result->type == json_null;
-
-	log_submitblock_response(coind, "submitblock", json_result, json_error, b);
-
+	bool b = json_result && json_result->type == json_boolean && json_result->u.boolean;
+	submit_observation_json(observation, json_result, json_error, b, started_us);
+	log_submitblock_response(coind, "getwork", json_result, json_error, b);
 	json_value_free(json);
 	return b;
 }
 
-bool coind_submitblocktemplate(YAAMP_COIND *coind, const char *block)
+static bool coind_submitblock_observed(YAAMP_COIND *coind, const char *block,
+	STRATUM_COIND_SUBMIT_OBSERVATION *observation)
 {
+	const uint64_t started_us = submitblock_monotonic_us();
+	submit_observation_init(observation, "submitblock");
 	int paramlen = strlen(block);
 
 	char *params = (char *)malloc(paramlen+1024);
-	if(!params) return false;
+	if(!params)
+	{
+		submit_observation_failure(observation, "local", "ENOMEM", "submit_params_allocation_failed", started_us);
+		return false;
+	}
 
-	sprintf(params, "[{\"mode\": \"submit\", \"data\": \"%s\"}]", block);
-	json_value *json = rpc_call(&coind->rpc, "getblocktemplate", params);
-
+	sprintf(params, "[\"%s\"]", block);
+	json_value *json = rpc_call(&coind->rpc, "submitblock", params);
 	free(params);
-	if(!json) return false;
+
+	if(!json)
+	{
+		submit_observation_failure(observation, "transport", "NO_RESPONSE", "rpc_call_returned_no_response", started_us);
+		return false;
+	}
 
 	json_value *json_error = json_get_object(json, "error");
 	json_value *json_result = json_get_object(json, "result");
 	bool has_error = json_error && json_error->type != json_null;
 	bool b = !has_error && json_result && json_result->type == json_null;
 
-	log_submitblock_response(coind, "submitblocktemplate", json_result, json_error, b);
+	submit_observation_json(observation, json_result, json_error, b, started_us);
+	log_submitblock_response(coind, "submitblock", json_result, json_error, b);
+	json_value_free(json);
+	return b;
+}
 
+static bool coind_submitblocktemplate_observed(YAAMP_COIND *coind, const char *block,
+	STRATUM_COIND_SUBMIT_OBSERVATION *observation)
+{
+	const uint64_t started_us = submitblock_monotonic_us();
+	submit_observation_init(observation, "submitblocktemplate");
+	int paramlen = strlen(block);
+
+	char *params = (char *)malloc(paramlen+1024);
+	if(!params)
+	{
+		submit_observation_failure(observation, "local", "ENOMEM", "submit_params_allocation_failed", started_us);
+		return false;
+	}
+
+	sprintf(params, "[{\"mode\": \"submit\", \"data\": \"%s\"}]", block);
+	json_value *json = rpc_call(&coind->rpc, "getblocktemplate", params);
+	free(params);
+
+	if(!json)
+	{
+		submit_observation_failure(observation, "transport", "NO_RESPONSE", "rpc_call_returned_no_response", started_us);
+		return false;
+	}
+
+	json_value *json_error = json_get_object(json, "error");
+	json_value *json_result = json_get_object(json, "result");
+	bool has_error = json_error && json_error->type != json_null;
+	bool b = !has_error && json_result && json_result->type == json_null;
+
+	submit_observation_json(observation, json_result, json_error, b, started_us);
+	log_submitblock_response(coind, "submitblocktemplate", json_result, json_error, b);
 	json_value_free(json);
 	return b;
 }
 
 bool coind_submit(YAAMP_COIND *coind, const char *block)
 {
-	bool b;
+	return coind_submit(coind, block, NULL);
+}
 
+bool coind_submit(YAAMP_COIND *coind, const char *block,
+	STRATUM_COIND_SUBMIT_OBSERVATION *observation)
+{
 	if(coind->usegetwork) // DCR
-		b = coind_submitwork(coind, block);
+		return coind_submitwork_observed(coind, block, observation);
 	else if(coind->hassubmitblock)
-		b = coind_submitblock(coind, block);
+		return coind_submitblock_observed(coind, block, observation);
 	else
-		b = coind_submitblocktemplate(coind, block);
-
-	return b;
+		return coind_submitblocktemplate_observed(coind, block, observation);
 }
 
 bool coind_submitgetauxblock(YAAMP_COIND *coind, const char *hash, const char *block)
@@ -182,7 +280,6 @@ bool coind_submitgetauxblock(YAAMP_COIND *coind, const char *hash, const char *b
 
 	//	job_reset();
 		json_value_free(json);
-
 		return false;
 	}
 
@@ -190,9 +287,8 @@ bool coind_submitgetauxblock(YAAMP_COIND *coind, const char *hash, const char *b
 	bool b = json_result && json_result->type == json_boolean && json_result->u.boolean;
 	// some auxpow coins return error:null, result: null on success
 	if(!b)
-		b=json_result && json_result->type == json_null;
+		b = json_result && json_result->type == json_null;
 
 	json_value_free(json);
 	return b;
 }
-
