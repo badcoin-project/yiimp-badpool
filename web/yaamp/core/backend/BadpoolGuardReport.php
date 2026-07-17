@@ -1,5 +1,7 @@
 <?php
 
+require_once(dirname(__FILE__).'/BadpoolGuardAutomationContracts.php');
+
 class BadpoolGuardReport
 {
 	const CHECKSUM_ALGORITHM = 'sha256';
@@ -19,6 +21,7 @@ class BadpoolGuardReport
 	public static function finalize($report)
 	{
 		$report = self::ensurePayoutAudit($report);
+		$report = BadpoolGuardAutomationContracts::hardenReport($report);
 		$report['report_checksum'] = self::checksum($report);
 		return $report;
 	}
