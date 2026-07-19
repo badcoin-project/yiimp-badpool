@@ -31,6 +31,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 		'wallet-send-dryrun',
 		'wallet-send-approval-package',
 		'wallet-send-apply',
+		'wallet-proof-closeout',
 		'payable-source-reconciliation-preview',
 		'account-credit-transition-preview',
 		'earnings-credit-readiness-preview',
@@ -129,6 +130,9 @@ class BadpoolGuardCommand extends CConsoleCommand
 			case 'wallet-send-apply':
 				$report = $this->walletSendApplyReport($args);
 				break;
+			case 'wallet-proof-closeout':
+				$report = $this->walletProofCloseoutReport();
+				break;
 			case 'payable-source-reconciliation-preview':
 				$report = $this->payableSourceReconciliationPreviewReport();
 				break;
@@ -220,6 +224,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 			"       php yaamp/yiic.php badpoolguard wallet-send-dryrun --coin-id=<id> --selected-payout-ids=<csv> --format=json\n".
 			"       php yaamp/yiic.php badpoolguard wallet-send-approval-package --coin-id=<id> --selected-payout-ids=<csv> --format=json\n".
 			"       php yaamp/yiic.php badpoolguard wallet-send-apply --coin-id=<id> --selected-payout-ids=<csv> --approval-package-checksum=<sha256> --row-inventory-checksum=<sha256> --destination-plan-checksum=<sha256> --projected-total=<decimal> --projected-total-checksum=<sha256> --wallet-send-total=<decimal8> --wallet-send-total-checksum=<sha256> --wallet-send-destination-plan-checksum=<sha256> --operator-confirms-wallet-send=<confirmation-text> --format=json\n".
+			"       php yaamp/yiic.php badpoolguard wallet-proof-closeout --coin-id=<id> --selected-payout-ids=<csv> --format=json\n".
 			"       php yaamp/yiic.php badpoolguard payable-source-reconciliation-preview --coin-id=<id> [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard account-credit-transition-preview --coin-id=<id> [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard earnings-credit-readiness-preview --coin-id=<id> [--format=json|text]\n".
@@ -243,7 +248,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 			"       php yaamp/yiic.php badpoolguard guard-context --coin-id=<id> [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard status-runner [--coin-id=<id>] [--algo=<algo>] --format=json\n".
 			"       php yaamp/yiic.php badpoolguard overview --all-coins-preview [--format=json|text]\n\n".
-			"Read-only preview only. No wallet reads, wallet sends, DB writes, share cleanup, payout retry/delete, or service actions are available.\n";
+			"Read-only preview only. Wallet reads are limited to wallet-proof-closeout gettransaction; no wallet sends, DB writes, share cleanup, payout retry/delete, or service actions are available.\n";
 	}
 
 
@@ -1622,6 +1627,120 @@ class BadpoolGuardCommand extends CConsoleCommand
 	private function walletSendApplyMarkCompleted($ids,$txid,$approvedRowInventoryChecksum,$approvedRowInventory){ $liveRows=$this->walletSendSelectedPayoutRows($ids); $liveInventory=$this->walletSendApplyRowInventoryFromRows($ids,$liveRows); if ((string)arraySafeVal(BadpoolGuardReport::checksum($liveInventory),'value') !== (string)$approvedRowInventoryChecksum) throw new Exception('post-send row_inventory_checksum mismatch before completion update'); if ($liveInventory != $approvedRowInventory) throw new Exception('post-send row inventory changed before completion update'); $updated=0; foreach($approvedRowInventory as $row){ $updated += app()->db->createCommand("UPDATE payouts SET completed=1, tx=:tx WHERE id=:id AND idcoin=:idcoin AND account_id=:account_id AND amount=:amount AND completed=0 AND (tx IS NULL OR tx='')")->execute(array(':tx'=>$txid, ':id'=>$row['payout_id'], ':idcoin'=>$row['idcoin'], ':account_id'=>$row['account_id'], ':amount'=>$row['amount'])); } return $updated; }
 	private function walletSendApplyRowInventoryFromRows($ids,$rows){ if (count($rows)!==count($ids)) throw new Exception('post-send selected payout row count mismatch'); $rowById=array(); foreach($rows as $row) $rowById[intval($row['payout_id'])]=$row; $inventory=array(); foreach($ids as $id){ if(!isset($rowById[$id])) throw new Exception('post-send selected payout row missing: '.$id); $row=$rowById[$id]; if(intval($row['completed'])!==0 || (string)arraySafeVal($row,'tx','')!=='') throw new Exception('post-send selected payout row no longer eligible: '.$id); $inventory[]=array('payout_id'=>$id,'idcoin'=>intval($row['payout_idcoin']),'account_id'=>intval($row['account_id']),'account_coinid'=>intval($row['account_coinid']),'coin_id'=>intval($row['coin_id']),'destination_field'=>'accounts.username','destination'=>(string)$row['username'],'recipient'=>(string)$row['username'],'amount'=>(string)$row['amount'],'completed'=>intval($row['completed']),'tx'=>$row['tx']); } return $inventory; }
 	private function walletSendApplyRpcCoin($coinId){ $cols=array('id','symbol','algo','rpcencoding','rpcuser','rpcpasswd','rpchost','rpcport','account','hasgetinfo','master_wallet'); $select=array(); foreach($cols as $c) $select[]=$this->guard->qcol($c); $row=$this->guard->selectRow('SELECT '.implode(',', $select).' FROM '.$this->guard->qtable('coins').' WHERE '.$this->guard->qcol('id').'=:coin_id', array(':coin_id'=>$coinId)); return $row ? (object)$row : null; }
+
+
+	private function walletProofCloseoutReport()
+	{
+		$report = $this->walletProofCloseoutBaseReport();
+		if ($this->guard->getFormat() !== 'json') { $this->guard->addError('wallet-proof-closeout supports --format=json only.'); return $this->guard->finalizeReport($report); }
+		if ($this->guard->isAllCoinsPreview()) { $this->guard->addError('wallet-proof-closeout requires --coin-id and refuses broad/all-coin scope.'); return $this->guard->finalizeReport($report); }
+		$coinId = intval(arraySafeVal($this->guard->getScope(), 'coin_id'));
+		$ids = $this->parseCsvIds($this->guard->getOption('selected-payout-ids'));
+		if (empty($ids)) { $this->guard->addError('wallet-proof-closeout requires non-empty --selected-payout-ids CSV of positive integers.'); return $this->guard->finalizeReport($report); }
+		if ($this->hasDuplicateIds($ids)) { $this->guard->addError('Duplicate selected payout IDs are refused.'); return $this->guard->finalizeReport($report); }
+		sort($ids, SORT_NUMERIC); $report['selected_payout_ids'] = $ids;
+		$ctx = $this->walletProofDaemonContext($coinId);
+		$report['daemon_context'] = $this->walletProofRedactedDaemonContext($ctx);
+		if (!$ctx['supported']) {
+			$report['classification'] = 'unsupported_wallet_proof_context';
+			$report['final_classification'] = 'HOLD / WALLET PROOF INCOMPLETE';
+			$report['invalid_closeout_fields'][] = 'unsupported_wallet_proof_context';
+			$report['fix_items'][] = 'No daemon-equivalent wallet proof context is configured for coin_id '.$coinId.'.';
+			return $this->guard->finalizeReport($report);
+		}
+		$rows = $this->walletProofCloseoutSelectedRows($ids);
+		$rowById = array(); foreach ($rows as $row) $rowById[intval($row['payout_id'])] = $row;
+		$total = '0'; $expectedTx = null;
+		foreach ($ids as $id) {
+			if (!isset($rowById[$id])) { $report['missing_closeout_fields'][] = 'payout_exists:'.$id; $report['fix_items'][] = 'Selected payout row '.$id.' does not exist with its account/coin join.'; continue; }
+			$row = $rowById[$id]; $txid = trim((string)arraySafeVal($row, 'tx', ''));
+			$item = array('payout_id'=>$id,'coin_id'=>intval($row['payout_idcoin']),'requested_coin_id'=>$coinId,'account_id'=>intval($row['account_id']),'account_exists'=>true,'account_balance'=>(string)arraySafeVal($row,'account_balance',''),'account_balance_zero'=>$this->walletProofDecimalIsZero(arraySafeVal($row,'account_balance','0')),'amount'=>(string)$row['amount'],'completed'=>intval($row['completed']),'tx'=>$txid,'withdraw_rows'=>$this->walletProofWithdrawSummary($id, intval($row['account_id']), $coinId));
+			$report['payout_inventory'][] = $item;
+			if (intval($row['payout_idcoin']) !== $coinId) $report['invalid_closeout_fields'][] = 'coin_id_mismatch:'.$id;
+			if (intval($row['completed']) !== 1) $report['invalid_closeout_fields'][] = 'completed_not_1:'.$id;
+			if ($txid === '') $report['missing_closeout_fields'][] = 'payout_tx:'.$id;
+			if (!$item['account_balance_zero']) $report['invalid_closeout_fields'][] = 'account_balance_nonzero:'.$id;
+			if (intval(arraySafeVal($item['withdraw_rows'], 'count', 0)) !== 0) $report['invalid_closeout_fields'][] = 'withdraw_rows_present:'.$id;
+			if ($expectedTx === null && $txid !== '') $expectedTx = $txid;
+			elseif ($txid !== '' && $expectedTx !== $txid) $report['invalid_closeout_fields'][] = 'multiple_wallet_txids';
+			$total = $this->walletSendDryrunDecimalAdd($total, (string)$row['amount']);
+		}
+		$report['wallet_txid_expected'] = $expectedTx;
+		$report['expected_send_amount'] = $total;
+		if (empty($report['missing_closeout_fields']) && empty($report['invalid_closeout_fields']) && $expectedTx !== null) {
+			$wallet = $this->walletProofGetTransaction($ctx, $expectedTx);
+			$report['wallet_lookup_success'] = arraySafeVal($wallet, 'success', false);
+			$report['wallet_proof'] = arraySafeVal($wallet, 'proof', array());
+			if (!$report['wallet_lookup_success']) $report['fix_items'][] = 'Wallet gettransaction did not succeed from daemon-equivalent context; classify as wallet_proof_hold, not payment failure.';
+			$proof = $report['wallet_proof'];
+			$report['wallet_amount_matches_expected'] = $this->walletProofAmountMatches(arraySafeVal($proof, 'amount', null), $total);
+			$report['wallet_confirmations_present'] = array_key_exists('confirmations', $proof);
+		}
+		$report['closeout_valid'] = ($report['wallet_lookup_success'] && $report['wallet_amount_matches_expected'] && $report['wallet_confirmations_present'] && empty($report['missing_closeout_fields']) && empty($report['invalid_closeout_fields']));
+		$report['classification'] = $report['closeout_valid'] ? 'wallet_proof_closeout_complete' : 'wallet_proof_hold';
+		$report['final_classification'] = $report['closeout_valid'] ? 'PASS / WALLET PROOF CLOSEOUT COMPLETE' : 'HOLD / WALLET PROOF INCOMPLETE';
+		$report['next_lane'] = $report['closeout_valid'] ? 'closeout complete; do not rerun wallet-send' : 'STOP';
+		$report['next_safe_lane_or_STOP'] = $report['next_lane'];
+		return $this->guard->finalizeReport($report);
+	}
+
+	private function walletProofCloseoutBaseReport()
+	{
+		$report = $this->guard->baseReport();
+		$report['schema'] = 'badpool.guardrail.wallet_proof_closeout.v1';
+		$report['command_shape'] = 'badpoolguard wallet-proof-closeout --coin-id=<coin_id> --selected-payout-ids=<ids> --format=json';
+		$report['read_only'] = true;
+		$report['wallet_reads'] = true;
+		$report['db_mutations'] = false;
+		$report['wallet_sends'] = false;
+		$report['wallet_send_rpc_methods_blocked'] = array('sendmany','sendtoaddress','transfer','wallet passphrase RPCs');
+		$report['selected_payout_ids'] = array();
+		$report['payout_inventory'] = array();
+		$report['wallet_lookup_success'] = false;
+		$report['wallet_txid_expected'] = null;
+		$report['wallet_amount_matches_expected'] = false;
+		$report['wallet_confirmations_present'] = false;
+		$report['closeout_valid'] = false;
+		$report['missing_closeout_fields'] = array();
+		$report['invalid_closeout_fields'] = array();
+		$report['classification'] = 'wallet_proof_hold';
+		$report['final_classification'] = 'HOLD / WALLET PROOF INCOMPLETE';
+		$report['run_dir'] = self::OPERATOR_WEB_CWD;
+		$report['mutation_boundary'] = 'read_only_wallet_gettransaction_no_db_mutation_no_wallet_send';
+		$report['next_lane'] = 'STOP';
+		$report['next_safe_lane_or_STOP'] = 'STOP';
+		$report['do_not_rerun'] = array('wallet-send-apply'=>true, 'payout-row-apply'=>true, 'account-credit-apply'=>true);
+		$report['fix_items'] = array();
+		return $report;
+	}
+
+	private function walletProofCloseoutSelectedRows($ids)
+	{
+		$params = array(); $ph = array(); foreach ($ids as $i=>$id) { $k=':payout_id_'.$i; $ph[]=$k; $params[$k]=$id; }
+		return $this->guard->selectAll('SELECT P.id AS payout_id, P.account_id, P.idcoin AS payout_idcoin, CAST(P.amount AS CHAR) AS amount, P.completed, P.tx, A.username, CAST(A.balance AS CHAR) AS account_balance, A.coinid AS account_coinid, C.id AS coin_id, C.symbol, C.algo FROM payouts P INNER JOIN accounts A ON A.id=P.account_id INNER JOIN coins C ON C.id=P.idcoin WHERE P.id IN ('.implode(',', $ph).') ORDER BY P.id', $params);
+	}
+	private function walletProofWithdrawSummary($payoutId, $accountId, $coinId)
+	{
+		if (!$this->guard->tableExists('withdraws')) return array('count'=>0, 'note'=>'withdraws table unavailable');
+		$where = array(); $params = array();
+		if ($this->guard->columnExists('withdraws', 'payout_id')) { $where[]='`payout_id`=:payout_id'; $params[':payout_id']=$payoutId; }
+		if ($this->guard->columnExists('withdraws', 'account_id')) { $where[]='`account_id`=:account_id'; $params[':account_id']=$accountId; }
+		if (empty($where)) return array('count'=>0, 'note'=>'withdraws table has no payout/account scoped columns');
+		$row = $this->guard->selectRow('SELECT COUNT(*) AS c FROM withdraws WHERE ('.implode(' OR ', $where).')', $params);
+		return array('count'=>intval(arraySafeVal($row, 'c', 0)), 'scope'=>'payout/account', 'coin_id'=>$coinId);
+	}
+	private function walletProofDaemonContext($coinId) { return $coinId === 1267 ? array('supported'=>true,'cli'=>'badcoin-cli','conf'=>'/etc/badcoin/pool-scrypt.conf','datadir'=>'/var/lib/badcoin-pool-scrypt') : array('supported'=>false,'cli'=>'badcoin-cli','conf'=>'','datadir'=>''); }
+	private function walletProofRedactedDaemonContext($ctx) { return array('supported'=>arraySafeVal($ctx,'supported',false),'cli'=>arraySafeVal($ctx,'cli','badcoin-cli'),'conf_path'=>arraySafeVal($ctx,'conf','') === '' ? null : '[redacted-conf-path-configured]','datadir'=>arraySafeVal($ctx,'datadir','') === '' ? null : arraySafeVal($ctx,'datadir',''),'credentials_redacted'=>true,'cookie_redacted'=>true,'redacted_secret_names'=>array('rpcuser','rpcpassword','rpccookie','rpcauth')); }
+	private function walletProofGetTransaction($ctx, $txid)
+	{
+		$cmd = array(escapeshellcmd(arraySafeVal($ctx,'cli','badcoin-cli'))); if (arraySafeVal($ctx,'conf','') !== '') $cmd[]='-conf='.escapeshellarg($ctx['conf']); if (arraySafeVal($ctx,'datadir','') !== '') $cmd[]='-datadir='.escapeshellarg($ctx['datadir']); $cmd[]='gettransaction'; $cmd[]=escapeshellarg($txid);
+		$out = array(); $rc = 1; @exec(implode(' ', $cmd).' 2>&1', $out, $rc); $raw = implode("\n", $out); $json = json_decode($raw, true);
+		if ($rc !== 0 || !is_array($json)) return array('success'=>false,'proof'=>array('error'=>'gettransaction_failed_or_non_json','return_code'=>$rc,'message'=>$this->walletProofRedact($raw)));
+		$proof = array(); foreach (array('txid','amount','fee','confirmations','blockhash','blockindex','category') as $k) if (array_key_exists($k, $json)) $proof[$k]=$json[$k]; if (!isset($proof['category']) && isset($json['details']) && is_array($json['details']) && isset($json['details'][0]['category'])) $proof['category']=$json['details'][0]['category']; return array('success'=>((string)arraySafeVal($proof,'txid','') === (string)$txid),'proof'=>$proof);
+	}
+	private function walletProofRedact($s) { return preg_replace('/(rpc(user|password|cookie|auth)|cookie|password|user)\S*/i', '$1=[REDACTED]', (string)$s); }
+	private function walletProofDecimalIsZero($v) { $v = str_replace('-', '', trim((string)$v)); if ($v === '') $v = '0'; return $this->walletSendDecimalCompare($v, '0') === 0; }
+	private function walletProofAmountMatches($walletAmount, $expected) { if ($walletAmount === null) return false; $w = trim((string)$walletAmount); if ($w !== '' && $w[0] === '-') $w = substr($w, 1); return $this->walletSendDecimalCompare($w, $expected) === 0; }
 
 
 	private function walletSendDryrunReport()

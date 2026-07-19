@@ -1,4 +1,5 @@
 <?php
+require_once(dirname(__FILE__).'/BadpoolGuardAutomationContracts.php');
 
 class BadpoolGuardReport
 {
@@ -19,6 +20,7 @@ class BadpoolGuardReport
 	public static function finalize($report)
 	{
 		$report = self::ensurePayoutAudit($report);
+		$report = self::ensureAutomationContract($report);
 		$report['report_checksum'] = self::checksum($report);
 		return $report;
 	}
@@ -73,6 +75,25 @@ class BadpoolGuardReport
 	private static function isPayoutAuditCommand($command)
 	{
 		return in_array($command, array('payout-candidates-preview', 'payout-row-preflight-preview', 'payout-row-dryrun-plan', 'payable-source-reconciliation-preview', 'account-credit-transition-preview', 'earnings-credit-readiness-preview', 'block-category-maturity-preview', 'earnings-block-reconciliation-preview', 'maturity-source-verification-preview', 'forward-catchup-preview', 'forward-catchup-approval-package'), true);
+	}
+
+	private static function ensureAutomationContract($report)
+	{
+		if (!is_array($report)) {
+			return $report;
+		}
+		$command = self::arrayValue($report, 'command');
+		if (!BadpoolGuardAutomationContracts::shouldAttachAutomationContract($command, $report)) {
+			return $report;
+		}
+		if (!isset($report['automation_contract']) || !is_array($report['automation_contract'])) {
+			$report['automation_contract'] = array(
+				'command' => $command,
+				'closeout_minimum_fields' => array('classification', 'run_dir', 'mutation_boundary', 'next_lane', 'do_not_rerun', 'fix_items'),
+				'closeout_validation' => BadpoolGuardAutomationContracts::validateCloseout($report),
+			);
+		}
+		return $report;
 	}
 
 	private static function canonicalizeForChecksum($value, $keyName=null)
