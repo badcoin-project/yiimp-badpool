@@ -21,6 +21,11 @@ expect_contains('redacts credential words', $command, 'rpc(user|pass(word)?)|coo
 if (!wallet_proof_decimal_is_zero_harness('0') || !wallet_proof_decimal_is_zero_harness('0.00000000') || wallet_proof_decimal_is_zero_harness('0.1')) $failures[] = 'decimal zero helper fixture failed';
 expect_contains('negative expected amount emitted', $command, "['expected_send_amount'] = '-'", $failures);
 expect_contains('negative wallet amount matching', $command, "strpos($".'report[\'wallet_amount\'], \'-\') === 0', $failures);
+expect_contains('do_not_rerun is array', $command, "['do_not_rerun'] = array(", $failures);
+expect_contains('do_not_rerun blocks wallet-send apply', $command, "'wallet-send-apply'", $failures);
+expect_contains('do_not_rerun blocks payout-row apply', $command, "'payout-row-apply'", $failures);
+expect_contains('do_not_rerun blocks account-credit apply', $command, "'account-credit-apply'", $failures);
+expect_not_contains('do_not_rerun is not string sentence', $command, "Do not rerun any wallet-send apply for these selected completed payout rows.", $failures);
 expect_contains('pass classification', $command, 'PASS / WALLET PROOF CLOSEOUT COMPLETE', $failures);
 expect_contains('hold classification', $command, 'HOLD / WALLET PROOF INCOMPLETE', $failures);
 foreach (array('schema','command','command_shape','read_only','wallet_reads','db_mutations','wallet_sends','wallet_send_rpc_methods_blocked','selected_payout_ids','payout_inventory','expected_send_amount','wallet_lookup_success','wallet_txid_expected','wallet_amount_matches_expected','wallet_confirmations_present','closeout_valid','missing_closeout_fields','invalid_closeout_fields','classification','final_classification','run_dir','mutation_boundary','next_lane','next_safe_lane_or_STOP','do_not_rerun','fix_items') as $field) {

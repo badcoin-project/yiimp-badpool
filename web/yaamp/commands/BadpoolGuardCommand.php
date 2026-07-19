@@ -1655,7 +1655,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 		$report['mutation_boundary'] = array('no_payout_row_update'=>true,'no_account_update'=>true,'no_withdraw_update'=>true,'no_share_deletion'=>true,'no_service_action'=>true);
 		$report['next_lane'] = 'operator_review_wallet_proof_closeout';
 		$report['next_safe_lane_or_STOP'] = 'STOP';
-		$report['do_not_rerun'] = 'Do not rerun any wallet-send apply for these selected completed payout rows.';
+		$report['do_not_rerun'] = array('wallet-send-apply','payout-row-apply','account-credit-apply');
 		$report['fix_items'] = array();
 		$report['wallet_proof_context'] = $this->walletProofContextForCoin(intval(arraySafeVal($this->guard->getScope(), 'coin_id')));
 
