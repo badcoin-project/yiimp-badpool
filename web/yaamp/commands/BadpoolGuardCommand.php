@@ -1642,6 +1642,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 		$report['payout_inventory'] = array();
 		$report['selected_payout_ids'] = array();
 		$report['expected_send_amount'] = '0';
+		$report['expected_wallet_amount'] = '0.00000000';
 		$report['wallet_lookup_success'] = false;
 		$report['wallet_txid_expected'] = false;
 		$report['wallet_amount_matches_expected'] = false;
@@ -1670,11 +1671,11 @@ class BadpoolGuardCommand extends CConsoleCommand
 		$rows = $this->walletProofSelectedPayoutRows($ids);
 		if (count($rows) !== count($ids)) $report['missing_closeout_fields'][] = 'payout missing or linked account missing';
 		$rowById = array(); foreach ($rows as $row) $rowById[intval($row['payout_id'])] = $row;
-		$expected = '0'; $txids = array();
+		$expected = '0'; $expectedWallet = '0'; $txids = array();
 		foreach ($ids as $id) {
 			if (!isset($rowById[$id])) { $report['fix_items'][] = 'payout missing: '.$id; continue; }
 			$row = $rowById[$id]; $amount = (string)$row['amount']; $txid = trim((string)arraySafeVal($row, 'tx', ''));
-			$item = array('payout_id'=>$id,'coin_id'=>intval($row['payout_idcoin']),'account_id'=>intval($row['account_id']),'account_balance_reported'=>array_key_exists('account_balance', $row),'account_balance'=>(string)arraySafeVal($row,'account_balance',''),'account_balance_zero'=>$this->walletProofDecimalIsZero(arraySafeVal($row,'account_balance','')),'completed'=>intval($row['completed']),'tx'=>$this->walletProofRedact($txid),'amount'=>$amount,'withdraw_rows'=>$this->walletProofWithdrawRows($row));
+			$item = array('payout_id'=>$id,'coin_id'=>intval($row['payout_idcoin']),'account_id'=>intval($row['account_id']),'account_balance_reported'=>array_key_exists('account_balance', $row),'account_balance'=>(string)arraySafeVal($row,'account_balance',''),'account_balance_zero'=>$this->walletProofDecimalIsZero(arraySafeVal($row,'account_balance','')),'completed'=>intval($row['completed']),'tx'=>$this->walletProofRedact($txid),'amount'=>$amount,'raw_db_amount'=>$amount,'withdraw_rows'=>$this->walletProofWithdrawRows($row));
 			if (intval($row['payout_idcoin']) !== $coinId) $report['invalid_closeout_fields'][] = 'coin_id mismatch payout '.$id;
 			if (intval($row['completed']) !== 1) $report['invalid_closeout_fields'][] = 'completed not 1 payout '.$id;
 			if ($txid === '') $report['missing_closeout_fields'][] = 'tx missing payout '.$id;
@@ -1682,9 +1683,11 @@ class BadpoolGuardCommand extends CConsoleCommand
 			if (!$item['account_balance_zero']) { $report['invalid_closeout_fields'][] = 'account balance nonzero payout '.$id; $item['account_balance_classification'] = 'hold'; }
 			$report['payout_inventory'][] = $item;
 			$expected = $this->walletSendDryrunDecimalAdd($expected, $amount);
+			$expectedWallet = $this->walletSendDryrunDecimalAdd($expectedWallet, $this->walletSendProjectBtcAmount8dp($amount));
 			if ($txid !== '') $txids[$txid] = true;
 		}
 		$report['expected_send_amount'] = '-'.$expected;
+		$report['expected_wallet_amount'] = '-'.$expectedWallet;
 		if (!empty($report['missing_closeout_fields']) || !empty($report['invalid_closeout_fields']) || count($txids) !== 1) return $this->walletProofCloseoutHold($report, 'selected_payout_validation', 'Selected payout validation failed.');
 		$coin = $this->walletSendApplyRpcCoin($coinId);
 		$remote = new WalletRPC($coin);
@@ -1693,7 +1696,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 		$report['wallet_lookup_success'] = !empty($walletTx);
 		$report['wallet_txid_expected'] = ((string)arraySafeVal($walletTx, 'txid', $txid) === $txid);
 		$report['wallet_amount'] = (string)arraySafeVal($walletTx, 'amount', '');
-		$report['wallet_amount_matches_expected'] = ($this->walletSendDecimalCompare(ltrim($report['wallet_amount'], '-'), $expected) === 0 && strpos($report['wallet_amount'], '-') === 0);
+		$report['wallet_amount_matches_expected'] = ($this->walletSendDecimalCompare(ltrim($report['wallet_amount'], '-'), $expectedWallet) === 0 && strpos($report['wallet_amount'], '-') === 0);
 		$report['wallet_confirmations_present'] = array_key_exists('confirmations', $walletTx);
 		$report['wallet_proof'] = array('txid'=>$txid,'amount'=>$report['wallet_amount'],'confirmations'=>arraySafeVal($walletTx,'confirmations',null),'blockhash'=>arraySafeVal($walletTx,'blockhash',null),'blockindex'=>arraySafeVal($walletTx,'blockindex',null),'category'=>arraySafeVal($walletTx,'category',null),'rpc_error'=>$this->walletProofRedact(json_encode($remote->error)));
 		$report['closeout_valid'] = $report['wallet_lookup_success'] && $report['wallet_txid_expected'] && $report['wallet_amount_matches_expected'] && $report['wallet_confirmations_present'];
