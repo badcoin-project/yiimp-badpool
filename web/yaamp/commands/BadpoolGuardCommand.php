@@ -1067,6 +1067,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 		$this->standardizeApprovalPackageContract($report, 'forward-catchup-stage1-apply', array('approval_package_checksum','batch_scope_checksum','projected_mutation_checksum','projected_earnings_checksum','approval_input_checksum','intended_mutation_scope_checksum'));
 		unset($report['report_checksum']);
 		$report['approval_package_checksum'] = $this->forwardCatchupStage1StableApprovalPackageChecksum($report);
+		$this->standardizeApprovalPackageContract($report, 'forward-catchup-stage1-apply', array('approval_package_checksum','batch_scope_checksum','projected_mutation_checksum','projected_earnings_checksum','approval_input_checksum','intended_mutation_scope_checksum'));
 		$report['report_checksum'] = BadpoolGuardReport::checksum($report);
 		return $report;
 	}

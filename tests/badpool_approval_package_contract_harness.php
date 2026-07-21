@@ -33,6 +33,15 @@ foreach (array('schema','package_type','selected_records','checksums','apply_com
 	expect_contains_contract("source exposes top-level contract: $needle", $command, $needle, $failures);
 }
 
+$stage1Start = strpos($command, 'private function forwardCatchupStage1ApplyApprovalPackageReport');
+$stage1End = strpos($command, 'private function forwardCatchupStage1ApplyReport', $stage1Start);
+$stage1Source = ($stage1Start === false || $stage1End === false) ? '' : substr($command, $stage1Start, $stage1End - $stage1Start);
+$stage1ChecksumAssign = strpos($stage1Source, '$report[\'approval_package_checksum\'] = $this->forwardCatchupStage1StableApprovalPackageChecksum($report);');
+$stage1ReportChecksumAssign = strpos($stage1Source, '$report[\'report_checksum\'] = BadpoolGuardReport::checksum($report);', $stage1ChecksumAssign);
+$stage1AfterApprovalChecksum = ($stage1ChecksumAssign === false || $stage1ReportChecksumAssign === false) ? '' : substr($stage1Source, $stage1ChecksumAssign, $stage1ReportChecksumAssign - $stage1ChecksumAssign);
+expect_contains_contract('Stage1 re-standardizes after final approval checksum assignment', $stage1AfterApprovalChecksum, 'standardizeApprovalPackageContract($report, \'forward-catchup-stage1-apply\'', $failures);
+expect_contains_contract('Stage1 top-level checksums include final approval_package_checksum field', $stage1AfterApprovalChecksum, "'approval_package_checksum','batch_scope_checksum'", $failures);
+
 $stage1 = array('schema'=>'badpool.approval_package.v1','package_type'=>'forward-catchup-stage1-apply','coin_id'=>1,'selected_count'=>1,'selected_amount'=>'1.000000000000','selected_records'=>array(array('block_id'=>10,'height'=>100,'current_state'=>'new','current_category'=>'new','projected_earning_amount'=>'1.000000000000')),'checksums'=>array('approval_package_checksum'=>'abc'),'apply_command_args'=>array('php','yaamp/yiic.php','badpoolguard'));
 $maturity = array('schema'=>'badpool.approval_package.v1','package_type'=>'earnings-maturity-transition','coin_id'=>1,'selected_count'=>1,'selected_amount'=>'2.000000000000','selected_records'=>array(array('earning_id'=>20,'block_id'=>10,'height'=>100,'account_id'=>7,'amount'=>'2.000000000000','current_earning_status'=>0,'current_block_category'=>'immature','expected_post_apply_earning_status'=>1,'expected_post_apply_block_category'=>'generate')),'checksums'=>array('approval_package_checksum'=>'abc'),'apply_command'=>'php yaamp/yiic.php badpoolguard earnings-maturity-transition-apply');
 $account = array('schema'=>'badpool.approval_package.v1','package_type'=>'account-credit-clear','coin_id'=>1,'selected_count'=>1,'selected_amount'=>'3.000000000000','selected_records'=>array(array('earning_id'=>30,'account_id'=>7,'amount'=>'3.000000000000','current_status'=>1,'expected_post_apply_status'=>2,'expected_post_apply_account_delta'=>'3.000000000000')),'checksums'=>array('approval_package_checksum'=>'abc'),'apply_command'=>'php yaamp/yiic.php badpoolguard account-credit-clear-apply');
