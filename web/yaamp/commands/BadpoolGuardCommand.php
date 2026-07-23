@@ -2292,9 +2292,22 @@ class BadpoolGuardCommand extends CConsoleCommand
 	}
 
 
+
+	private function clearFinalizedApprovalPackageContractFields(&$report)
+	{
+		unset($report['approval_package_checksum']);
+		unset($report['checksums']);
+		unset($report['apply_command']);
+		unset($report['apply_command_args']);
+		unset($report['selected_records']);
+		unset($report['selected_count']);
+		unset($report['selected_amount']);
+	}
+
 	private function earningsMaturityTransitionApprovalForIds($ids)
 	{
 		$report = $this->earningsMaturityTransitionApprovalPackageReport();
+		$this->clearFinalizedApprovalPackageContractFields($report);
 		$items = $this->filterRowsByIds(arraySafeVal(arraySafeVal($report,'items',array()),'selected_earnings',array()), 'earning_id', $ids);
 		$blockIds = array(); foreach($items as $i) $blockIds[intval($i['linked_block_id'])]=true;
 		$blocks = array(); foreach(arraySafeVal(arraySafeVal($report,'items',array()),'linked_blocks',array()) as $b) if(isset($blockIds[intval($b['block_id'])])) $blocks[]=$b;
@@ -2309,6 +2322,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 	private function accountCreditClearApprovalForIds($ids)
 	{
 		$report = $this->accountCreditClearApprovalPackageReport();
+		$this->clearFinalizedApprovalPackageContractFields($report);
 		$items = $this->filterRowsByIds(arraySafeVal(arraySafeVal($report,'items',array()),'selected_earnings',array()), 'earning_id', $ids);
 		$report['items']['selected_earnings']=$items;
 		$report['apply_command_shape']=$this->replaceApplyScopeIds(arraySafeVal($report,'apply_command_shape',array()), $ids);
