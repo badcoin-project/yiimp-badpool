@@ -4,6 +4,10 @@ require_once(dirname(__FILE__).'/BadpoolGuardAutomationContracts.php');
 class BadpoolGuardReport
 {
 	const CHECKSUM_ALGORITHM = 'sha256';
+	const PREVIEW_SCHEMA = 'badpool.guardrail.preview.v1';
+	const PREVIEW_MODE = 'read-only-preview';
+	const APPLY_SCHEMA = 'badpool.guardrail.apply.v1';
+	const APPLY_MODE = 'guarded-apply';
 
 	public static function render($report, $format)
 	{
@@ -19,6 +23,7 @@ class BadpoolGuardReport
 
 	public static function finalize($report)
 	{
+		$report = self::ensureOperatorSafetyMetadata($report);
 		$report = self::ensurePayoutAudit($report);
 		$report = self::ensureAutomationContract($report);
 		$report['report_checksum'] = self::checksum($report);
@@ -37,6 +42,70 @@ class BadpoolGuardReport
 			),
 			'purpose' => 'preview audit comparison only; not payout authorization',
 		);
+	}
+
+	private static function ensureOperatorSafetyMetadata($report)
+	{
+		if (!is_array($report)) return $report;
+		$command = self::arrayValue($report, 'command');
+		if (!is_string($command) || $command === '') return $report;
+
+		if (self::isGuardedApplyCommand($command)) {
+			$report['schema'] = self::APPLY_SCHEMA;
+			$report['mode'] = self::APPLY_MODE;
+			$report['read_only'] = false;
+			$report = self::normalizeApplyDbMutationMetadata($report);
+			$report['wallet_rpc_send_performed'] = self::walletRpcSendPerformed($report);
+			return $report;
+		}
+
+		if (self::isReadOnlyPreviewCommand($command)) {
+			$report['schema'] = self::PREVIEW_SCHEMA;
+			$report['mode'] = self::PREVIEW_MODE;
+			$report['read_only'] = true;
+			$report['db_mutations'] = false;
+			$report['wallet_rpc_send_performed'] = false;
+		}
+		return $report;
+	}
+
+	private static function isGuardedApplyCommand($command)
+	{
+		return preg_match('/-apply$/', $command) === 1;
+	}
+
+	private static function isReadOnlyPreviewCommand($command)
+	{
+		return preg_match('/-(preview|dryrun|dryrun-plan)$/', $command) === 1 || $command === 'forward-catchup-stage1-drain-plan';
+	}
+
+	private static function normalizeApplyDbMutationMetadata($report)
+	{
+		$value = self::arrayValue($report, 'db_mutations', false);
+		if (is_bool($value)) {
+			if ($value === false && self::arrayValue($report, 'status') === 'pass' && self::applyReportShowsDbMutation($report)) $report['db_mutations'] = true;
+			return $report;
+		}
+		if (is_string($value) && $value !== '' && !isset($report['db_mutation_status'])) {
+			$report['db_mutation_status'] = $value;
+		}
+		$report['db_mutations'] = in_array($value, array('guarded_transaction_committed', 'performed'), true) || ($value === 'guarded_transaction_only' && self::arrayValue($report, 'status') === 'pass');
+		return $report;
+	}
+
+	private static function applyReportShowsDbMutation($report)
+	{
+		if (self::arrayValue($report, 'apply_commands_executed', false) === true) return true;
+		foreach (array('batches_applied','created_count','completed_count','applied_count','applied_earning_count','inserted_earnings_count') as $field) {
+			if (intval(self::arrayValue($report, $field, 0)) > 0) return true;
+		}
+		return false;
+	}
+
+	private static function walletRpcSendPerformed($report)
+	{
+		if (array_key_exists('wallet_rpc_send_performed', $report)) return $report['wallet_rpc_send_performed'] === true;
+		return self::arrayValue($report, 'wallet_sends', false) === true;
 	}
 
 	private static function ensurePayoutAudit($report)
