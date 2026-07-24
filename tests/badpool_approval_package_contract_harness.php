@@ -225,6 +225,92 @@ $approvalArgOk = in_array('--approval-package-checksum='.$accountRecomputed['app
 $scopeArgOk = in_array('--selected-earning-ids=30,31,32', $generatedArgs, true);
 if (!$approvalArgOk || !$scopeArgOk) contract_fail('account-credit apply checksum validation accepts fresh command fixture', 'generated apply command args do not match recomputed approval checksum and selected IDs', $failures);
 
+
+$payoutRow = array('schema'=>'badpool.approval_package.v1','package_type'=>'payout-row-creation','coin_id'=>1267,'summary'=>array('selected_account_count'=>1,'projected_payout_total'=>'54066.575945179990'),'selected_count'=>1,'selected_amount'=>'54066.575945179990','selected_records'=>array(array('account_id'=>79,'coin_id'=>1267,'amount'=>'54066.575945179990','projected_account_debit'=>'54066.575945179990','expected_payout_account_id'=>79,'expected_payout_idcoin'=>1267,'expected_payout_amount'=>'54066.575945179990','expected_payout_completed'=>0,'expected_payout_tx'=>null)),'checksums'=>array('approval_package_checksum'=>'abc'),'apply_command_args'=>array('php','yaamp/yiic.php','badpoolguard','payout-row-apply'));
+if (!array_key_exists('selected_count', $payoutRow)) contract_fail('payout-row top-level selected_count', 'missing selected_count', $failures);
+if (!array_key_exists('selected_amount', $payoutRow)) contract_fail('payout-row top-level selected_amount', 'missing selected_amount', $failures);
+if (!isset($payoutRow['summary']['selected_account_count']) || !isset($payoutRow['summary']['projected_payout_total'])) contract_fail('payout-row nested summary compatibility', 'missing nested summary fields', $failures);
+if ($payoutRow['selected_count'] !== $payoutRow['summary']['selected_account_count']) contract_fail('payout-row selected_count mapping', 'selected_count does not match summary.selected_account_count', $failures);
+if ($payoutRow['selected_amount'] !== $payoutRow['summary']['projected_payout_total']) contract_fail('payout-row selected_amount mapping', 'selected_amount does not match summary.projected_payout_total', $failures);
+if (!is_array($payoutRow['selected_records']) || count($payoutRow['selected_records']) !== $payoutRow['selected_count']) contract_fail('payout-row selected_records count', 'selected_records missing or wrong count', $failures);
+$result = validate_contract($payoutRow, 'payout-row-creation', array('account_id','coin_id','amount','projected_account_debit','expected_payout_account_id','expected_payout_idcoin','expected_payout_amount','expected_payout_completed'));
+if ($result !== true) contract_fail('payout-row package contract fixture', $result, $failures);
+
+$walletSendApplyStart = strpos($command, 'private function walletSendApplyRowInventoryFromRows');
+$walletSendApplyEnd = strpos($command, 'private function walletSendApplyRpcCoin', $walletSendApplyStart);
+$walletSendApplySource = ($walletSendApplyStart === false || $walletSendApplyEnd === false) ? '' : substr($command, $walletSendApplyStart, $walletSendApplyEnd - $walletSendApplyStart);
+expect_contains_contract('wallet-send apply inventory normalizes amount as a string', $walletSendApplySource, '$amount = (string)$row[\'amount\'];', $failures);
+expect_contains_contract('wallet-send apply inventory uses approval-side amount projection', $walletSendApplySource, '$projectedAmount = $this->walletSendProjectBtcAmount8dp($amount);', $failures);
+expect_contains_contract('wallet-send apply inventory includes destination_address', $walletSendApplySource, '\'destination_address\' => (string)$row[\'username\']', $failures);
+expect_contains_contract('wallet-send apply inventory includes wallet_send_amount', $walletSendApplySource, '\'wallet_send_amount\' => $projectedAmount', $failures);
+
+$walletSendFixtureIds = array(517, 518);
+$walletSendFixtureRows = array(
+	array('payout_id'=>518,'payout_idcoin'=>1267,'account_id'=>80,'account_coinid'=>1267,'coin_id'=>1267,'username'=>'Bdef','amount'=>'1.234567894000','completed'=>0,'tx'=>null),
+	array('payout_id'=>517,'payout_idcoin'=>1267,'account_id'=>79,'account_coinid'=>1267,'coin_id'=>1267,'username'=>'Babc','amount'=>'54066.575945179990','completed'=>0,'tx'=>null),
+);
+$approvalRowInventory = array(
+	array('payout_id'=>517,'idcoin'=>1267,'account_id'=>79,'account_coinid'=>1267,'coin_id'=>1267,'destination_field'=>'accounts.username','destination'=>'Babc','destination_address'=>'Babc','recipient'=>'Babc','amount'=>'54066.575945179990','wallet_send_amount'=>'54066.57594518','completed'=>0,'tx'=>null),
+	array('payout_id'=>518,'idcoin'=>1267,'account_id'=>80,'account_coinid'=>1267,'coin_id'=>1267,'destination_field'=>'accounts.username','destination'=>'Bdef','destination_address'=>'Bdef','recipient'=>'Bdef','amount'=>'1.234567894000','wallet_send_amount'=>'1.23456789','completed'=>0,'tx'=>null),
+);
+$fixtureProjectBtcAmount8dp = function($amount) { return sprintf('%.8F', (float)$amount); };
+$fixtureRowsById = array();
+foreach ($walletSendFixtureRows as $row) $fixtureRowsById[intval($row['payout_id'])] = $row;
+$applyRowInventory = array();
+foreach ($walletSendFixtureIds as $id) {
+	$row = $fixtureRowsById[$id];
+	$amount = (string)$row['amount'];
+	$projectedAmount = $fixtureProjectBtcAmount8dp($amount);
+	$applyRowInventory[] = array(
+		'payout_id'=>$id,
+		'idcoin'=>intval($row['payout_idcoin']),
+		'account_id'=>intval($row['account_id']),
+		'account_coinid'=>intval($row['account_coinid']),
+		'coin_id'=>intval($row['coin_id']),
+		'destination_field'=>'accounts.username',
+		'destination'=>(string)$row['username'],
+		'destination_address'=>(string)$row['username'],
+		'recipient'=>(string)$row['username'],
+		'amount'=>$amount,
+		'wallet_send_amount'=>$projectedAmount,
+		'completed'=>intval($row['completed']),
+		'tx'=>$row['tx'],
+	);
+}
+$requiredWalletSendInventoryFields = array('payout_id','account_id','amount','completed','tx','destination_address','wallet_send_amount');
+foreach (array('approval'=>$approvalRowInventory, 'apply'=>$applyRowInventory) as $inventorySide => $inventoryRows) {
+	foreach ($inventoryRows as $rowIndex => $inventoryRow) {
+		foreach ($requiredWalletSendInventoryFields as $field) {
+			if (!array_key_exists($field, $inventoryRow)) contract_fail('wallet-send '.$inventorySide.' row_inventory required field '.$field, 'missing field on row '.$rowIndex, $failures);
+		}
+	}
+}
+$approvalRowInventoryJson = json_encode($approvalRowInventory, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+$applyRowInventoryJson = json_encode($applyRowInventory, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+if ($approvalRowInventoryJson !== $applyRowInventoryJson) contract_fail('wallet-send approval/apply row_inventory JSON equality', 'approval and apply row_inventory JSON differ for unchanged selected payout rows', $failures);
+$approvalRowInventoryChecksum = checksum_value($approvalRowInventory);
+$applyRowInventoryChecksum = checksum_value($applyRowInventory);
+if ($approvalRowInventoryChecksum['value'] !== $applyRowInventoryChecksum['value']) contract_fail('wallet-send approval/apply row_inventory checksum equality', 'approval and apply row_inventory checksums differ for unchanged selected payout rows', $failures);
+
+$walletSendTotal = '54066.57594518';
+$walletSend = array('schema'=>'badpool.approval_package.v1','package_type'=>'wallet-send','coin_id'=>1267,'selected_count'=>1,'selected_payout_ids'=>array(517),'selected_records'=>array(array('payout_id'=>517,'account_id'=>79,'amount'=>'54066.575945179990','completed'=>0,'tx'=>null,'destination_address'=>'Babc','wallet_send_amount'=>$walletSendTotal)),'projected_total'=>'54066.575945179990','wallet_send_total'=>$walletSendTotal,'destination_plan'=>array(array('recipient'=>'Babc','destination_address'=>'Babc','amount'=>'54066.575945179990')),'checksums'=>array('approval_package_checksum'=>'abc','row_inventory_checksum'=>'def'),'apply_command_args'=>array('php','yaamp/yiic.php','badpoolguard','wallet-send-apply'),'operator_confirmation'=>'selected_payout_rows_517_exact_wallet_send_total_'.$walletSendTotal);
+if (!array_key_exists('selected_payout_ids', $walletSend) || !is_array($walletSend['selected_payout_ids'])) contract_fail('wallet-send selected_payout_ids', 'missing selected_payout_ids array', $failures);
+if ($walletSend['selected_count'] !== count($walletSend['selected_payout_ids'])) contract_fail('wallet-send selected_count', 'selected_count does not match selected_payout_ids count', $failures);
+if (!array_key_exists('wallet_send_total', $walletSend)) contract_fail('wallet-send total', 'missing wallet_send_total', $failures);
+if (!isset($walletSend['selected_records'][0]['destination_address']) || !isset($walletSend['destination_plan'][0]['destination_address'])) contract_fail('wallet-send destination address field', 'destination address not exposed as a normal field', $failures);
+if ($walletSend['operator_confirmation'] !== 'selected_payout_rows_517_exact_wallet_send_total_54066.57594518') contract_fail('wallet-send operator confirmation', 'operator_confirmation shape mismatch', $failures);
+$result = validate_contract($walletSend, 'wallet-send', array('payout_id','account_id','amount','completed','destination_address','wallet_send_amount'));
+if ($result !== true) contract_fail('wallet-send package contract fixture', $result, $failures);
+
+$proof = array('proof_amount_raw'=>'-54066.57594518','proof_amount_abs'=>ltrim('-54066.57594518','-'),'expected_wallet_send_total'=>'54066.57594518','amount_matches_expected_abs'=>(ltrim('-54066.57594518','-') === '54066.57594518'),'amount_match_mode'=>'absolute_debit_normalized');
+if (strpos($proof['proof_amount_raw'], '-') !== 0) contract_fail('wallet-proof raw sign', 'raw proof amount did not remain negative', $failures);
+if ($proof['proof_amount_abs'] !== $proof['expected_wallet_send_total']) contract_fail('wallet-proof abs normalization', 'proof_amount_abs does not equal expected', $failures);
+if ($proof['amount_matches_expected_abs'] !== true) contract_fail('wallet-proof abs match', 'amount_matches_expected_abs not true', $failures);
+
+$terminal = array('payout_completed'=>true,'payout_tx_present'=>true,'terminal_state'=>true,'safe_to_apply'=>false,'recommended_next_action'=>'wallet-proof-closeout');
+if (!$terminal['terminal_state'] || $terminal['safe_to_apply'] !== false || $terminal['recommended_next_action'] !== 'wallet-proof-closeout') contract_fail('wallet-send terminal completed payout', 'completed tx populated payout did not surface wallet-proof closeout recommendation', $failures);
+foreach (array('operator_confirmation','destination_address','proof_amount_raw','proof_amount_abs','expected_wallet_send_total','amount_matches_expected_abs','amount_match_mode','payout_completed','payout_tx_present','terminal_state','safe_to_apply','recommended_next_action','created_count','created_amount','created_payout_ids','debited_account_ids','completed_count','wallet_rpc_send_performed','affected_account_ids') as $needle) expect_contains_contract('source contains hardening field '.$needle, $command, $needle, $failures);
+
 if (!empty($failures)) {
 	echo "Badpool approval package contract harness FAILED\n";
 	foreach ($failures as $failure) echo " - $failure\n";
