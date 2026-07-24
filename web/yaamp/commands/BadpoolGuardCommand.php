@@ -1630,7 +1630,36 @@ class BadpoolGuardCommand extends CConsoleCommand
 	private function walletSendApplyDuplicateRecipient($plan){ $seen=array(); foreach($plan as $row){ $recipient=(string)arraySafeVal($row,'recipient',''); if(isset($seen[$recipient])) return $recipient; $seen[$recipient]=true; } return null; }
 	private function walletSendApplyDestinationMap($plan){ $d=array(); foreach($plan as $row) $d[(string)$row['recipient']] = (string)$row['amount']; return $d; }
 	private function walletSendApplyMarkCompleted($ids,$txid,$approvedRowInventoryChecksum,$approvedRowInventory){ $liveRows=$this->walletSendSelectedPayoutRows($ids); $liveInventory=$this->walletSendApplyRowInventoryFromRows($ids,$liveRows); if ((string)arraySafeVal(BadpoolGuardReport::checksum($liveInventory),'value') !== (string)$approvedRowInventoryChecksum) throw new Exception('post-send row_inventory_checksum mismatch before completion update'); if ($liveInventory != $approvedRowInventory) throw new Exception('post-send row inventory changed before completion update'); $updated=0; foreach($approvedRowInventory as $row){ $updated += app()->db->createCommand("UPDATE payouts SET completed=1, tx=:tx WHERE id=:id AND idcoin=:idcoin AND account_id=:account_id AND amount=:amount AND completed=0 AND (tx IS NULL OR tx='')")->execute(array(':tx'=>$txid, ':id'=>$row['payout_id'], ':idcoin'=>$row['idcoin'], ':account_id'=>$row['account_id'], ':amount'=>$row['amount'])); } return $updated; }
-	private function walletSendApplyRowInventoryFromRows($ids,$rows){ if (count($rows)!==count($ids)) throw new Exception('post-send selected payout row count mismatch'); $rowById=array(); foreach($rows as $row) $rowById[intval($row['payout_id'])]=$row; $inventory=array(); foreach($ids as $id){ if(!isset($rowById[$id])) throw new Exception('post-send selected payout row missing: '.$id); $row=$rowById[$id]; if(intval($row['completed'])!==0 || (string)arraySafeVal($row,'tx','')!=='') throw new Exception('post-send selected payout row no longer eligible: '.$id); $inventory[]=array('payout_id'=>$id,'idcoin'=>intval($row['payout_idcoin']),'account_id'=>intval($row['account_id']),'account_coinid'=>intval($row['account_coinid']),'coin_id'=>intval($row['coin_id']),'destination_field'=>'accounts.username','destination'=>(string)$row['username'],'recipient'=>(string)$row['username'],'amount'=>(string)$row['amount'],'completed'=>intval($row['completed']),'tx'=>$row['tx']); } return $inventory; }
+	private function walletSendApplyRowInventoryFromRows($ids,$rows)
+	{
+		if (count($rows) !== count($ids)) throw new Exception('post-send selected payout row count mismatch');
+		$rowById = array();
+		foreach ($rows as $row) $rowById[intval($row['payout_id'])] = $row;
+		$inventory = array();
+		foreach ($ids as $id) {
+			if (!isset($rowById[$id])) throw new Exception('post-send selected payout row missing: '.$id);
+			$row = $rowById[$id];
+			if (intval($row['completed']) !== 0 || (string)arraySafeVal($row, 'tx', '') !== '') throw new Exception('post-send selected payout row no longer eligible: '.$id);
+			$amount = (string)$row['amount'];
+			$projectedAmount = $this->walletSendProjectBtcAmount8dp($amount);
+			$inventory[] = array(
+				'payout_id' => $id,
+				'idcoin' => intval($row['payout_idcoin']),
+				'account_id' => intval($row['account_id']),
+				'account_coinid' => intval($row['account_coinid']),
+				'coin_id' => intval($row['coin_id']),
+				'destination_field' => 'accounts.username',
+				'destination' => (string)$row['username'],
+				'destination_address' => (string)$row['username'],
+				'recipient' => (string)$row['username'],
+				'amount' => $amount,
+				'wallet_send_amount' => $projectedAmount,
+				'completed' => intval($row['completed']),
+				'tx' => $row['tx'],
+			);
+		}
+		return $inventory;
+	}
 	private function walletSendApplyRpcCoin($coinId){ $cols=array('id','symbol','algo','rpcencoding','rpcuser','rpcpasswd','rpchost','rpcport','account','hasgetinfo','master_wallet'); $select=array(); foreach($cols as $c) $select[]=$this->guard->qcol($c); $row=$this->guard->selectRow('SELECT '.implode(',', $select).' FROM '.$this->guard->qtable('coins').' WHERE '.$this->guard->qcol('id').'=:coin_id', array(':coin_id'=>$coinId)); return $row ? (object)$row : null; }
 
 
