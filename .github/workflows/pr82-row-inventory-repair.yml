@@ -1,0 +1,190 @@
+name: PR82 row inventory repair
+
+on:
+  push:
+    branches:
+      - codex/harden-payout-and-wallet-send-contracts
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out PR branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+
+      - name: Patch wallet-send inventory parity and regression coverage
+        shell: bash {0}
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          command_path = Path("web/yaamp/commands/BadpoolGuardCommand.php")
+          harness_path = Path("tests/badpool_approval_package_contract_harness.php")
+
+          command = command_path.read_text()
+          method_pattern = re.compile(
+              r"\tprivate function walletSendApplyRowInventoryFromRows\(\$ids,\$rows\).*?"
+              r"(?=\n\tprivate function walletSendApplyRpcCoin)",
+              re.DOTALL,
+          )
+          replacement = r"""	private function walletSendApplyRowInventoryFromRows($ids,$rows)
+          	{
+          		if (count($rows) !== count($ids)) throw new Exception('post-send selected payout row count mismatch');
+          		$rowById = array();
+          		foreach ($rows as $row) $rowById[intval($row['payout_id'])] = $row;
+          		$inventory = array();
+          		foreach ($ids as $id) {
+          			if (!isset($rowById[$id])) throw new Exception('post-send selected payout row missing: '.$id);
+          			$row = $rowById[$id];
+          			if (intval($row['completed']) !== 0 || (string)arraySafeVal($row, 'tx', '') !== '') throw new Exception('post-send selected payout row no longer eligible: '.$id);
+          			$amount = (string)$row['amount'];
+          			$projectedAmount = $this->walletSendProjectBtcAmount8dp($amount);
+          			$inventory[] = array(
+          				'payout_id' => $id,
+          				'idcoin' => intval($row['payout_idcoin']),
+          				'account_id' => intval($row['account_id']),
+          				'account_coinid' => intval($row['account_coinid']),
+          				'coin_id' => intval($row['coin_id']),
+          				'destination_field' => 'accounts.username',
+          				'destination' => (string)$row['username'],
+          				'destination_address' => (string)$row['username'],
+          				'recipient' => (string)$row['username'],
+          				'amount' => $amount,
+          				'wallet_send_amount' => $projectedAmount,
+          				'completed' => intval($row['completed']),
+          				'tx' => $row['tx'],
+          			);
+          		}
+          		return $inventory;
+          	}
+          """
+          command, count = method_pattern.subn(replacement.rstrip(), command, count=1)
+          if count != 1:
+              raise SystemExit(f"expected one walletSendApplyRowInventoryFromRows replacement, got {count}")
+          command_path.write_text(command)
+
+          harness = harness_path.read_text()
+          anchor = "$walletSendTotal = '54066.57594518';"
+          if anchor not in harness:
+              raise SystemExit("wallet-send contract fixture anchor not found")
+          if "wallet-send approval/apply row_inventory JSON equality" in harness:
+              raise SystemExit("wallet-send row inventory regression block already present")
+
+          test_block = r"""
+          $walletSendApplyStart = strpos($command, 'private function walletSendApplyRowInventoryFromRows');
+          $walletSendApplyEnd = strpos($command, 'private function walletSendApplyRpcCoin', $walletSendApplyStart);
+          $walletSendApplySource = ($walletSendApplyStart === false || $walletSendApplyEnd === false) ? '' : substr($command, $walletSendApplyStart, $walletSendApplyEnd - $walletSendApplyStart);
+          expect_contains_contract('wallet-send apply inventory normalizes amount as a string', $walletSendApplySource, '$amount = (string)$row[\'amount\'];', $failures);
+          expect_contains_contract('wallet-send apply inventory uses approval-side amount projection', $walletSendApplySource, '$projectedAmount = $this->walletSendProjectBtcAmount8dp($amount);', $failures);
+          expect_contains_contract('wallet-send apply inventory includes destination_address', $walletSendApplySource, '\'destination_address\' => (string)$row[\'username\']', $failures);
+          expect_contains_contract('wallet-send apply inventory includes wallet_send_amount', $walletSendApplySource, '\'wallet_send_amount\' => $projectedAmount', $failures);
+
+          $walletSendFixtureIds = array(517, 518);
+          $walletSendFixtureRows = array(
+          	array('payout_id'=>518,'payout_idcoin'=>1267,'account_id'=>80,'account_coinid'=>1267,'coin_id'=>1267,'username'=>'Bdef','amount'=>'1.234567894000','completed'=>0,'tx'=>null),
+          	array('payout_id'=>517,'payout_idcoin'=>1267,'account_id'=>79,'account_coinid'=>1267,'coin_id'=>1267,'username'=>'Babc','amount'=>'54066.575945179990','completed'=>0,'tx'=>null),
+          );
+          $approvalRowInventory = array(
+          	array('payout_id'=>517,'idcoin'=>1267,'account_id'=>79,'account_coinid'=>1267,'coin_id'=>1267,'destination_field'=>'accounts.username','destination'=>'Babc','destination_address'=>'Babc','recipient'=>'Babc','amount'=>'54066.575945179990','wallet_send_amount'=>'54066.57594518','completed'=>0,'tx'=>null),
+          	array('payout_id'=>518,'idcoin'=>1267,'account_id'=>80,'account_coinid'=>1267,'coin_id'=>1267,'destination_field'=>'accounts.username','destination'=>'Bdef','destination_address'=>'Bdef','recipient'=>'Bdef','amount'=>'1.234567894000','wallet_send_amount'=>'1.23456789','completed'=>0,'tx'=>null),
+          );
+          $fixtureProjectBtcAmount8dp = function($amount) { return sprintf('%.8F', (float)$amount); };
+          $fixtureRowsById = array();
+          foreach ($walletSendFixtureRows as $row) $fixtureRowsById[intval($row['payout_id'])] = $row;
+          $applyRowInventory = array();
+          foreach ($walletSendFixtureIds as $id) {
+          	$row = $fixtureRowsById[$id];
+          	$amount = (string)$row['amount'];
+          	$projectedAmount = $fixtureProjectBtcAmount8dp($amount);
+          	$applyRowInventory[] = array(
+          		'payout_id'=>$id,
+          		'idcoin'=>intval($row['payout_idcoin']),
+          		'account_id'=>intval($row['account_id']),
+          		'account_coinid'=>intval($row['account_coinid']),
+          		'coin_id'=>intval($row['coin_id']),
+          		'destination_field'=>'accounts.username',
+          		'destination'=>(string)$row['username'],
+          		'destination_address'=>(string)$row['username'],
+          		'recipient'=>(string)$row['username'],
+          		'amount'=>$amount,
+          		'wallet_send_amount'=>$projectedAmount,
+          		'completed'=>intval($row['completed']),
+          		'tx'=>$row['tx'],
+          	);
+          }
+          $requiredWalletSendInventoryFields = array('payout_id','account_id','amount','completed','tx','destination_address','wallet_send_amount');
+          foreach (array('approval'=>$approvalRowInventory, 'apply'=>$applyRowInventory) as $inventorySide => $inventoryRows) {
+          	foreach ($inventoryRows as $rowIndex => $inventoryRow) {
+          		foreach ($requiredWalletSendInventoryFields as $field) {
+          			if (!array_key_exists($field, $inventoryRow)) contract_fail('wallet-send '.$inventorySide.' row_inventory required field '.$field, 'missing field on row '.$rowIndex, $failures);
+          		}
+          	}
+          }
+          $approvalRowInventoryJson = json_encode($approvalRowInventory, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+          $applyRowInventoryJson = json_encode($applyRowInventory, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+          if ($approvalRowInventoryJson !== $applyRowInventoryJson) contract_fail('wallet-send approval/apply row_inventory JSON equality', 'approval and apply row_inventory JSON differ for unchanged selected payout rows', $failures);
+          $approvalRowInventoryChecksum = checksum_value($approvalRowInventory);
+          $applyRowInventoryChecksum = checksum_value($applyRowInventory);
+          if ($approvalRowInventoryChecksum['value'] !== $applyRowInventoryChecksum['value']) contract_fail('wallet-send approval/apply row_inventory checksum equality', 'approval and apply row_inventory checksums differ for unchanged selected payout rows', $failures);
+          """
+          harness = harness.replace(anchor, test_block.strip() + "\n\n" + anchor, 1)
+          harness_path.write_text(harness)
+          PY
+
+      - name: Run required validation
+        shell: bash {0}
+        run: |
+          status=0
+          run_check() {
+            echo
+            echo "===== $* ====="
+            "$@"
+            rc=$?
+            if [ "$rc" -ne 0 ]; then
+              status=1
+            fi
+          }
+
+          run_check git diff --check
+          run_check php -l web/yaamp/commands/BadpoolGuardCommand.php
+          run_check php -l tests/badpool_approval_package_contract_harness.php
+          run_check php tests/badpool_approval_package_contract_harness.php
+          run_check php tests/badpool_guardrail_report_parser_hardening_harness.php
+          run_check php tests/badpool_status_runner_guard_harness.php
+          run_check php tests/badpool_account_credit_guard_harness.php
+          run_check php tests/badpool_payout_row_apply_guard_harness.php
+          run_check php tests/badpool_wallet_send_dryrun_guard_harness.php
+          run_check php tests/badpool_wallet_send_apply_guard_harness.php
+          run_check php tests/badpool_wallet_proof_closeout_guard_harness.php
+
+          exit "$status"
+
+      - name: Commit repaired files and remove temporary workflow
+        shell: bash {0}
+        run: |
+          status=0
+          rm .github/workflows/pr82-row-inventory-repair.yml || status=1
+          git diff --check || status=1
+          git config user.name "github-actions[bot]" || status=1
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com" || status=1
+          git add web/yaamp/commands/BadpoolGuardCommand.php tests/badpool_approval_package_contract_harness.php .github/workflows/pr82-row-inventory-repair.yml || status=1
+          git diff --cached --check || status=1
+
+          if [ "$status" -ne 0 ]; then
+            exit "$status"
+          fi
+
+          git commit -m "Fix wallet-send row inventory checksum parity"
+          rc=$?
+          if [ "$rc" -ne 0 ]; then
+            exit "$rc"
+          fi
+
+          git push origin "HEAD:${GITHUB_REF_NAME}"
