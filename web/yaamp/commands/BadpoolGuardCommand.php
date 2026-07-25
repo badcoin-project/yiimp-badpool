@@ -2169,7 +2169,14 @@ class BadpoolGuardCommand extends CConsoleCommand
 		$valid = $this->forwardCatchupStage1DrainValidate($report, $options, true);
 		if ($valid !== true) return $valid;
 		for ($i = 1; $i <= intval($options['max-batches']); $i++) {
-			$approval = $this->forwardCatchupStage1ApplyApprovalPackageReport();
+			$report['batches_attempted'] = $i;
+			$report['failed_batch_index'] = $i;
+			$report['failure_phase'] = 'approval_regeneration';
+			try {
+				$approval = $this->forwardCatchupStage1ApplyApprovalPackageReport();
+			} catch (Exception $e) {
+				return $this->forwardCatchupStage1DrainFail($report, 'approval_regeneration_failure', $e->getMessage());
+			}
 			if (!$this->guard->isValid()) return $this->forwardCatchupStage1DrainFail($report, 'approval_package_refusal', 'Fresh Stage1 approval package refused.');
 			$classified = arraySafeVal(arraySafeVal($approval, 'items', array()), 'candidates', array());
 			$mutations = arraySafeVal(arraySafeVal($approval, 'items', array()), 'projected_block_mutations', array());
@@ -2179,20 +2186,39 @@ class BadpoolGuardCommand extends CConsoleCommand
 			if ($selected === 0) { $report['stop_reason'] = 'preview_empty'; break; }
 			if ($selected > intval($options['batch-limit'])) return $this->forwardCatchupStage1DrainFail($report, 'selected_count_mismatch', 'selected_count exceeds --batch-limit.');
 			if (arraySafeVal($approval, 'overall_approval_package_status') !== 'pass') return $this->forwardCatchupStage1DrainFail($report, 'approval_package_refusal', 'Stage1 approval package status is not pass.');
-			$gate = $this->forwardCatchupStage1ApplyPreflightGates($classified, $mutations, $earnings);
+			$report['failure_phase'] = 'preflight_validation';
+			try {
+				$gate = $this->forwardCatchupStage1ApplyPreflightGates($classified, $mutations, $earnings);
+			} catch (Exception $e) {
+				return $this->forwardCatchupStage1DrainFail($report, 'preflight_validation_failure', $e->getMessage());
+			}
 			if (arraySafeVal($gate, 'status') !== 'pass') return $this->forwardCatchupStage1DrainFail($report, 'apply_refusal', arraySafeVal($gate, 'message'));
 			$batch = $this->forwardCatchupStage1DrainBatchSummary($i, $classified, array('projected_block_mutations'=>$mutations,'projected_pending_earnings'=>$earnings), $totals);
 			$batch['approval_package_checksum'] = arraySafeVal($approval, 'approval_package_checksum');
 			$tx = app()->db->beginTransaction();
+			$report['failure_phase'] = 'mutation_execution';
+			$report['failing_transaction_rolled_back'] = false;
 			try {
 				$report['apply_commands_executed'] = true;
 				$applied = $this->forwardCatchupStage1ApplyMutations($mutations, $earnings);
 				$tx->commit();
+				// Record the commit before running any operation that can fail.  This is
+				// the authoritative mutation boundary for partial-drain reporting.
+				$report['committed_batches']++;
+				$report['any_prior_transaction_committed'] = true;
+				$report['prior_commit_state'] = 'committed';
+				$report['db_mutations'] = true;
+				$report['db_mutation_status'] = 'guarded_transaction_committed';
 			} catch (Exception $e) {
-				if ($tx && $tx->active) $tx->rollback();
+				if ($tx && $tx->active) { $tx->rollback(); $report['failing_transaction_rolled_back'] = true; }
 				return $this->forwardCatchupStage1DrainFail($report, 'apply_refusal', $e->getMessage());
 			}
-			$verification = $this->forwardCatchupStage1ApplyCloseoutVerification($mutations, $applied);
+			$report['failure_phase'] = 'post_apply_verification';
+			try {
+				$verification = $this->forwardCatchupStage1ApplyCloseoutVerification($mutations, $applied);
+			} catch (Exception $e) {
+				return $this->forwardCatchupStage1DrainFail($report, 'post_apply_verification_failure', $e->getMessage());
+			}
 			$batch['applied_generated_count'] = intval($applied['applied_generated_count']);
 			$batch['applied_orphan_count'] = intval($applied['applied_orphan_count']);
 			$batch['inserted_earnings_count'] = intval($applied['inserted_earnings_count']);
@@ -2200,7 +2226,6 @@ class BadpoolGuardCommand extends CConsoleCommand
 			$batch['reconciliation_status'] = arraySafeVal($verification, 'status') === 'pass' ? 'pass' : 'hold';
 			if ($batch['inserted_earnings_count'] !== $batch['projected_earnings_rows'] || $batch['reconciliation_status'] !== 'pass') return $this->forwardCatchupStage1DrainFail($report, 'post_apply_verification_failure', 'Post-apply verification failed.');
 			$report['per_batch'][] = $batch;
-			$report['batches_attempted'] = $i;
 			$report['batches_applied']++;
 			$this->forwardCatchupStage1DrainAddTotals($report, $batch);
 		}
@@ -2208,6 +2233,8 @@ class BadpoolGuardCommand extends CConsoleCommand
 		$preview = $this->forwardCatchupStage1ApplyDryrunReport();
 		$report['final_preview_selected_count'] = intval(arraySafeVal(arraySafeVal(arraySafeVal($preview, 'summary', array()), 'totals', array()), 'selected_count', 0));
 		$report['status'] = 'pass';
+		$report['failed_batch_index'] = null;
+		$report['failure_phase'] = null;
 		return BadpoolGuardReport::finalize($report);
 	}
 
@@ -2257,8 +2284,17 @@ class BadpoolGuardCommand extends CConsoleCommand
 		$report['coin_id'] = arraySafeVal($this->guard->getScope(), 'coin_id');
 		$report['batch_limit'] = intval(arraySafeVal($options, 'batch-limit', self::FORWARD_CATCHUP_STAGE1_DRYRUN_MAX_LIMIT));
 		$report['max_batches'] = intval(arraySafeVal($options, 'max-batches', 0));
-		foreach (array('batches_attempted','batches_applied','total_selected','total_generated','total_orphan','total_projected_earnings','total_inserted_earnings','final_preview_selected_count') as $k) $report[$k] = 0;
+		foreach (array('batches_attempted','batches_applied','committed_batches','total_selected','total_generated','total_orphan','total_projected_earnings','total_inserted_earnings','final_preview_selected_count') as $k) $report[$k] = 0;
 		$report['apply_commands_executed'] = false;
+		$report['db_mutations'] = false;
+		$report['db_mutation_status'] = 'none';
+		$report['failed_batch_index'] = null;
+		$report['failure_phase'] = null;
+		$report['failing_transaction_rolled_back'] = false;
+		$report['any_prior_transaction_committed'] = false;
+		$report['prior_commit_state'] = 'none';
+		$report['manual_verification_required'] = false;
+		$report['manual_reconciliation_required'] = false;
 		$report['total_projected_pending_amount'] = 0.0;
 		$report['stop_reason'] = null;
 		$report['per_batch'] = array();
@@ -2285,8 +2321,20 @@ class BadpoolGuardCommand extends CConsoleCommand
 
 	private function forwardCatchupStage1DrainFail($report, $reason, $message)
 	{
-		$report['status'] = 'refused';
+		$committed = intval(arraySafeVal($report, 'committed_batches', 0)) > 0 || arraySafeVal($report, 'db_mutations', false) === true;
+		$report['status'] = $committed ? 'hold' : 'refused';
 		$report['stop_reason'] = $reason;
+		$report['db_mutations'] = $committed;
+		$report['db_mutation_status'] = $committed ? 'guarded_transaction_committed_partial_drain' : 'none';
+		$report['any_prior_transaction_committed'] = $committed;
+		$report['prior_commit_state'] = $committed ? 'committed' : 'none';
+		$report['manual_verification_required'] = $committed;
+		$report['manual_reconciliation_required'] = $committed;
+		if ($committed) {
+			$report['apply_commands_executed'] = true;
+			$report['operator_warning'] = 'One or more Stage1 drain transactions committed before this failure; stop and manually verify/reconcile database state before any retry.';
+			$message .= ' Prior database mutation committed; manual verification and reconciliation required.';
+		}
 		$report['account_credit'] = false; $report['payout_rows_created'] = false; $report['wallet_sends'] = false; $report['backend_loops_run'] = false; $report['shares_deleted'] = false;
 		$report['errors'][] = $message;
 		return BadpoolGuardReport::finalize($report);

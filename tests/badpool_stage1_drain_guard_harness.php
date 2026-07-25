@@ -14,6 +14,7 @@ $plan = section_between($command, 'private function forwardCatchupStage1DrainPla
 $apply = section_between($command, 'private function forwardCatchupStage1DrainApplyReport', 'private function forwardCatchupStage1DrainContextArgs');
 $validate = section_between($command, 'private function forwardCatchupStage1DrainValidate', 'private function forwardCatchupStage1DrainBaseReport');
 $base = section_between($command, 'private function forwardCatchupStage1DrainBaseReport', 'private function forwardCatchupStage1DrainBatchSummary');
+$fail = section_between($command, 'private function forwardCatchupStage1DrainFail', 'private function earningsMaturityTransitionDryrunReport');
 expect_contains('plan action registered', $command, "'forward-catchup-stage1-drain-plan'", $failures);
 expect_contains('apply action registered', $command, "'forward-catchup-stage1-drain-apply'", $failures);
 expect_contains('safe max batches constant', $command, 'FORWARD_CATCHUP_STAGE1_DRAIN_SAFE_MAX_BATCHES = 10', $failures);
@@ -36,6 +37,14 @@ expect_contains('per batch checksums', $command, 'projected_mutation_checksum', 
 expect_contains('per batch projected earnings rows', $command, 'projected_earnings_rows', $failures);
 expect_contains('per batch inserted earnings count', $command, 'inserted_earnings_count', $failures);
 expect_contains('per batch reconciliation', $apply, "\$batch['reconciliation_status']", $failures);
+expect_contains('attempt recorded before approval regeneration', $apply, "\$report['failure_phase'] = 'approval_regeneration';", $failures);
+expect_contains('preflight failure phase', $apply, "\$report['failure_phase'] = 'preflight_validation';", $failures);
+expect_contains('mutation failure phase', $apply, "\$report['failure_phase'] = 'mutation_execution';", $failures);
+expect_contains('verification failure phase', $apply, "\$report['failure_phase'] = 'post_apply_verification';", $failures);
+expect_contains('commit recorded immediately', $apply, "\$tx->commit();\n\t\t\t\t// Record the commit", $failures);
+expect_contains('committed count incremented', $apply, "\$report['committed_batches']++;", $failures);
+expect_contains('commit sets mutation boolean', $apply, "\$report['db_mutations'] = true;", $failures);
+expect_contains('rollback is confirmed', $apply, "\$report['failing_transaction_rolled_back'] = true;", $failures);
 expect_contains('apply command flag set immediately before mutation', $apply, "\$report['apply_commands_executed'] = true;\n\t\t\t\t\$applied = \$this->forwardCatchupStage1ApplyMutations", $failures);
 expect_contains('stops preview empty', $apply, "\$report['stop_reason'] = 'preview_empty'; break;", $failures);
 expect_contains('stops selected mismatch', $apply, 'selected_count_mismatch', $failures);
@@ -43,6 +52,12 @@ expect_contains('stops approval refusal', $apply, 'approval_package_refusal', $f
 expect_contains('stops apply refusal', $apply, 'apply_refusal', $failures);
 expect_contains('stops post verification failure', $apply, 'post_apply_verification_failure', $failures);
 expect_contains('summary totals helper', $command, 'private function forwardCatchupStage1DrainAddTotals', $failures);
+expect_contains('base committed count', $base, "'committed_batches'", $failures);
+expect_contains('post-commit failure is hold', $fail, "\$report['status'] = \$committed ? 'hold' : 'refused';", $failures);
+expect_contains('post-commit manual verification', $fail, "\$report['manual_verification_required'] = \$committed;", $failures);
+expect_contains('post-commit manual reconciliation', $fail, "\$report['manual_reconciliation_required'] = \$committed;", $failures);
+expect_contains('explicit prior commit state', $fail, "\$report['prior_commit_state'] = \$committed ? 'committed' : 'none';", $failures);
+expect_contains('post-commit warning', $fail, 'manually verify/reconcile database state', $failures);
 expect_contains('totals selected from per batch', $command, "\$report['total_selected'] += intval(\$batch['selected_count']);", $failures);
 expect_contains('totals projected earnings from per batch', $command, "\$report['total_projected_earnings'] += intval(arraySafeVal(\$batch, 'projected_earnings_rows'", $failures);
 expect_contains('totals inserted earnings default zero', $command, "\$report['total_inserted_earnings'] += intval(arraySafeVal(\$batch, 'inserted_earnings_count', 0));", $failures);
