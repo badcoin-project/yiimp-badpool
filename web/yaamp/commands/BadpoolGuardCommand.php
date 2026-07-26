@@ -2209,6 +2209,15 @@ class BadpoolGuardCommand extends CConsoleCommand
 				$report['prior_commit_state'] = 'committed';
 				$report['db_mutations'] = true;
 				$report['db_mutation_status'] = 'guarded_transaction_committed';
+				$batch['committed'] = true;
+				$batch['applied_generated_count'] = intval($applied['applied_generated_count']);
+				$batch['applied_orphan_count'] = intval($applied['applied_orphan_count']);
+				$batch['inserted_earnings_count'] = intval($applied['inserted_earnings_count']);
+				$batch['failure_phase'] = 'post_apply_verification';
+				$batch['verification_passed'] = false;
+				$batch['manual_verification_required'] = true;
+				$report['per_batch'][] = $batch;
+				$currentBatchIndex = count($report['per_batch']) - 1;
 			} catch (Exception $e) {
 				if ($tx && $tx->active) { $tx->rollback(); $report['failing_transaction_rolled_back'] = true; }
 				return $this->forwardCatchupStage1DrainFail($report, 'apply_refusal', $e->getMessage());
@@ -2219,15 +2228,14 @@ class BadpoolGuardCommand extends CConsoleCommand
 			} catch (Exception $e) {
 				return $this->forwardCatchupStage1DrainFail($report, 'post_apply_verification_failure', $e->getMessage());
 			}
-			$batch['applied_generated_count'] = intval($applied['applied_generated_count']);
-			$batch['applied_orphan_count'] = intval($applied['applied_orphan_count']);
-			$batch['inserted_earnings_count'] = intval($applied['inserted_earnings_count']);
-			$batch['post_apply_db_verification'] = $verification;
-			$batch['reconciliation_status'] = arraySafeVal($verification, 'status') === 'pass' ? 'pass' : 'hold';
-			if ($batch['inserted_earnings_count'] !== $batch['projected_earnings_rows'] || $batch['reconciliation_status'] !== 'pass') return $this->forwardCatchupStage1DrainFail($report, 'post_apply_verification_failure', 'Post-apply verification failed.');
-			$report['per_batch'][] = $batch;
+			$report['per_batch'][$currentBatchIndex]['post_apply_db_verification'] = $verification;
+			$report['per_batch'][$currentBatchIndex]['reconciliation_status'] = arraySafeVal($verification, 'status') === 'pass' ? 'pass' : 'hold';
+			if ($report['per_batch'][$currentBatchIndex]['inserted_earnings_count'] !== $report['per_batch'][$currentBatchIndex]['projected_earnings_rows'] || $report['per_batch'][$currentBatchIndex]['reconciliation_status'] !== 'pass') return $this->forwardCatchupStage1DrainFail($report, 'post_apply_verification_failure', 'Post-apply verification failed.');
+			$report['per_batch'][$currentBatchIndex]['failure_phase'] = null;
+			$report['per_batch'][$currentBatchIndex]['verification_passed'] = true;
+			$report['per_batch'][$currentBatchIndex]['manual_verification_required'] = false;
 			$report['batches_applied']++;
-			$this->forwardCatchupStage1DrainAddTotals($report, $batch);
+			$this->forwardCatchupStage1DrainAddTotals($report, $report['per_batch'][$currentBatchIndex]);
 		}
 		if ($report['stop_reason'] === null) $report['stop_reason'] = $report['batches_applied'] >= intval($options['max-batches']) ? 'max_batches_reached' : 'preview_empty';
 		$preview = $this->forwardCatchupStage1ApplyDryrunReport();
@@ -2277,8 +2285,8 @@ class BadpoolGuardCommand extends CConsoleCommand
 	private function forwardCatchupStage1DrainBaseReport($command, $readOnly, $options)
 	{
 		$report = $readOnly ? $this->guard->baseReport() : $this->applyBaseReport($command, 'refused');
-		$report['schema'] = self::APPLY_SCHEMA;
-		$report['mode'] = $readOnly ? 'stage1-drain-plan' : self::APPLY_MODE;
+		$report['schema'] = $readOnly ? 'badpool.guardrail.preview.v1' : self::APPLY_SCHEMA;
+		$report['mode'] = $readOnly ? 'read-only-preview' : self::APPLY_MODE;
 		$report['command'] = $command;
 		$report['read_only'] = $readOnly;
 		$report['coin_id'] = arraySafeVal($this->guard->getScope(), 'coin_id');
@@ -2306,7 +2314,8 @@ class BadpoolGuardCommand extends CConsoleCommand
 	{
 		$generated = intval(arraySafeVal($totals, 'stage1_import_generate_count', 0)) + intval(arraySafeVal($totals, 'stage1_import_immature_count', 0));
 		$projectedEarnings = arraySafeVal($plan, 'projected_pending_earnings', array());
-		return array('batch_number'=>$number,'selected_count'=>intval(arraySafeVal($totals,'selected_count',0)),'projected_generated_rows'=>$generated,'projected_earnings_rows'=>count($projectedEarnings),'projected_orphan_rows'=>intval(arraySafeVal($totals,'stage1_mark_orphan_no_earnings_count',0)),'projected_pending_amount'=>floatval(arraySafeVal($totals,'projected_pending_earnings_amount_gross',0)),'batch_scope_checksum'=>BadpoolGuardReport::checksum(array('blocks'=>$this->forwardCatchupStage1BatchScopeBlocks($classified))),'projected_mutation_checksum'=>BadpoolGuardReport::checksum($this->forwardCatchupStage1StableProjectedMutations(arraySafeVal($plan,'projected_block_mutations',array()))),'projected_earnings_checksum'=>BadpoolGuardReport::checksum($projectedEarnings),'inserted_earnings_count'=>0,'reconciliation_status'=>'planned');
+		$selectedScope = array('coin_id'=>intval(arraySafeVal($this->guard->getScope(), 'coin_id')),'blocks'=>$this->forwardCatchupStage1BatchScopeBlocks($classified));
+		return array('batch_number'=>$number,'selected_scope'=>$selectedScope,'selected_count'=>intval(arraySafeVal($totals,'selected_count',0)),'projected_generated_rows'=>$generated,'projected_earnings_rows'=>count($projectedEarnings),'projected_orphan_rows'=>intval(arraySafeVal($totals,'stage1_mark_orphan_no_earnings_count',0)),'projected_pending_amount'=>floatval(arraySafeVal($totals,'projected_pending_earnings_amount_gross',0)),'batch_scope_checksum'=>BadpoolGuardReport::checksum($selectedScope),'projected_mutation_checksum'=>BadpoolGuardReport::checksum($this->forwardCatchupStage1StableProjectedMutations(arraySafeVal($plan,'projected_block_mutations',array()))),'projected_earnings_checksum'=>BadpoolGuardReport::checksum($projectedEarnings),'committed'=>false,'applied_generated_count'=>0,'applied_orphan_count'=>0,'inserted_earnings_count'=>0,'failure_phase'=>null,'verification_passed'=>null,'manual_verification_required'=>false,'reconciliation_status'=>'planned');
 	}
 
 	private function forwardCatchupStage1DrainAddTotals(&$report, $batch)
@@ -2460,7 +2469,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 		$checks = $type==='earnings-maturity-transition' ? array('approval-package-checksum'=>'approval_package_checksum','selected-scope-checksum'=>'selected_scope_checksum','projected-block-mutation-checksum'=>'projected_block_mutation_checksum','projected-earnings-mutation-checksum'=>'projected_earnings_mutation_checksum') : array('approval-package-checksum'=>'approval_package_checksum','selected-earnings-scope-checksum'=>'selected_earnings_scope_checksum','projected-earnings-mutation-checksum'=>'projected_earnings_mutation_checksum','projected-account-credit-checksum'=>'projected_account_credit_checksum');
 		foreach($checks as $opt=>$field){ if((string)arraySafeVal($opts,$opt)!==(string)arraySafeVal(arraySafeVal($approval,$field,array()),'value')) return $this->guardedApplyFail($report,'checksum_mismatch','Expected checksum does not match freshly generated approval package state: --'.$opt.'.'); }
 		$before=$this->guardedApplyBeforeState(); $tx=app()->db->beginTransaction(); if(!$tx) return $this->guardedApplyFail($report,'transaction_unavailable','Database transaction mechanism unavailable.');
-		try{ $applied = $type==='earnings-maturity-transition' ? $this->applyMaturityTransitionRows($approval) : $this->applyAccountCreditRows($approval); $tx->commit(); $after=$this->guardedApplyBeforeState(); $report=array_merge($report,$applied); $report['status']='pass'; $report['abort_reason']=null; $report['before']=$before; $report['after']=$after; $delta=$this->unselectedCandidateDelta($approval); $report['new_unselected_candidates_detected']=$delta > 0; $report['unselected_candidate_count_delta']=$delta; $report['note']='unselected drift is informational only and not part of authorization'; return BadpoolGuardReport::finalize($report); } catch(Exception $e){ if($tx->active)$tx->rollback(); return $this->guardedApplyFail($report,'mutation_failed_rolled_back',$e->getMessage()); }
+		try{ $applied = $type==='earnings-maturity-transition' ? $this->applyMaturityTransitionRows($approval) : $this->applyAccountCreditRows($approval); $tx->commit(); $after=$this->guardedApplyBeforeState(); $report=array_merge($report,$applied); $report['status']='pass'; $report['abort_reason']=null; $report['before']=$before; $report['after']=$after; $report['db_mutations']=true; $report['db_mutation_status']='guarded_transaction_committed'; $delta=$this->unselectedCandidateDelta($approval); $report['new_unselected_candidates_detected']=$delta > 0; $report['unselected_candidate_count_delta']=$delta; $report['note']='unselected drift is informational only and not part of authorization'; return BadpoolGuardReport::finalize($report); } catch(Exception $e){ if($tx->active)$tx->rollback(); return $this->guardedApplyFail($report,'mutation_failed_rolled_back',$e->getMessage()); }
 	}
 
 	private function applyMaturityTransitionRows($approval)
@@ -2473,7 +2482,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 	private function guardedApplyContextArgs($args){ $out=array(); foreach($args as $arg){ if(preg_match('/^--(coin-id|format)(=.*)?$/i',$arg)) $out[]=$arg; } return $out; }
 	private function parseGuardedApplyOptions($args){ $allowed=array('coin-id','format','selected-earning-ids','approval-package-checksum','selected-scope-checksum','projected-block-mutation-checksum','projected-earnings-mutation-checksum','operator-confirms-maturity-transition','selected-earnings-scope-checksum','projected-account-credit-checksum','operator-confirms-account-credit'); $o=array(); foreach($args as $arg){ if(!preg_match('/^--([^=]+)=(.*)$/',$arg,$m)){ $o['__parse_error']='Unknown argument refused: '.$arg; continue; } $n=strtolower($m[1]); if(!in_array($n,$allowed,true)) $o['__parse_error']='Unknown option refused: --'.$m[1]; elseif(isset($o[$n])) $o['__parse_error']='Duplicate option refused: --'.$m[1]; else $o[$n]=$m[2]; } return $o; }
 	private function applyBaseReport($command,$status='refused'){ $r=$this->guard->baseReport($status); $r['schema']=self::APPLY_SCHEMA; $r['mode']=self::APPLY_MODE; $r['command']=$command; $r['read_only']=false; $r['blocked_actions']=array('unapproved_scope','checksum_mismatch','missing_operator_confirmation','backend_loops','service_or_cron_changes','share_deletion','payout_retry_delete'); return $r; }
-	private function guardedApplyBaseReport($type,$opts){ $r=$this->applyBaseReport($type.'-apply', 'refused'); $r['db_mutations']='guarded_transaction_only'; $r['wallet_reads']=false; $r['wallet_sends']=false; $r['payout_rows_created']=false; $r['withdraw_rows_created']=false; $r['backend_loops_run']=false; $r['shares_deleted']=false; return $r; }
+	private function guardedApplyBaseReport($type,$opts){ $r=$this->applyBaseReport($type.'-apply', 'refused'); $r['db_mutations']=false; $r['db_mutation_status']='guarded_transaction_only'; $r['wallet_reads']=false; $r['wallet_sends']=false; $r['payout_rows_created']=false; $r['withdraw_rows_created']=false; $r['backend_loops_run']=false; $r['shares_deleted']=false; return $r; }
 	private function guardedApplyFail($report,$reason,$msg){ $report['status']='refused'; $report['abort_reason']=$reason; $report['errors'][]=$msg; return BadpoolGuardReport::finalize($report); }
 	private function guardedApplyBeforeState(){ $coinId=intval(arraySafeVal($this->guard->getScope(),'coin_id')); return array('earnings_status_counts'=>$this->groupSummary('earnings','status',array('sql'=>'coinid=:coin_id','params'=>array(':coin_id'=>$coinId))),'block_category_counts'=>$this->groupSummary('blocks','category',array('sql'=>'coin_id=:coin_id','params'=>array(':coin_id'=>$coinId)))); }
 	private function paymentDelayThreshold(){ return YAAMP_ALLOW_EXCHANGE ? time() - (int)YAAMP_PAYMENTS_FREQ : time() - (YAAMP_PAYMENTS_FREQ / 2); }
