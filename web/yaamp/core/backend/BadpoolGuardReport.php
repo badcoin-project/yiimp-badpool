@@ -4,6 +4,10 @@ require_once(dirname(__FILE__).'/BadpoolGuardAutomationContracts.php');
 class BadpoolGuardReport
 {
 	const CHECKSUM_ALGORITHM = 'sha256';
+	const APPLY_SCHEMA = 'badpool.guardrail.apply.v1';
+	const APPLY_MODE = 'guarded-apply';
+	const PREVIEW_SCHEMA = 'badpool.guardrail.preview.v1';
+	const PREVIEW_MODE = 'read-only-preview';
 
 	public static function render($report, $format)
 	{
@@ -19,10 +23,96 @@ class BadpoolGuardReport
 
 	public static function finalize($report)
 	{
+		$report = self::normalizeOperatorSafety($report);
 		$report = self::ensurePayoutAudit($report);
 		$report = self::ensureAutomationContract($report);
 		$report['report_checksum'] = self::checksum($report);
 		return $report;
+	}
+
+	private static function normalizeOperatorSafety($report)
+	{
+		if (!is_array($report)) {
+			return $report;
+		}
+
+		$command = (string)self::arrayValue($report, 'command', '');
+		$isApply = preg_match('/-apply$/', $command) === 1;
+		$isPreview = self::isPreviewCommand($command);
+		if (!$isApply && !$isPreview) {
+			return $report;
+		}
+
+		$originalDbMutations = self::arrayValue($report, 'db_mutations', false);
+		if (!is_bool($originalDbMutations) && !isset($report['db_mutation_status'])) {
+			$report['db_mutation_status'] = $originalDbMutations;
+		}
+
+		if ($isPreview) {
+			$report['schema'] = self::PREVIEW_SCHEMA;
+			$report['mode'] = self::PREVIEW_MODE;
+			$report['read_only'] = true;
+			$report['db_mutations'] = false;
+			$report['wallet_rpc_send_performed'] = false;
+			return $report;
+		}
+
+		$report['schema'] = self::APPLY_SCHEMA;
+		$report['mode'] = self::APPLY_MODE;
+		$report['read_only'] = false;
+		$report['db_mutations'] = self::mutationBoolean($originalDbMutations);
+		$report['wallet_rpc_send_performed'] = self::booleanValue(
+			self::arrayValue($report, 'wallet_rpc_send_performed', false)
+		);
+		if (!isset($report['db_mutation_status'])) {
+			$report['db_mutation_status'] = $report['db_mutations'] ? 'performed' : 'none';
+		}
+		return $report;
+	}
+
+	private static function isPreviewCommand($command)
+	{
+		foreach (array('preview', 'dryrun', 'plan', 'approval-package') as $marker) {
+			if (strpos($command, $marker) !== false) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static function mutationBoolean($value)
+	{
+		if (is_bool($value)) {
+			return $value;
+		}
+		if (is_int($value) || is_float($value)) {
+			return $value != 0;
+		}
+		if (!is_string($value)) {
+			return false;
+		}
+		return in_array(strtolower(trim($value)), array(
+			'true',
+			'1',
+			'performed',
+			'committed',
+			'guarded_transaction_committed',
+			'guarded_transaction_committed_partial_drain',
+		), true);
+	}
+
+	private static function booleanValue($value)
+	{
+		if (is_bool($value)) {
+			return $value;
+		}
+		if (is_int($value) || is_float($value)) {
+			return $value != 0;
+		}
+		if (!is_string($value)) {
+			return false;
+		}
+		return in_array(strtolower(trim($value)), array('true', '1', 'yes', 'performed', 'sent'), true);
 	}
 
 	public static function checksum($report)
