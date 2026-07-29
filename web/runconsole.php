@@ -24,6 +24,6 @@ catch(CException $e)
 
 	$message = $e->getMessage();
 	echo "exception: $message\n";
+	exit(1);
 // 	send_email_alert('backend', "backend error", "$message");
 }
-

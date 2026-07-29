@@ -2,6 +2,7 @@
 
 require_once('serverconfig.php');
 require_once('yaamp/defaultconfig.php');
+require_once(dirname(__FILE__).'/../../components/BackendCycleGuard.php');
 
 class CronjobController extends CommonController
 {
@@ -41,58 +42,30 @@ class CronjobController extends CommonController
 
 	public function actionRunBlocks()
 	{
-//		screenlog(__FUNCTION__);
-		set_time_limit(0);
-
-		$this->monitorApache();
-
-		$last_complete = memcache_get($this->memcache->memcache, "cronjob_block_time_start");
-		if($last_complete+(5*60) < time())
-			dborun("update jobs set active=false");
-		BackendBlockFind1();
-		if(!memcache_get($this->memcache->memcache, 'balances_locked')) {
-			BackendClearEarnings();
-		}
-		BackendRentingUpdate();
-		BackendProcessList();
-		BackendBlocksUpdate();
-
-		memcache_set($this->memcache->memcache, "cronjob_block_time_start", time());
-//		screenlog(__FUNCTION__.' done');
+		$steps = array(
+			'BackendProcessList' => function() { BackendProcessList(); },
+		);
+		// Legacy block accounting, maturity, account credit, and renter debit remain hard-disabled.
+		$this->runGuardedCycle('blocks', $steps);
 	}
 
 	public function actionRunLoop2()
 	{
-//		screenlog(__FUNCTION__);
-		set_time_limit(0);
+		$steps = array(
+			'BackendStatsUpdate' => function() { BackendStatsUpdate(); },
+			'BackendUsersUpdate' => function() { BackendUsersUpdate(); },
+			'BackendStatsUpdate2' => function() { BackendStatsUpdate2(); },
+		);
+		// Wallet RPC, service changes, deposit moves, and rental account credits are intentionally absent.
+		$this->runGuardedCycle('loop2', $steps);
+	}
 
-		$this->monitorApache();
-
-		BackendCoinsUpdate();
-		BackendStatsUpdate();
-		BackendUsersUpdate();
-
-		BackendUpdateServices();
-		BackendUpdateDeposit();
-
-		MonitorBTC();
-
-		$last = memcache_get($this->memcache->memcache, 'last_renting_payout2');
-		if($last + 5*60 < time() && !memcache_get($this->memcache->memcache, 'balances_locked'))
-		{
-			memcache_set($this->memcache->memcache, 'last_renting_payout2', time());
-			BackendRentingPayout();
-		}
-
-		$last = memcache_get($this->memcache->memcache, 'last_stats2');
-		if($last + 5*60 < time())
-		{
-			memcache_set($this->memcache->memcache, 'last_stats2', time());
-			BackendStatsUpdate2();
-		}
-
-		memcache_set($this->memcache->memcache, "cronjob_loop2_time_start", time());
-//		screenlog(__FUNCTION__.' done');
+	private function runGuardedCycle($route, array $steps)
+	{
+		$mode = getenv('BADPOOL_BACKEND_MODE') ?: 'invalid';
+		$report = BackendCycleGuard::run($route, $mode, $steps);
+		echo json_encode($report, JSON_UNESCAPED_SLASHES)."\n";
+		if ($report['result'] !== 'success') exit(2);
 	}
 
 	public function actionRun()
@@ -218,4 +191,3 @@ class CronjobController extends CommonController
 	}
 
 }
-
