@@ -68,7 +68,7 @@ foreach (array('Exception', 'Error', 'TypeError') as $kind) {
 	$thrower = function() use ($kind) {
 		if ($kind === 'Exception') throw new Exception('expected');
 		if ($kind === 'Error') throw new Error('expected');
-		strlen(array()); // TypeError on supported PHP baselines
+		throw new TypeError('expected');
 	};
 	$failed = cycle('blocks', 'execute', array('throw-'.$kind => $thrower), $blocks);
 	$again = cycle('blocks', 'execute', array(), $blocks);
