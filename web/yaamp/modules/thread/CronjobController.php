@@ -2,6 +2,7 @@
 
 require_once('serverconfig.php');
 require_once('yaamp/defaultconfig.php');
+require_once(dirname(__FILE__).'/../../components/BackendCycleGuard.php');
 
 class CronjobController extends CommonController
 {
@@ -41,58 +42,22 @@ class CronjobController extends CommonController
 
 	public function actionRunBlocks()
 	{
-//		screenlog(__FUNCTION__);
-		set_time_limit(0);
-
-		$this->monitorApache();
-
-		$last_complete = memcache_get($this->memcache->memcache, "cronjob_block_time_start");
-		if($last_complete+(5*60) < time())
-			dborun("update jobs set active=false");
-		BackendBlockFind1();
-		if(!memcache_get($this->memcache->memcache, 'balances_locked')) {
-			BackendClearEarnings();
-		}
-		BackendRentingUpdate();
-		BackendProcessList();
-		BackendBlocksUpdate();
-
-		memcache_set($this->memcache->memcache, "cronjob_block_time_start", time());
-//		screenlog(__FUNCTION__.' done');
+		// Production freeze: validation proves the boundary without invoking legacy callbacks.
+		$this->runGuardedCycle('blocks', array());
 	}
 
 	public function actionRunLoop2()
 	{
-//		screenlog(__FUNCTION__);
-		set_time_limit(0);
+		// Production freeze: validation proves the boundary without invoking legacy callbacks.
+		$this->runGuardedCycle('loop2', array());
+	}
 
-		$this->monitorApache();
-
-		BackendCoinsUpdate();
-		BackendStatsUpdate();
-		BackendUsersUpdate();
-
-		BackendUpdateServices();
-		BackendUpdateDeposit();
-
-		MonitorBTC();
-
-		$last = memcache_get($this->memcache->memcache, 'last_renting_payout2');
-		if($last + 5*60 < time() && !memcache_get($this->memcache->memcache, 'balances_locked'))
-		{
-			memcache_set($this->memcache->memcache, 'last_renting_payout2', time());
-			BackendRentingPayout();
-		}
-
-		$last = memcache_get($this->memcache->memcache, 'last_stats2');
-		if($last + 5*60 < time())
-		{
-			memcache_set($this->memcache->memcache, 'last_stats2', time());
-			BackendStatsUpdate2();
-		}
-
-		memcache_set($this->memcache->memcache, "cronjob_loop2_time_start", time());
-//		screenlog(__FUNCTION__.' done');
+	private function runGuardedCycle($route, array $steps)
+	{
+		$mode = getenv('BADPOOL_BACKEND_MODE') ?: 'invalid';
+		$report = BackendCycleGuard::run($route, $mode, $steps);
+		echo BackendCycleGuard::encode($report)."\n";
+		if ($report['result'] !== 'success') exit(2);
 	}
 
 	public function actionRun()
@@ -218,4 +183,3 @@ class CronjobController extends CommonController
 	}
 
 }
-
