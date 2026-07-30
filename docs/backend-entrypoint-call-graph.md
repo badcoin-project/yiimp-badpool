@@ -1,38 +1,93 @@
 # Backend service entrypoint call graph and safety boundary
 
-This inventory describes the legacy graph as found before the guarded entrypoint boundary. “DB” includes ActiveRecord saves; “accounting” means earnings, renter balances, or account balances. The guarded routes now execute only the explicitly listed safe subset and report-only executes none of it.
+This is the verified graph for the frozen `cronjob/runBlocks` and `cronjob/runLoop2` routes. “Removed legacy” identifies code that remains in the repository but is no longer reachable from either guarded action. No activity counter is inferred from callback completion: reports declare possible effect classes and explicitly state that database/RPC boundary instrumentation is unavailable.
 
-## `cronjob/runBlocks`
+## Current guarded graph
 
-| Reachable call | Classification |
+Both actions have the same deliberately empty cycle shape:
+
+```text
+shell --once --mode=... → runconsole.php → CronjobController action
+  → BackendCycleGuard::run(route, mode, [])
+    → report-only: structured report (no readiness, lock, or callback)
+    → execute: exact route readiness → fixed /run/badpool route lock
+      → zero callbacks → structured report → lock release
+```
+
+Consequently the current routes perform no database read/write/delete, accounting operation, payout/fund movement, wallet/network RPC, service/process action, shell command, share-delete attempt, or application filesystem write. Execute mode only creates/opens and locks its code-owned lock file after validating the directory and target. The route identities are `/run/badpool/badpool-backend-blocks.lock` and `/run/badpool/badpool-backend-loop2.lock`.
+
+## Independently traced callbacks removed from the guarded graph
+
+### `BackendProcessList`
+
+* Reads MySQL `SHOW PROCESSLIST` through `dbolist`.
+* Reads `connections` rows using `getdbo('db_connections', Id)`.
+* Inserts or updates one `db_connections` ActiveRecord per returned process (`id`, `user`, `host`, `db`, `created`, `idle`, `last`) via `save()`.
+* Deletes stale rows with `DELETE FROM connections WHERE last < …` through `dborun`.
+* Performs no accounting, wallet/network RPC, payment, share operation, service/process control, shell command, or filesystem write. Despite its name, it only asks MySQL for its process list.
+
+### `BackendStatsUpdate`
+
+* Reads stale `stratums`, configured algorithms, shares, blocks, coins, accounts, balances, orders, earnings, renters, jobs, and prior `hashstats`/`hashrate`/`stats`/`algos` aggregates through ActiveRecord helpers and scalar/list SQL.
+* Deletes stale `stratums`, workers whose PID is absent from `stratums`, and zero-valued `hashstats` using three direct `dborun(DELETE …)` calls.
+* Inserts or updates `db_hashstats`, `db_hashrate`, `db_stats`, and `db_algos` rows via `save()`.
+* Calls internal calculation helpers such as `yaamp_pool_rate`, `yaamp_pool_rate_bad`, `yaamp_profitability`, algorithm normalization/hashrate helpers, and numeric formatting. These consume database-derived data; they do not provide a guarded mutation boundary.
+* Reads balances and earnings to calculate statistics but does not credit/debit accounts or create payouts.
+* Performs no wallet/network RPC directly, payment, share deletion, service/process control, shell command, or filesystem write.
+
+### `BackendUsersUpdate`
+
+* Reads accounts needing coin resolution and candidate coins.
+* Constructs `WalletRPC` clients and calls `validateaddress` while searching for a user's coin: **external wallet RPC**.
+* May convert an existing account balance using coin prices, reset a balance to zero on a coin change, change `coinid`, and clear `coinsymbol`: **accounting mutation** and database mutation through account `save()`.
+* Writes monitoring data through `controller()->memcache->add_monitoring_function`.
+* The `resolveip`, worker save, and direct coin-update sections are commented out and therefore unreachable; no active service action, shell command, filesystem write, payout, or share deletion occurs.
+
+### `BackendStatsUpdate2`
+
+* Reads recent shares and job submits; reads accounts, earnings, and prior `hashuser`, `hashrenter`, and `balanceuser` aggregates.
+* Inserts or updates `db_hashuser`, `db_hashrenter`, and `db_balanceuser` rows via `save()` after internal rate and pending-earnings calculations.
+* Deletes old cleared earnings per user with `DELETE FROM earnings WHERE status=2 …`: database deletion of accounting history.
+* Reads account balances/pending earnings for snapshots but does not credit/debit accounts, create payouts, call wallets/network services, delete shares, control services/processes, run shell commands, or write files.
+
+Because all four callbacks have database mutation and/or deletion effects—and `BackendUsersUpdate` additionally reaches wallet RPC and account-balance mutation—none is registered in the production guarded actions.
+
+## Removed `actionRunBlocks` legacy graph
+
+| Legacy reachable call | Effect classification |
 |---|---|
-| `actionRunBlocks` → `monitorApache` → `exec(pgrep/uptime)`, `system(service start)` | read-only process inspection; **service/process mutation** on recovery |
-| stale-cycle `dborun(update jobs)` | **DB mutation** |
-| `BackendBlockFind1` → `WalletRPC::{getblock,gettransaction}` | **external RPC**, **DB mutation**, deletion of invalid/duplicate blocks |
-| `BackendBlockFind1` → `BackendBlockNew` → earnings/account updates | **accounting mutation**, **DB mutation**; share deletion is routed to `badpool_share_delete_guard_skip` and refused |
-| `BackendClearEarnings` → earnings/account saves, invalid-record deletes, `yaamp_convert_amount_user` | **accounting mutation**, **DB mutation**, deletion; no wallet send |
-| `BackendRentingUpdate` → job/jobsubmit/renter updates | **accounting mutation**, **DB mutation**, deletion of invalid jobs/submits |
-| `BackendProcessList` → process-list query and connection-row saves | read-only process inspection; **DB mutation** |
-| `BackendBlocksUpdate` → wallet block/transaction queries and block/earning transitions | **external RPC**, **accounting mutation**, **DB mutation**, deletion of invalid blocks; reaches `BackendBlockNew`; guarded share-delete attempt |
-| memcache timestamp writes | monitoring mutation (not an execution lock) |
+| `monitorApache` → `exec(uptime/pgrep)`, `system(service start)` | process inspection; **service/process mutation** |
+| stale-cycle `UPDATE jobs` | **database mutation** |
+| `BackendBlockFind1` → `WalletRPC::{getblock,gettransaction}` | **external RPC**, block writes/deletes |
+| `BackendBlockFind1` → `BackendBlockNew` | **accounting mutation**, earning/account writes; share deletion is refused by `badpool_share_delete_guard_skip` |
+| `BackendClearEarnings` | earning status and account-balance **accounting mutation**; invalid earning deletion |
+| `BackendRentingUpdate` | job/jobsubmit/renter **accounting/database mutation** and invalid-record deletion |
+| `BackendProcessList` | effects traced above |
+| `BackendBlocksUpdate` → wallet queries and `BackendBlockNew` | **external RPC**, block/earning/accounting writes/deletes, guarded share-delete attempt |
+| memcache timestamp | monitoring marker, not a lock |
 
-The guarded execute subset is only `BackendProcessList`. Legacy block discovery, maturity, account credit, renter debit, and process/service recovery have no activation path through this route. `BackendPayments` and wallet-send methods are not reachable. Future accounting activation must reuse the guarded BadPool accounting contract rather than adding a legacy switch.
+`BackendPayments`, `BackendCoinPayments`, and wallet-send methods were not direct calls in this legacy action and remain unreachable. Earnings creation, maturity, and account credit were direct/indirect legacy effects and are now unreachable.
 
-## `cronjob/runLoop2`
+## Removed `actionRunLoop2` legacy graph
 
-| Reachable call | Classification |
+| Legacy reachable call | Effect classification |
 |---|---|
-| `actionRunLoop2` → `monitorApache` | read-only process inspection; possible **service/process mutation** |
-| `BackendCoinsUpdate` | wallet/market **external RPC**; **DB mutation** of coin state |
-| `BackendStatsUpdate`, `BackendStatsUpdate2`, `BackendUsersUpdate` | aggregate reads; **DB mutation** of statistics/users |
-| `BackendUpdateServices` → start/stop/restart helpers | **service/process mutation** and DB state mutation |
-| `BackendUpdateDeposit` → `WalletRPC::{getinfo,getblockhash,getblock,listaccounts,listtransactions,move}` | **external RPC**, **fund/accounting movement**, **DB mutation** |
-| `MonitorBTC` → wallet queries and block updates | **external RPC**, **DB mutation** |
-| `BackendRentingPayout` → jobsubmit/block/earning/account updates | **accounting mutation**, **DB mutation**, deletion of old jobsubmits; share deletion is hard-guarded |
-| memcache timestamps | monitoring mutation (not an execution lock) |
+| `monitorApache` | process inspection; possible **service/process mutation** |
+| `BackendCoinsUpdate` | extensive wallet **external RPC** and coin-state database writes |
+| `BackendStatsUpdate`, `BackendUsersUpdate`, `BackendStatsUpdate2` | effects independently traced above |
+| `BackendUpdateServices` | **service/process mutation** and database state writes |
+| `BackendUpdateDeposit` → wallet info/block/account/transaction calls and `move` | **external wallet RPC**, **fund/accounting movement**, database writes |
+| `MonitorBTC` | wallet queries and block database writes |
+| `BackendRentingPayout` | renter/jobsubmit/block/earning/account **accounting mutation**, jobsubmit deletion, guarded share-delete attempt |
+| memcache timestamps | monitoring markers, not locks |
 
-The guarded execute subset is limited to `BackendStatsUpdate`, `BackendUsersUpdate`, and `BackendStatsUpdate2`. Coin wallet RPC, service mutation, deposit wallet RPC/move, `MonitorBTC`, and `BackendRentingPayout` are not reachable. Neither `BackendPayments` nor `BackendCoinPayments` is reachable, so no payment or wallet-send capability is implied by readiness.
+`BackendPayments`, `BackendCoinPayments`, `sendmany`, and `sendtoaddress` are not reachable from the current route. Rental payout, deposit movement, wallet calls, and account credit are also unreachable.
 
-## Configuration contract
+## Configuration, lock, and reporting contracts
 
-`BADPOOL_BACKEND_BLOCKS_READY=1` and `BADPOOL_BACKEND_LOOP2_READY=1` are distinct exact-value gates; absent and every other value refuse before lock-independent work. `BADPOOL_BACKEND_MODE` must be `report-only` or `execute`. Stable, separate non-blocking `flock` files are `badpool-backend-blocks.lock` and `badpool-backend-loop2.lock`. The shell wrappers accept only `--once --mode=…`; they contain no retry loop.
+* `report-only` accepts no readiness switch, acquires no lock, and invokes zero callbacks.
+* `execute` requires exactly `BADPOOL_BACKEND_BLOCKS_READY=1` or `BADPOOL_BACKEND_LOOP2_READY=1`. Missing and every other value refuse before filesystem or callback work.
+* Production lock identity is the constant absolute directory `/run/badpool`; environment and working directory cannot override it. `runForTest()` is the only alternate-directory seam.
+* The lock directory must exist, be canonical, be a real non-symlink directory owned by the effective UID, and have no group/world write bits. The lock target must be a singly linked, safely owned regular non-symlink file with safe permissions, and its pathname/inode must still match after opening.
+* Reports contain callback start/completion/failure traces, declared possible effects, and `instrumentation_available=false`. They do not claim unmeasured database, accounting, wallet, payment, deletion, process, or filesystem counts.
+* Wrappers accept exactly `--once --mode=report-only` or `--once --mode=execute`, in that order, and invoke exactly one quoted absolute `PHP_CLI` executable pathname at most once.

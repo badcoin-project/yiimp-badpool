@@ -42,29 +42,21 @@ class CronjobController extends CommonController
 
 	public function actionRunBlocks()
 	{
-		$steps = array(
-			'BackendProcessList' => function() { BackendProcessList(); },
-		);
-		// Legacy block accounting, maturity, account credit, and renter debit remain hard-disabled.
-		$this->runGuardedCycle('blocks', $steps);
+		// Production freeze: validation proves the boundary without invoking legacy callbacks.
+		$this->runGuardedCycle('blocks', array());
 	}
 
 	public function actionRunLoop2()
 	{
-		$steps = array(
-			'BackendStatsUpdate' => function() { BackendStatsUpdate(); },
-			'BackendUsersUpdate' => function() { BackendUsersUpdate(); },
-			'BackendStatsUpdate2' => function() { BackendStatsUpdate2(); },
-		);
-		// Wallet RPC, service changes, deposit moves, and rental account credits are intentionally absent.
-		$this->runGuardedCycle('loop2', $steps);
+		// Production freeze: validation proves the boundary without invoking legacy callbacks.
+		$this->runGuardedCycle('loop2', array());
 	}
 
 	private function runGuardedCycle($route, array $steps)
 	{
 		$mode = getenv('BADPOOL_BACKEND_MODE') ?: 'invalid';
 		$report = BackendCycleGuard::run($route, $mode, $steps);
-		echo json_encode($report, JSON_UNESCAPED_SLASHES)."\n";
+		echo BackendCycleGuard::encode($report)."\n";
 		if ($report['result'] !== 'success') exit(2);
 	}
 
