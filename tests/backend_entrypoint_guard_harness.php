@@ -5,14 +5,26 @@ $failures = array();
 function expect_true($value, $message) { global $failures; if (!$value) $failures[] = $message; }
 function cycle($route, $mode, $callbacks, $dir) { global $serviceUid; return BackendCycleGuard::runForTest($route, $mode, $callbacks, $dir, $serviceUid); }
 function provision_dir($path, $routes = array('blocks', 'loop2')) {
-	mkdir($path, 0755, true); chmod($path, 0555);
+	mkdir($path, 0755, true);
 	foreach ($routes as $route) { $file = $path.'/badpool-backend-'.$route.'.lock'; file_put_contents($file, ''); chmod($file, 0444); }
+	chmod($path, 0555);
 }
 
 $serviceUid = (function_exists('posix_geteuid') ? posix_geteuid() : getmyuid()) + 1;
-$root = realpath(dirname(__FILE__).'/..').'/.badpool-entrypoint-'.getmypid();
-mkdir($root, 0755); chmod($root, 0555);
+$testParent = getenv('BADPOOL_TEST_PARENT') ?: realpath(dirname(__FILE__).'/..');
+$root = $testParent.'/.badpool-entrypoint-'.getmypid();
+mkdir($root, 0755);
 $blocks = $root.'/blocks'; $loop2 = $root.'/loop2'; provision_dir($blocks); provision_dir($loop2);
+$unsafe = $root.'/unsafe'; provision_dir($unsafe); chmod($unsafe, 0777);
+$replaceable = $root.'/replaceable'; mkdir($replaceable, 0777); chmod($replaceable, 0777); provision_dir($replaceable.'/locks');
+$real = $root.'/real'; provision_dir($real); symlink($real, $root.'/dir-link');
+$alternate = $root.'/alternate'; file_put_contents($alternate, 'unchanged'); chmod($alternate, 0444);
+$runtime = $root.'/runtime'; mkdir($runtime, 0700);
+$fake = $runtime.'/fake-php'; $log = $runtime.'/wrapper.log';
+file_put_contents($fake, "#!/bin/sh\nprintf 'call\\n' >> '".$log."'\nprintf '{\"result\":\"success\"}\\n'\n"); chmod($fake, 0700);
+file_put_contents($log, '');
+// Restrict the fixture root only after every directory and initial file exists.
+chmod($root, 0555);
 
 putenv('BADPOOL_BACKEND_BLOCKS_READY');
 $calls = 0;
@@ -47,7 +59,7 @@ foreach (array('Exception', 'Error', 'TypeError') as $kind) {
 }
 
 // A separate child holds the blocks lock while the parent proves non-blocking contention.
-$signal = $root.'/held';
+$signal = $runtime.'/held';
 $pid = pcntl_fork();
 if ($pid === 0) {
 	cycle('blocks', 'execute', array('holder' => function() use ($signal) { file_put_contents($signal, '1'); usleep(900000); }), $blocks);
@@ -64,13 +76,9 @@ expect_true(!$loser['lock_acquired'] && $loserCalls === 0 && $elapsed < 0.5, 'sa
 expect_true($otherRoute['lock_acquired'], 'blocks and loop2 must use separate lock identities');
 expect_true($reacquired['lock_acquired'], 'lock must be immediately reacquirable after holder exits');
 
-$unsafe = $root.'/unsafe'; provision_dir($unsafe); chmod($unsafe, 0777);
 expect_true(cycle('blocks', 'execute', array(), $unsafe)['result'] === 'refused', 'world-writable directory must refuse');
-$replaceable = $root.'/replaceable'; mkdir($replaceable, 0777); chmod($replaceable, 0777); provision_dir($replaceable.'/locks');
 expect_true(cycle('blocks', 'execute', array(), $replaceable.'/locks')['result'] === 'refused', 'replaceable parent directory must refuse');
-$real = $root.'/real'; provision_dir($real); symlink($real, $root.'/dir-link');
 expect_true(cycle('blocks', 'execute', array(), $root.'/dir-link')['result'] === 'refused', 'symlink directory must refuse');
-$alternate = $root.'/alternate'; file_put_contents($alternate, 'unchanged'); chmod($alternate, 0444);
 chmod($real, 0755); unlink($real.'/badpool-backend-blocks.lock'); symlink($alternate, $real.'/badpool-backend-blocks.lock'); chmod($real, 0555);
 expect_true(cycle('blocks', 'execute', array(), $real)['result'] === 'refused' && file_get_contents($alternate) === 'unchanged', 'symlink substitution must not open or modify the alternate target');
 chmod($real, 0755); unlink($real.'/badpool-backend-blocks.lock'); chmod($real, 0555);
@@ -89,8 +97,6 @@ expect_true(substr_count($controller, "runGuardedCycle('blocks'") === 1 && subst
 
 // Wrapper argument matrix uses a harmless fake executable and never loads Yii or callbacks.
 chdir(dirname(__FILE__).'/..');
-$fake = $root.'/fake-php'; $log = $root.'/wrapper.log';
-file_put_contents($fake, "#!/bin/sh\nprintf 'call\\n' >> '".$log."'\nprintf '{\"result\":\"success\"}\\n'\n"); chmod($fake, 0700);
 $invalid = array('', '--once', '--mode=execute --once', '--once --mode=', '--once --mode=bad', '--once --mode=execute extra', '--once --mode=execute --mode=execute', 'positional --mode=execute');
 foreach (array('web/blocks.sh', 'web/loop2.sh') as $wrapper) {
 	foreach ($invalid as $args) { exec('PHP_CLI='.escapeshellarg($fake).' '.escapeshellarg($wrapper).' '.$args.' >/dev/null 2>&1', $out, $rc); expect_true($rc !== 0, "$wrapper must reject [$args]"); }
@@ -98,6 +104,10 @@ foreach (array('web/blocks.sh', 'web/loop2.sh') as $wrapper) {
 }
 expect_true(count(file($log)) === 4, 'each accepted wrapper invocation must execute PHP exactly once');
 
+// Restore owner write/search permissions before recursive cleanup.
+$cleanup = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS), RecursiveIteratorIterator::CHILD_FIRST);
+foreach ($cleanup as $entry) { if ($entry->isDir() && !$entry->isLink()) chmod($entry->getPathname(), 0700); else @chmod($entry->getPathname(), 0600); }
+chmod($root, 0700);
 exec('rm -rf '.escapeshellarg($root));
 if ($failures) { foreach ($failures as $failure) fwrite(STDERR, "FAIL: $failure\n"); exit(1); }
 echo "backend entrypoint guard harness: PASS\n";
