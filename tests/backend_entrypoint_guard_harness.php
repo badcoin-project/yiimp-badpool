@@ -3,12 +3,16 @@ require_once dirname(__FILE__).'/../web/yaamp/components/BackendCycleGuard.php';
 
 $failures = array();
 function expect_true($value, $message) { global $failures; if (!$value) $failures[] = $message; }
-function cycle($route, $mode, $callbacks, $dir) { return BackendCycleGuard::runForTest($route, $mode, $callbacks, $dir); }
-function safe_dir($path) { mkdir($path, 0700, true); chmod($path, 0700); }
+function cycle($route, $mode, $callbacks, $dir) { global $serviceUid; return BackendCycleGuard::runForTest($route, $mode, $callbacks, $dir, $serviceUid); }
+function provision_dir($path, $routes = array('blocks', 'loop2')) {
+	mkdir($path, 0755, true); chmod($path, 0555);
+	foreach ($routes as $route) { $file = $path.'/badpool-backend-'.$route.'.lock'; file_put_contents($file, ''); chmod($file, 0444); }
+}
 
-$root = sys_get_temp_dir().'/badpool-entrypoint-'.getmypid();
-safe_dir($root);
-$blocks = $root.'/blocks'; $loop2 = $root.'/loop2'; safe_dir($blocks); safe_dir($loop2);
+$serviceUid = (function_exists('posix_geteuid') ? posix_geteuid() : getmyuid()) + 1;
+$root = realpath(dirname(__FILE__).'/..').'/.badpool-entrypoint-'.getmypid();
+mkdir($root, 0755); chmod($root, 0555);
+$blocks = $root.'/blocks'; $loop2 = $root.'/loop2'; provision_dir($blocks); provision_dir($loop2);
 
 putenv('BADPOOL_BACKEND_BLOCKS_READY');
 $calls = 0;
@@ -60,13 +64,18 @@ expect_true(!$loser['lock_acquired'] && $loserCalls === 0 && $elapsed < 0.5, 'sa
 expect_true($otherRoute['lock_acquired'], 'blocks and loop2 must use separate lock identities');
 expect_true($reacquired['lock_acquired'], 'lock must be immediately reacquirable after holder exits');
 
-$unsafe = $root.'/unsafe'; safe_dir($unsafe); chmod($unsafe, 0777);
+$unsafe = $root.'/unsafe'; provision_dir($unsafe); chmod($unsafe, 0777);
 expect_true(cycle('blocks', 'execute', array(), $unsafe)['result'] === 'refused', 'world-writable directory must refuse');
-$real = $root.'/real'; safe_dir($real); symlink($real, $root.'/dir-link');
+$replaceable = $root.'/replaceable'; mkdir($replaceable, 0777); chmod($replaceable, 0777); provision_dir($replaceable.'/locks');
+expect_true(cycle('blocks', 'execute', array(), $replaceable.'/locks')['result'] === 'refused', 'replaceable parent directory must refuse');
+$real = $root.'/real'; provision_dir($real); symlink($real, $root.'/dir-link');
 expect_true(cycle('blocks', 'execute', array(), $root.'/dir-link')['result'] === 'refused', 'symlink directory must refuse');
-symlink($root.'/target', $real.'/badpool-backend-blocks.lock');
-expect_true(cycle('blocks', 'execute', array(), $real)['result'] === 'refused', 'symlink lock target must refuse');
-unlink($real.'/badpool-backend-blocks.lock'); file_put_contents($real.'/badpool-backend-blocks.lock', ''); chmod($real.'/badpool-backend-blocks.lock', 0666);
+$alternate = $root.'/alternate'; file_put_contents($alternate, 'unchanged'); chmod($alternate, 0444);
+chmod($real, 0755); unlink($real.'/badpool-backend-blocks.lock'); symlink($alternate, $real.'/badpool-backend-blocks.lock'); chmod($real, 0555);
+expect_true(cycle('blocks', 'execute', array(), $real)['result'] === 'refused' && file_get_contents($alternate) === 'unchanged', 'symlink substitution must not open or modify the alternate target');
+chmod($real, 0755); unlink($real.'/badpool-backend-blocks.lock'); chmod($real, 0555);
+expect_true(cycle('blocks', 'execute', array(), $real)['result'] === 'refused' && !file_exists($real.'/badpool-backend-blocks.lock'), 'missing lock file must refuse without creation');
+chmod($real, 0755); file_put_contents($real.'/badpool-backend-blocks.lock', ''); chmod($real.'/badpool-backend-blocks.lock', 0666); chmod($real, 0555);
 expect_true(cycle('blocks', 'execute', array(), $real)['result'] === 'refused', 'unsafe lock target permissions must refuse');
 expect_true(cycle('blocks', 'execute', array(), $root.'/missing')['result'] === 'refused', 'missing directory must refuse');
 

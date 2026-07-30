@@ -8,16 +8,17 @@ class BackendCycleGuard
 
 	public static function run($route, $mode, array $callbacks)
 	{
-		return self::runInternal($route, $mode, $callbacks, self::PRODUCTION_LOCK_DIR);
+		return self::runInternal($route, $mode, $callbacks, self::PRODUCTION_LOCK_DIR, self::effectiveUid());
 	}
 
 	/** Test-only seam. Production callers must use run(). */
-	public static function runForTest($route, $mode, array $callbacks, $lockDir)
+	public static function runForTest($route, $mode, array $callbacks, $lockDir, $serviceUid = null)
 	{
-		return self::runInternal($route, $mode, $callbacks, $lockDir);
+		if ($serviceUid === null) $serviceUid = self::effectiveUid();
+		return self::runInternal($route, $mode, $callbacks, $lockDir, intval($serviceUid));
 	}
 
-	private static function runInternal($route, $mode, array $callbacks, $lockDir)
+	private static function runInternal($route, $mode, array $callbacks, $lockDir, $serviceUid)
 	{
 		$report = self::newReport($route, $mode, $callbacks);
 		if (!in_array($route, array('blocks', 'loop2'), true) || !in_array($mode, array('report-only', 'execute'), true))
@@ -37,17 +38,18 @@ class BackendCycleGuard
 		}
 		$report['readiness_gate'] = 'enabled';
 
-		$directoryError = self::validateDirectory($lockDir);
+		$directoryError = self::validateDirectory($lockDir, $serviceUid);
 		if ($directoryError !== null) return self::refuse($report, $directoryError);
 		$lockPath = $lockDir.DIRECTORY_SEPARATOR.'badpool-backend-'.$route.'.lock';
-		$targetError = self::validateExistingTarget($lockPath);
+		$directoryStat = @lstat($lockDir);
+		$targetError = self::validateExistingTarget($lockPath, $directoryStat['uid']);
 		if ($targetError !== null) return self::refuse($report, $targetError);
 
-		$oldUmask = umask(0077);
-		$handle = @fopen($lockPath, 'c');
-		umask($oldUmask);
+		// Open an immutable, pre-provisioned asset only. The validated parent chain
+		// cannot be modified by the service UID, so it cannot substitute this path.
+		$handle = @fopen($lockPath, 'r');
 		if ($handle === false) return self::refuse($report, 'lock file open failed');
-		$targetError = self::validateOpenTarget($lockPath, $handle);
+		$targetError = self::validateOpenTarget($lockPath, $handle, $directoryStat['uid']);
 		if ($targetError !== null) {
 			fclose($handle);
 			return self::refuse($report, $targetError);
@@ -96,7 +98,7 @@ class BackendCycleGuard
 		);
 	}
 
-	private static function validateDirectory($path)
+	private static function validateDirectory($path, $serviceUid)
 	{
 		if (!is_string($path) || $path === '' || $path[0] !== '/') return 'lock directory must be absolute';
 		$stat = @lstat($path);
@@ -104,29 +106,46 @@ class BackendCycleGuard
 		if ($stat === false || $real === false) return 'lock directory is missing';
 		if (($stat['mode'] & 0170000) !== 0040000 || is_link($path)) return 'lock directory is not a real directory';
 		if ($real !== $path) return 'lock directory canonical path mismatch';
-		if ($stat['uid'] !== self::effectiveUid()) return 'lock directory has unsafe ownership';
-		if (($stat['mode'] & 0022) !== 0) return 'lock directory is group/world writable';
+		foreach (self::pathChain($path) as $component) {
+			$componentStat = @lstat($component);
+			if ($componentStat === false || ($componentStat['mode'] & 0170000) !== 0040000 || is_link($component))
+				return 'lock directory parent chain is unsafe';
+			if ($componentStat['uid'] === $serviceUid || ($componentStat['mode'] & 0022) !== 0)
+				return 'lock directory is replaceable by the service account';
+		}
 		return null;
 	}
 
-	private static function validateExistingTarget($path)
+	private static function pathChain($path)
+	{
+		$parts = explode('/', trim($path, '/'));
+		$chain = array('/');
+		$current = '';
+		foreach ($parts as $part) {
+			$current .= '/'.$part;
+			$chain[] = $current;
+		}
+		return $chain;
+	}
+
+	private static function validateExistingTarget($path, $trustedUid)
 	{
 		$stat = @lstat($path);
-		if ($stat === false) return null;
+		if ($stat === false) return 'required pre-provisioned lock file is missing';
 		if (($stat['mode'] & 0170000) !== 0100000 || is_link($path)) return 'lock target is not a regular non-symlink file';
-		if ($stat['uid'] !== self::effectiveUid() || ($stat['mode'] & 0022) !== 0 || $stat['nlink'] !== 1)
+		if ($stat['uid'] !== $trustedUid || ($stat['mode'] & 0222) !== 0 || $stat['nlink'] !== 1)
 			return 'lock target ownership, permissions, or link count is unsafe';
 		return null;
 	}
 
-	private static function validateOpenTarget($path, $handle)
+	private static function validateOpenTarget($path, $handle, $trustedUid)
 	{
 		$pathStat = @lstat($path);
 		$openStat = @fstat($handle);
 		if ($pathStat === false || $openStat === false) return 'lock target validation failed';
 		if (($pathStat['mode'] & 0170000) !== 0100000 || is_link($path)) return 'lock target changed type';
 		if ($pathStat['dev'] !== $openStat['dev'] || $pathStat['ino'] !== $openStat['ino']) return 'lock target changed during open';
-		if ($openStat['uid'] !== self::effectiveUid() || ($openStat['mode'] & 0022) !== 0 || $openStat['nlink'] !== 1)
+		if ($openStat['uid'] !== $trustedUid || ($openStat['mode'] & 0222) !== 0 || $openStat['nlink'] !== 1)
 			return 'open lock target is unsafe';
 		return null;
 	}

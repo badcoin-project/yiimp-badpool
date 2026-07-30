@@ -14,7 +14,7 @@ shell --once --mode=... → runconsole.php → CronjobController action
       → zero callbacks → structured report → lock release
 ```
 
-Consequently the current routes perform no database read/write/delete, accounting operation, payout/fund movement, wallet/network RPC, service/process action, shell command, share-delete attempt, or application filesystem write. Execute mode only creates/opens and locks its code-owned lock file after validating the directory and target. The route identities are `/run/badpool/badpool-backend-blocks.lock` and `/run/badpool/badpool-backend-loop2.lock`.
+Consequently the current routes perform no database read/write/delete, accounting operation, payout/fund movement, wallet/network RPC, service/process action, shell command, share-delete attempt, or application filesystem write. Execute mode only opens and locks an existing pre-provisioned lock file after validating the full parent chain, directory, pathname, and opened descriptor. It never creates or writes a lock asset. The route identities are `/run/badpool/badpool-backend-blocks.lock` and `/run/badpool/badpool-backend-loop2.lock`.
 
 ## Independently traced callbacks removed from the guarded graph
 
@@ -88,6 +88,8 @@ Because all four callbacks have database mutation and/or deletion effects—and 
 * `report-only` accepts no readiness switch, acquires no lock, and invokes zero callbacks.
 * `execute` requires exactly `BADPOOL_BACKEND_BLOCKS_READY=1` or `BADPOOL_BACKEND_LOOP2_READY=1`. Missing and every other value refuse before filesystem or callback work.
 * Production lock identity is the constant absolute directory `/run/badpool`; environment and working directory cannot override it. `runForTest()` is the only alternate-directory seam.
-* The lock directory must exist, be canonical, be a real non-symlink directory owned by the effective UID, and have no group/world write bits. The lock target must be a singly linked, safely owned regular non-symlink file with safe permissions, and its pathname/inode must still match after opening.
+* `/run/badpool` and both lock files must be provisioned before the service starts; this change intentionally does not alter systemd. Every directory from `/` through `/run/badpool` must be a real non-symlink directory, must not be owned by the service UID, and must have no group/world write bits.
+* Both required lock files must already exist, be regular non-symlink files owned by the same trusted UID as `/run/badpool`, have a link count of one, and have no write bits. They must be readable by the service (for example through a read-only service group). A typical privileged provisioning shape is a root-owned `0750` directory and root-owned, service-group-readable `0440` files named `badpool-backend-blocks.lock` and `badpool-backend-loop2.lock`.
+* The guard opens with read-only `fopen(..., 'r')`, never creation mode. Because the service cannot modify any parent or the lock file, it cannot substitute the pathname between validation and open. The pathname and opened descriptor are then required to retain the same device/inode, trusted owner, regular-file type, permissions, and link count before `flock` is attempted.
 * Reports contain callback start/completion/failure traces, declared possible effects, and `instrumentation_available=false`. They do not claim unmeasured database, accounting, wallet, payment, deletion, process, or filesystem counts.
 * Wrappers accept exactly `--once --mode=report-only` or `--once --mode=execute`, in that order, and invoke exactly one quoted absolute `PHP_CLI` executable pathname at most once.
