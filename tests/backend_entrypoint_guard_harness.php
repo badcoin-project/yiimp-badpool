@@ -11,7 +11,26 @@ function provision_dir($path, $routes = array('blocks', 'loop2')) {
 }
 
 $serviceUid = (function_exists('posix_geteuid') ? posix_geteuid() : getmyuid()) + 1;
-$testParent = getenv('BADPOOL_TEST_PARENT') ?: realpath(dirname(__FILE__).'/..');
+$parentOverride = getenv('BADPOOL_TEST_PARENT');
+$removeTestParent = false;
+if ($parentOverride !== false && $parentOverride !== '') {
+	$testParent = realpath($parentOverride);
+}
+else {
+	$home = getenv('HOME');
+	if (!$home || $home[0] !== '/' || !is_dir($home)) {
+		$account = function_exists('posix_getpwuid') ? posix_getpwuid(function_exists('posix_geteuid') ? posix_geteuid() : getmyuid()) : false;
+		$home = $account && isset($account['dir']) ? $account['dir'] : '';
+	}
+	$home = $home ? realpath($home) : false;
+	if ($home === false || !is_dir($home) || is_link($home)) { fwrite(STDERR, "FAIL: unable to resolve a safe real home directory\n"); exit(1); }
+	$testParent = $home.'/.badpool-backend-harness';
+	if (!file_exists($testParent)) { mkdir($testParent, 0700); $removeTestParent = true; }
+	$testParent = realpath($testParent);
+}
+if ($testParent === false || $testParent[0] !== '/' || !is_dir($testParent) || is_link($testParent) || (fileperms($testParent) & 0022)) {
+	fwrite(STDERR, "FAIL: fixture parent must be an absolute canonical private directory\n"); exit(1);
+}
 $root = $testParent.'/.badpool-entrypoint-'.getmypid();
 mkdir($root, 0755);
 $blocks = $root.'/blocks'; $loop2 = $root.'/loop2'; provision_dir($blocks); provision_dir($loop2);
@@ -106,8 +125,16 @@ expect_true(count(file($log)) === 4, 'each accepted wrapper invocation must exec
 
 // Restore owner write/search permissions before recursive cleanup.
 $cleanup = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS), RecursiveIteratorIterator::CHILD_FIRST);
-foreach ($cleanup as $entry) { if ($entry->isDir() && !$entry->isLink()) chmod($entry->getPathname(), 0700); else @chmod($entry->getPathname(), 0600); }
+foreach ($cleanup as $entry) {
+	if ($entry->isLink()) @unlink($entry->getPathname());
+	else if ($entry->isDir()) chmod($entry->getPathname(), 0700);
+	else @chmod($entry->getPathname(), 0600);
+}
 chmod($root, 0700);
 exec('rm -rf '.escapeshellarg($root));
+$cleanupPassed = !file_exists($root) && count(glob($testParent.'/.badpool-entrypoint-*')) === 0;
+if ($removeTestParent && $cleanupPassed) $cleanupPassed = @rmdir($testParent);
+expect_true($cleanupPassed, 'fixture cleanup must remove the complete per-run tree and empty automatic parent');
 if ($failures) { foreach ($failures as $failure) fwrite(STDERR, "FAIL: $failure\n"); exit(1); }
+echo "fixture_cleanup=PASS\n";
 echo "backend entrypoint guard harness: PASS\n";
