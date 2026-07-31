@@ -1,67 +1,70 @@
-# Badpool Stage1-only bounded drain runner
+# Badpool immutable Stage1 drain manifest
 
-The Stage1 drain runner repeats the existing guarded forward-catchup Stage1 approval/apply flow in bounded coin-scoped batches. It is only for Stage1 block/earning catchup and does not authorize later accounting or payout stages.
+The forward Stage1 drain uses one finite approval manifest for one complete selected cohort. The operator approves the manifest once. The default 25-block batch is an internal transaction, verification, progress, and resume boundary; it is not another human approval boundary.
 
-## Command shapes
+## Generate and preserve the approval manifest
+
+The approval-package command performs chain and database reads, emits every selected block ID and every projected row, and performs no database write:
 
 ```bash
-php yaamp/yiic.php badpoolguard forward-catchup-stage1-drain-plan --coin-id=1267 --max-batches=3 --batch-limit=50 --format=json
-php yaamp/yiic.php badpoolguard forward-catchup-stage1-drain-apply --coin-id=1267 --max-batches=3 --batch-limit=50 --operator-confirms-stage1-drain=stage1_only_no_later_accounting_no_wallet --format=json
+cd /srv/badpool/yiimp-badpool/web
+php yaamp/yiic.php badpoolguard forward-catchup-stage1-drain-approval-package \
+  --coin-id=1267 \
+  --internal-batch-size=25 \
+  --format=json > /var/lib/badpool/stage1-scrypt-manifest.json
 ```
 
-## Safety boundaries
+`forward-catchup-stage1-drain-plan` is a compatibility alias for the same complete manifest. It no longer selects a manually bounded number of batches.
 
-* Coin-scoped only: `--coin-id` is required and all-coin mutation is refused.
-* `--batch-limit` is capped at 50.
-* `--max-batches` is required and capped by `FORWARD_CATCHUP_STAGE1_DRAIN_SAFE_MAX_BATCHES` unless code and tests are intentionally changed.
-* Plan is read-only and does not execute apply logic; plan output keeps total_inserted_earnings at 0 and sets `read_only=true`, `apply_commands_executed=false`, and `total_inserted_earnings=0`; projected row counts are reported separately under `total_projected_earnings` and per-batch `projected_earnings_rows`.
-* Apply uses `schema=badpool.guardrail.apply.v1` and `mode=guarded-apply`. Its output starts with `apply_commands_executed=false` and flips it to `true` only immediately before the guarded Stage1 mutation helper is invoked; actual inserted rows are reported as `total_inserted_earnings` and per-batch `inserted_earnings_count`.
-* Hard boundary: no maturity transition, no account-credit, no payout-row creation, no wallet-send, no backend loop start, no service/cron changes, and no share deletion.
+The operator reviews the full JSON and preserves it unchanged. Important authority-bearing fields include:
 
-## Summary JSON shape
+* `eligible_candidate_count`, `selected_count`, and complete `selected_block_ids`;
+* `excluded_newer_candidate_count` and `snapshot_boundary`;
+* complete `selected_records`, `projected_block_mutations`, and `projected_earning_rows`;
+* `projected_recipient_totals` and `projected_total_amount`;
+* `canonical_checksum_inputs`, `selection_checksum`, `intended_mutation_checksum`, and `package_checksum`;
+* `internal_batch_size` and `projected_batch_count`; and
+* `exact_operator_confirmation`.
 
-```json
-{
-  "schema": "badpool.guardrail.apply.v1",
-  "status": "pass",
-  "command": "forward-catchup-stage1-drain-apply",
-  "coin_id": 1267,
-  "batch_limit": 50,
-  "max_batches": 3,
-  "batches_attempted": 3,
-  "batches_applied": 3,
-  "total_selected": 150,
-  "total_generated": 147,
-  "total_orphan": 3,
-  "total_projected_earnings": 147,
-  "total_inserted_earnings": 147,
-  "total_projected_pending_amount": 318114.1474558799,
-  "apply_commands_executed": true,
-  "final_preview_selected_count": 6,
-  "stop_reason": "max_batches_reached",
-  "errors": [],
-  "warnings": [],
-  "per_batch": [
-    {
-      "batch_number": 1,
-      "selected_count": 50,
-      "projected_generated_rows": 49,
-      "projected_earnings_rows": 49,
-      "projected_orphan_rows": 1,
-      "projected_pending_amount": 106038.04915195997,
-      "approval_package_checksum": {"value": "..."},
-      "batch_scope_checksum": {"value": "..."},
-      "projected_mutation_checksum": {"value": "..."},
-      "projected_earnings_checksum": {"value": "..."},
-      "inserted_earnings_count": 49,
-      "reconciliation_status": "pass"
-    }
-  ]
-}
+The snapshot selection is fixed before daemon classification begins. A block arriving after that query is reported as newer/excluded and cannot join the manifest.
+
+## Apply the approved manifest
+
+Use the exact package checksum and confirmation printed by the manifest:
+
+```bash
+cd /srv/badpool/yiimp-badpool/web
+php yaamp/yiic.php badpoolguard forward-catchup-stage1-drain-apply \
+  --coin-id=1267 \
+  --manifest-file=/var/lib/badpool/stage1-scrypt-manifest.json \
+  --progress-file=/var/lib/badpool/stage1-scrypt-progress.json \
+  --package-checksum=<manifest-package-checksum> \
+  --operator-confirms-stage1-drain=<exact-operator-confirmation-from-manifest> \
+  --format=json
 ```
 
+The consumer independently recomputes the selection, intended-mutation, and package checksums. It refuses a different coin, altered file, wrong checksum, wrong confirmation, invalid ordering, duplicate ID, changed attribution, changed amount, changed projection, or incompatible progress file before mutation.
 
-## Plan versus apply report contract
+The process then handles the manifest IDs consecutively in deterministic batches. Each pending batch is re-read from the chain without a wallet read, compared with the approved projection, preflighted, committed in its own database transaction, verified, and recorded atomically in the progress file. No additional operator confirmation occurs between batches.
 
-* `forward-catchup-stage1-drain-plan` is a read-only projection. It reports planned work only: `total_projected_earnings` and per-batch `projected_earnings_rows` may be non-zero, while `total_inserted_earnings`, every per-batch `inserted_earnings_count`, and `apply_commands_executed` remain `0`/`false`.
-* `forward-catchup-stage1-drain-apply` reports both projection and execution. Each batch carries `projected_earnings_rows` from the fresh approval package and `inserted_earnings_count` from the guarded mutation result. The summary keeps those streams separate as `total_projected_earnings` and `total_inserted_earnings`.
+## Interruption and resume
+
+The progress file binds to the package checksum and full selected cohort. It records:
+
+* completed batch count and completed block IDs;
+* remaining block IDs;
+* rows and amounts for each completed batch;
+* cumulative rows and amount;
+* failure point and reason;
+* whether retry is safe; and
+* that the identical manifest confirmation remains required.
+
+On every invocation, database state is checked before mutation. A manifest entry is either fully pending, fully completed exactly as projected, or a mismatch. Fully completed batches are verified and skipped. A mixed, partially linked, differently attributed, differently valued, or otherwise incompatible state fails closed. This makes resume safe even if the process stopped after a commit but before progress-file publication.
+
+New production candidates are counted for visibility but never appended. Resume always begins with the first uncompleted manifest entry and accepts only the same package checksum and cohort.
+
+## Final reconciliation and hard boundary
+
+Completion requires every selected ID to reconcile, the actual earning rows to equal the manifest projection, recipient totals to match, and the actual total amount to equal `projected_total_amount`.
+
+This command performs Stage1 only: no maturity transition, no account credit, no payout-row creation, no wallet read, no wallet send, no backend loop, no service action, and no share deletion. Later pipeline stages require separate aggregate approvals and their own internal batching.

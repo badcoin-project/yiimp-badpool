@@ -1,6 +1,7 @@
 <?php
 
 require_once(dirname(__FILE__).'/../core/backend/BadpoolGuardContext.php');
+require_once(dirname(__FILE__).'/../core/backend/BadpoolStage1Manifest.php');
 require_once(dirname(__FILE__).'/../core/rpc/wallet-rpc.php');
 
 class BadpoolGuardCommand extends CConsoleCommand
@@ -13,8 +14,8 @@ class BadpoolGuardCommand extends CConsoleCommand
 	const FORWARD_CATCHUP_APPROVAL_VERSION = '1';
 	const FORWARD_CATCHUP_STAGE1_DRYRUN_DEFAULT_LIMIT = 25;
 	const FORWARD_CATCHUP_STAGE1_DRYRUN_MAX_LIMIT = 50;
-	const FORWARD_CATCHUP_STAGE1_DRAIN_SAFE_MAX_BATCHES = 10;
-	const FORWARD_CATCHUP_STAGE1_DRAIN_CONFIRMATION = 'stage1_only_no_later_accounting_no_wallet';
+	const FORWARD_CATCHUP_STAGE1_MANIFEST_MAX_BATCH_SIZE = 50;
+	const FORWARD_CATCHUP_STAGE1_MANIFEST_MAX_BYTES = 67108864;
 
 	private $guard;
 
@@ -44,6 +45,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 		'forward-catchup-stage1-apply-approval-package',
 		'forward-catchup-stage1-apply',
 		'forward-catchup-stage1-drain-plan',
+		'forward-catchup-stage1-drain-approval-package',
 		'forward-catchup-stage1-drain-apply',
 		'earnings-maturity-transition-dryrun',
 		'earnings-maturity-transition-approval-package',
@@ -78,7 +80,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 		if ($action === 'forward-catchup-stage1-apply') {
 			$actionArgs = $this->forwardCatchupStage1ApplyContextArgs($args);
 		}
-		if ($action === 'forward-catchup-stage1-drain-plan' || $action === 'forward-catchup-stage1-drain-apply') {
+		if ($action === 'forward-catchup-stage1-drain-plan' || $action === 'forward-catchup-stage1-drain-approval-package' || $action === 'forward-catchup-stage1-drain-apply') {
 			$actionArgs = $this->forwardCatchupStage1DrainContextArgs($args);
 		}
 		if ($action === 'wallet-send-apply') {
@@ -169,6 +171,9 @@ class BadpoolGuardCommand extends CConsoleCommand
 			case 'forward-catchup-stage1-drain-plan':
 				$report = $this->forwardCatchupStage1DrainPlanReport($args);
 				break;
+			case 'forward-catchup-stage1-drain-approval-package':
+				$report = $this->forwardCatchupStage1DrainApprovalPackageReport($args);
+				break;
 			case 'forward-catchup-stage1-drain-apply':
 				$report = $this->forwardCatchupStage1DrainApplyReport($args);
 				break;
@@ -235,8 +240,9 @@ class BadpoolGuardCommand extends CConsoleCommand
 			"       php yaamp/yiic.php badpoolguard forward-catchup-approval-package --coin-id=<id> [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard forward-catchup-stage1-apply-dryrun --coin-id=<id> [--limit=<n>] [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard forward-catchup-stage1-apply-approval-package --coin-id=<id> [--limit=<n>] [--format=json|text]\n".
-			"       php yaamp/yiic.php badpoolguard forward-catchup-stage1-drain-plan --coin-id=<id> --max-batches=<n> [--batch-limit=<n>] --format=json\n".
-			"       php yaamp/yiic.php badpoolguard forward-catchup-stage1-drain-apply --coin-id=<id> --max-batches=<n> [--batch-limit=<n>] --operator-confirms-stage1-drain=stage1_only_no_later_accounting_no_wallet --format=json\n".
+			"       php yaamp/yiic.php badpoolguard forward-catchup-stage1-drain-plan --coin-id=<id> [--internal-batch-size=25] --format=json\n".
+			"       php yaamp/yiic.php badpoolguard forward-catchup-stage1-drain-approval-package --coin-id=<id> [--internal-batch-size=25] --format=json\n".
+			"       php yaamp/yiic.php badpoolguard forward-catchup-stage1-drain-apply --coin-id=<id> --manifest-file=<absolute-json-path> --progress-file=<absolute-json-path> --package-checksum=<sha256> --operator-confirms-stage1-drain=<exact-manifest-confirmation> --format=json\n".
 			"       php yaamp/yiic.php badpoolguard forward-catchup-stage1-apply --coin-id=<id> --limit=<approved_n> --selected-count=<approved_n> --approval-package-checksum=<sha256> --batch-scope-checksum=<sha256> --projected-mutation-checksum=<sha256> --projected-earnings-checksum=<sha256> --operator-confirms-attribution-model=block_userid_single_recipient --format=json\n".
 			"       php yaamp/yiic.php badpoolguard earnings-maturity-transition-dryrun --coin-id=<id> [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard earnings-maturity-transition-approval-package --coin-id=<id> [--format=json|text]\n".
@@ -248,7 +254,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 			"       php yaamp/yiic.php badpoolguard guard-context --coin-id=<id> [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard status-runner [--coin-id=<id>] [--algo=<algo>] --format=json\n".
 			"       php yaamp/yiic.php badpoolguard overview --all-coins-preview [--format=json|text]\n\n".
-			"Read-only preview only. No wallet reads, wallet sends, DB writes, share cleanup, payout retry/delete, or service actions are available.\n";
+			"The Stage1 drain manifest package performs chain/DB reads only and no wallet reads. Guarded apply commands mutate only their exact approved stage; service actions, backend loops, share deletion, and unapproved later stages remain unavailable.\n";
 	}
 
 
@@ -875,7 +881,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 		);
 
 		$report = $this->guard->baseReport();
-		$report['wallet_reads'] = count($candidates) > 0;
+		$report['wallet_reads'] = false;
 		$report['wallet_sends'] = false;
 		$report['db_mutations'] = false;
 		$report['account_credit'] = false;
@@ -1353,7 +1359,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 				return array('status' => 'fail', 'abort_reason' => 'daemon_classification_blocked', 'message' => 'Daemon classification is not applyable for selected block index '.$idx.'.');
 			}
 			$row = $this->guard->selectRow(
-				'SELECT '.$this->guard->selectColumns('blocks', array('id', 'coin_id', 'category', 'height')).' FROM blocks WHERE '.$this->guard->qcol('id').'=:id',
+				'SELECT '.$this->guard->selectColumns('blocks', array('id', 'coin_id', 'category', 'height', 'userid', 'workerid', 'time', 'blockhash')).' FROM blocks WHERE '.$this->guard->qcol('id').'=:id',
 				array(':id' => arraySafeVal($item, 'id'))
 			);
 			if (!$row || intval(arraySafeVal($row, 'coin_id')) !== intval(arraySafeVal($this->guard->getScope(), 'coin_id'))) {
@@ -1361,6 +1367,9 @@ class BadpoolGuardCommand extends CConsoleCommand
 			}
 			if ($this->guard->columnExists('blocks', 'height') && (string)arraySafeVal($row, 'height') !== (string)arraySafeVal($item, 'height')) {
 				return array('status' => 'fail', 'abort_reason' => 'selected_block_height_changed', 'message' => 'Selected block height differs from approval package scope.');
+			}
+			foreach (array('userid','workerid','time','blockhash') as $field) if ($this->guard->columnExists('blocks', $field) && (string)arraySafeVal($row, $field) !== (string)arraySafeVal($item, $field)) {
+				return array('status' => 'fail', 'abort_reason' => 'selected_block_attribution_changed', 'message' => 'Selected block '.$field.' differs from approval package scope.');
 			}
 			if (arraySafeVal($row, 'category') !== 'new') {
 				return array('status' => 'fail', 'abort_reason' => 'selected_block_not_new', 'message' => 'Selected block is no longer category=new.');
@@ -2134,31 +2143,64 @@ class BadpoolGuardCommand extends CConsoleCommand
 
 	private function forwardCatchupStage1DrainPlanReport($args)
 	{
+		$report = $this->forwardCatchupStage1DrainApprovalPackageReport($args);
+		$report['command'] = 'forward-catchup-stage1-drain-plan';
+		$report['alias_notice'] = 'This plan is the complete authority-bearing manifest; internal batches are transaction boundaries, not approval boundaries.';
+		return BadpoolGuardReport::finalize($report);
+	}
+
+	private function forwardCatchupStage1DrainApprovalPackageReport($args)
+	{
 		$options = $this->forwardCatchupStage1DrainOptions($args, false);
-		$report = $this->forwardCatchupStage1DrainBaseReport('forward-catchup-stage1-drain-plan', true, $options);
-		if (isset($options['__parse_error'])) return $this->forwardCatchupStage1DrainFail($report, 'invalid_option', $options['__parse_error']);
-		$valid = $this->forwardCatchupStage1DrainValidate($report, $options, false);
+		$base = $this->forwardCatchupStage1DrainBaseReport('forward-catchup-stage1-drain-approval-package', true, $options);
+		if (isset($options['__parse_error'])) return $this->forwardCatchupStage1DrainFail($base, 'invalid_option', $options['__parse_error']);
+		$valid = $this->forwardCatchupStage1DrainValidate($base, $options, false);
 		if ($valid !== true) return $valid;
 
-		$coinId = intval(arraySafeVal($this->guard->getScope(), 'coin_id'));
-		$maxBatches = intval($options['max-batches']);
-		$batchLimit = intval($options['batch-limit']);
 		$checkpoint = $this->forwardCatchupCheckpoint();
 		$lastPayoutTime = arraySafeVal($checkpoint, 'last_payout_time');
-		$candidates = $this->forwardCatchupStage1DryrunCandidates($lastPayoutTime, $maxBatches * $batchLimit);
-		$chunks = array_chunk($candidates, $batchLimit);
-		foreach (array_slice($chunks, 0, $maxBatches) as $idx => $chunk) {
-			$classified = $this->forwardCatchupStage1DryrunClassify($chunk);
-			$plan = $this->forwardCatchupStage1DryrunPlan($classified);
-			$totals = $this->forwardCatchupStage1DryrunTotals($classified, $plan);
-			$batch = $this->forwardCatchupStage1DrainBatchSummary($idx + 1, $classified, $plan, $totals);
-			$report['per_batch'][] = $batch;
-			$this->forwardCatchupStage1DrainAddTotals($report, $batch);
-		}
-		$report['final_preview_selected_count'] = count($candidates) > $maxBatches * $batchLimit ? $batchLimit : max(0, count($candidates) - count($report['per_batch']) * $batchLimit);
-		$report['stop_reason'] = empty($report['per_batch']) ? 'preview_empty' : (count($report['per_batch']) >= $maxBatches ? 'max_batches_planned' : 'preview_empty');
-		$report['status'] = 'pass';
-		return BadpoolGuardReport::finalize($report);
+		$candidates = $this->forwardCatchupStage1DryrunCandidates($lastPayoutTime, null);
+		$classified = $this->forwardCatchupStage1DryrunClassify($candidates);
+		$plan = $this->forwardCatchupStage1DryrunPlan($classified);
+		$manifestPreflight = $this->forwardCatchupStage1ApplyPreflightGates($classified, arraySafeVal($plan, 'projected_block_mutations', array()), arraySafeVal($plan, 'projected_pending_earnings', array()));
+		$records = $this->forwardCatchupStage1ManifestRecords($classified, arraySafeVal($plan, 'projected_pending_earnings', array()));
+		$snapshot = $this->forwardCatchupStage1ManifestSnapshot($checkpoint, $candidates);
+		$excludedNewer = $this->forwardCatchupStage1DrainExcludedCandidateCount($lastPayoutTime, $records);
+		$coin = $this->guard->getCoin();
+		$manifest = BadpoolStage1Manifest::build(
+			intval(arraySafeVal($this->guard->getScope(), 'coin_id')),
+			is_array($coin) ? arraySafeVal($coin, 'algo') : (is_object($coin) ? $coin->algo : ''),
+			$snapshot,
+			count($candidates),
+			$excludedNewer,
+			$records,
+			$this->forwardCatchupStage1ManifestProjectedMutations(arraySafeVal($plan, 'projected_block_mutations', array())),
+			arraySafeVal($plan, 'projected_pending_earnings', array()),
+			intval($options['internal-batch-size'])
+		);
+		$validation = BadpoolStage1Manifest::validate($manifest);
+		$manifest['command'] = 'forward-catchup-stage1-drain-approval-package';
+		$manifest['mode'] = 'read-only-preview';
+		$manifest['read_only'] = true;
+		$manifest['wallet_reads'] = false;
+		$manifest['chain_reads'] = count($candidates) > 0;
+		$manifest['daemon_rpc_used'] = count($candidates) > 0;
+		$manifest['wallet_sends'] = false;
+		$manifest['db_mutations'] = false;
+		$manifest['share_deletion'] = false;
+		$manifest['service_actions'] = false;
+		$manifest['backend_loops_run'] = false;
+		$manifest['apply_commands_executed'] = false;
+		$manifest['manifest_validation'] = $validation;
+		$manifest['manifest_preflight'] = $manifestPreflight;
+		$manifest['status'] = arraySafeVal($validation, 'status') === 'pass' && arraySafeVal($manifestPreflight, 'status') === 'pass' && arraySafeVal($manifest, 'approval_status') === 'pass' ? 'pass' : 'refused';
+		$manifest['errors'] = arraySafeVal($validation, 'errors', array());
+		if (arraySafeVal($manifestPreflight, 'status') !== 'pass') $manifest['errors'][] = arraySafeVal($manifestPreflight, 'message', 'Manifest preflight refused.');
+		if (arraySafeVal($manifest, 'approval_status') !== 'pass') $manifest['errors'][] = 'One or more selected candidates could not be classified into an allowed Stage1 mutation.';
+		foreach ($manifest['errors'] as $error) $this->guard->addError($error);
+		$manifest['warnings'] = array();
+		$manifest['blocked_actions'] = array('maturity_transition','account_credit','payout_row_creation','wallet_reads','wallet_sends','backend_loops','service_actions','share_deletion');
+		return BadpoolGuardReport::finalize($manifest);
 	}
 
 	private function forwardCatchupStage1DrainApplyReport($args)
@@ -2168,104 +2210,144 @@ class BadpoolGuardCommand extends CConsoleCommand
 		if (isset($options['__parse_error'])) return $this->forwardCatchupStage1DrainFail($report, 'invalid_option', $options['__parse_error']);
 		$valid = $this->forwardCatchupStage1DrainValidate($report, $options, true);
 		if ($valid !== true) return $valid;
-		for ($i = 1; $i <= intval($options['max-batches']); $i++) {
-			$report['batches_attempted'] = $i;
-			$report['failed_batch_index'] = $i;
-			$report['failure_phase'] = 'approval_regeneration';
-			try {
-				$approval = $this->forwardCatchupStage1ApplyApprovalPackageReport();
-			} catch (Exception $e) {
-				return $this->forwardCatchupStage1DrainFail($report, 'approval_regeneration_failure', $e->getMessage());
-			}
-			if (!$this->guard->isValid()) return $this->forwardCatchupStage1DrainFail($report, 'approval_package_refusal', 'Fresh Stage1 approval package refused.');
-			$classified = arraySafeVal(arraySafeVal($approval, 'items', array()), 'candidates', array());
-			$mutations = arraySafeVal(arraySafeVal($approval, 'items', array()), 'projected_block_mutations', array());
-			$earnings = arraySafeVal(arraySafeVal($approval, 'items', array()), 'projected_pending_earnings', array());
-			$totals = arraySafeVal(arraySafeVal($approval, 'summary', array()), 'totals', array());
-			$selected = intval(arraySafeVal($totals, 'selected_count', 0));
-			if ($selected === 0) { $report['stop_reason'] = 'preview_empty'; break; }
-			if ($selected > intval($options['batch-limit'])) return $this->forwardCatchupStage1DrainFail($report, 'selected_count_mismatch', 'selected_count exceeds --batch-limit.');
-			if (arraySafeVal($approval, 'overall_approval_package_status') !== 'pass') return $this->forwardCatchupStage1DrainFail($report, 'approval_package_refusal', 'Stage1 approval package status is not pass.');
-			$report['failure_phase'] = 'preflight_validation';
-			try {
-				$gate = $this->forwardCatchupStage1ApplyPreflightGates($classified, $mutations, $earnings);
-			} catch (Exception $e) {
-				return $this->forwardCatchupStage1DrainFail($report, 'preflight_validation_failure', $e->getMessage());
-			}
-			if (arraySafeVal($gate, 'status') !== 'pass') return $this->forwardCatchupStage1DrainFail($report, 'apply_refusal', arraySafeVal($gate, 'message'));
-			$batch = $this->forwardCatchupStage1DrainBatchSummary($i, $classified, array('projected_block_mutations'=>$mutations,'projected_pending_earnings'=>$earnings), $totals);
-			$batch['approval_package_checksum'] = arraySafeVal($approval, 'approval_package_checksum');
-			$tx = app()->db->beginTransaction();
-			$report['failure_phase'] = 'mutation_execution';
-			$report['failing_transaction_rolled_back'] = false;
-			try {
-				$report['apply_commands_executed'] = true;
-				$applied = $this->forwardCatchupStage1ApplyMutations($mutations, $earnings);
-				$tx->commit();
-				// Record the commit before running any operation that can fail.  This is
-				// the authoritative mutation boundary for partial-drain reporting.
-				$report['committed_batches']++;
-				$report['any_prior_transaction_committed'] = true;
-				$report['prior_commit_state'] = 'committed';
-				$report['db_mutations'] = true;
-				$report['db_mutation_status'] = 'guarded_transaction_committed';
-				$batch['committed'] = true;
-				$batch['applied_generated_count'] = intval($applied['applied_generated_count']);
-				$batch['applied_orphan_count'] = intval($applied['applied_orphan_count']);
-				$batch['inserted_earnings_count'] = intval($applied['inserted_earnings_count']);
-				$batch['failure_phase'] = 'post_apply_verification';
-				$batch['verification_passed'] = false;
-				$batch['manual_verification_required'] = true;
-				$report['per_batch'][] = $batch;
-				$currentBatchIndex = count($report['per_batch']) - 1;
-			} catch (Exception $e) {
-				if ($tx && $tx->active) { $tx->rollback(); $report['failing_transaction_rolled_back'] = true; }
-				return $this->forwardCatchupStage1DrainFail($report, 'apply_refusal', $e->getMessage());
-			}
-			$report['failure_phase'] = 'post_apply_verification';
-			try {
-				$verification = $this->forwardCatchupStage1ApplyCloseoutVerification($mutations, $applied);
-			} catch (Exception $e) {
-				return $this->forwardCatchupStage1DrainFail($report, 'post_apply_verification_failure', $e->getMessage());
-			}
-			$report['per_batch'][$currentBatchIndex]['post_apply_db_verification'] = $verification;
-			$report['per_batch'][$currentBatchIndex]['reconciliation_status'] = arraySafeVal($verification, 'status') === 'pass' ? 'pass' : 'hold';
-			if ($report['per_batch'][$currentBatchIndex]['inserted_earnings_count'] !== $report['per_batch'][$currentBatchIndex]['projected_earnings_rows'] || $report['per_batch'][$currentBatchIndex]['reconciliation_status'] !== 'pass') return $this->forwardCatchupStage1DrainFail($report, 'post_apply_verification_failure', 'Post-apply verification failed.');
-			$report['per_batch'][$currentBatchIndex]['failure_phase'] = null;
-			$report['per_batch'][$currentBatchIndex]['verification_passed'] = true;
-			$report['per_batch'][$currentBatchIndex]['manual_verification_required'] = false;
-			$report['batches_applied']++;
-			$this->forwardCatchupStage1DrainAddTotals($report, $report['per_batch'][$currentBatchIndex]);
+
+		try {
+			$manifest = $this->forwardCatchupStage1DrainLoadJsonFile($options['manifest-file'], true);
+		} catch (Exception $e) {
+			return $this->forwardCatchupStage1DrainFail($report, 'manifest_load_failed', $e->getMessage());
 		}
-		if ($report['stop_reason'] === null) $report['stop_reason'] = $report['batches_applied'] >= intval($options['max-batches']) ? 'max_batches_reached' : 'preview_empty';
-		$preview = $this->forwardCatchupStage1ApplyDryrunReport();
-		$report['final_preview_selected_count'] = intval(arraySafeVal(arraySafeVal(arraySafeVal($preview, 'summary', array()), 'totals', array()), 'selected_count', 0));
+		$manifestValidation = BadpoolStage1Manifest::validate($manifest);
+		$report['manifest_validation'] = $manifestValidation;
+		if (arraySafeVal($manifestValidation, 'status') !== 'pass') return $this->forwardCatchupStage1DrainFail($report, 'manifest_validation_failed', implode(' ', arraySafeVal($manifestValidation, 'errors', array())));
+		$packageChecksum = BadpoolStage1Manifest::checksumValue(arraySafeVal($manifest, 'package_checksum'));
+		if ((string)$options['package-checksum'] !== (string)$packageChecksum) return $this->forwardCatchupStage1DrainFail($report, 'package_checksum_mismatch', 'Provided package checksum does not match the independently verified manifest.');
+		if (intval(arraySafeVal($manifest, 'coin_id')) !== intval(arraySafeVal($this->guard->getScope(), 'coin_id'))) return $this->forwardCatchupStage1DrainFail($report, 'coin_scope_mismatch', 'Manifest coin_id differs from command scope.');
+		if (arraySafeVal($manifest, 'approval_status') !== 'pass') return $this->forwardCatchupStage1DrainFail($report, 'manifest_not_approved', 'Manifest approval_status is not pass.');
+		if ((string)$options['operator-confirms-stage1-drain'] !== (string)arraySafeVal($manifest, 'exact_operator_confirmation')) return $this->forwardCatchupStage1DrainFail($report, 'operator_confirmation_required', 'Missing exact operator confirmation from the approved manifest.');
+
+		$report = $this->forwardCatchupStage1DrainPopulateManifestReport($report, $manifest, $options);
+		try {
+			$progress = is_file($options['progress-file']) ? $this->forwardCatchupStage1DrainLoadJsonFile($options['progress-file'], true) : BadpoolStage1Manifest::initialProgress($manifest);
+		} catch (Exception $e) {
+			return $this->forwardCatchupStage1DrainFail($report, 'progress_load_failed', $e->getMessage());
+		}
+		$progressValidation = BadpoolStage1Manifest::validateProgress($manifest, $progress);
+		if (arraySafeVal($progressValidation, 'status') !== 'pass') return $this->forwardCatchupStage1DrainFail($report, 'progress_manifest_mismatch', implode(' ', arraySafeVal($progressValidation, 'errors', array())));
+		$this->forwardCatchupStage1DrainSyncProgressReport($report, $progress);
+
+		$lock = $this->forwardCatchupStage1DrainAcquireLock($options['progress-file']);
+		if (!$lock) return $this->forwardCatchupStage1DrainFail($report, 'drain_lock_unavailable', 'Another Stage1 drain process holds the progress lock.');
+		try {
+			if (!is_file($options['progress-file'])) $this->forwardCatchupStage1DrainWriteProgress($options['progress-file'], $progress);
+			$batches = BadpoolStage1Manifest::batches($manifest);
+			foreach ($batches as $batchIndex => $batchIds) {
+				$batchNumber = $batchIndex + 1;
+				$parts = $this->forwardCatchupStage1DrainManifestBatchParts($manifest, $batchIds);
+				$report['batches_attempted'] = $batchNumber;
+				$report['failed_batch_index'] = $batchNumber;
+				$report['failure_phase'] = 'resume_preflight';
+				$state = $this->forwardCatchupStage1DrainInspectBatch($parts);
+				if (arraySafeVal($state, 'status') === 'mismatch') return $this->forwardCatchupStage1DrainFail($report, 'database_state_mismatch', arraySafeVal($state, 'message'));
+				$recordedCompleted = in_array(intval(arraySafeVal($batchIds, count($batchIds)-1)), arraySafeVal($progress, 'completed_block_ids', array()), true);
+				if ($recordedCompleted && arraySafeVal($state, 'status') !== 'completed') return $this->forwardCatchupStage1DrainFail($report, 'progress_database_mismatch', 'Progress reports batch '.$batchNumber.' complete but database verification does not.');
+
+				$rows = count(arraySafeVal($parts, 'earnings', array()));
+				$amount = $this->forwardCatchupStage1DrainEarningAmount(arraySafeVal($parts, 'earnings', array()));
+				if (arraySafeVal($state, 'status') === 'completed') {
+					if (!$recordedCompleted) {
+						$progress = BadpoolStage1Manifest::completeBatch($manifest, $progress, $batchNumber, $batchIds, $rows, $amount, $state);
+						$this->forwardCatchupStage1DrainSyncProgressReport($report, $progress);
+						$this->forwardCatchupStage1DrainWriteProgress($options['progress-file'], $progress);
+					}
+					$report['per_batch'][] = $this->forwardCatchupStage1DrainCompletedBatchReport($batchNumber, $batchIds, $rows, $amount, 'resume_verified', $state);
+					$report['batches_verified_on_resume']++;
+					continue;
+				}
+
+				$report['failure_phase'] = 'projection_reverification';
+				$freshClassified = $this->forwardCatchupStage1DryrunClassify(arraySafeVal($parts, 'candidates', array()));
+				$freshPlan = $this->forwardCatchupStage1DryrunPlan($freshClassified);
+				$projection = $this->forwardCatchupStage1DrainCompareBatchProjection($parts, $freshClassified, $freshPlan);
+				if (arraySafeVal($projection, 'status') !== 'pass') return $this->forwardCatchupStage1DrainFail($report, 'projection_mismatch', arraySafeVal($projection, 'message'));
+
+				$freshMutations = arraySafeVal($freshPlan, 'projected_block_mutations', array());
+				$freshEarnings = arraySafeVal($freshPlan, 'projected_pending_earnings', array());
+				$report['failure_phase'] = 'preflight_validation';
+				$gate = $this->forwardCatchupStage1ApplyPreflightGates($freshClassified, $freshMutations, $freshEarnings);
+				if (arraySafeVal($gate, 'status') !== 'pass') return $this->forwardCatchupStage1DrainFail($report, arraySafeVal($gate, 'abort_reason', 'apply_refusal'), arraySafeVal($gate, 'message'));
+
+				$tx = app()->db->beginTransaction();
+				if (!$tx) return $this->forwardCatchupStage1DrainFail($report, 'transaction_unavailable', 'Database transaction mechanism is unavailable.');
+				$report['failure_phase'] = 'mutation_execution';
+				$report['failing_transaction_rolled_back'] = false;
+				try {
+					$report['apply_commands_executed'] = true;
+					$applied = $this->forwardCatchupStage1ApplyMutations($freshMutations, $freshEarnings);
+					$tx->commit();
+					$report['committed_batches']++;
+					$report['any_prior_transaction_committed'] = true;
+					$report['prior_commit_state'] = 'committed';
+					$report['db_mutations'] = true;
+					$report['db_mutation_status'] = 'guarded_transaction_committed';
+				} catch (Exception $e) {
+					if ($tx->active) { $tx->rollback(); $report['failing_transaction_rolled_back'] = true; }
+					return $this->forwardCatchupStage1DrainFail($report, 'mutation_failed_rolled_back', $e->getMessage());
+				}
+
+				$report['failure_phase'] = 'post_apply_verification';
+				$verification = $this->forwardCatchupStage1ApplyCloseoutVerification($freshMutations, $applied);
+				if (arraySafeVal($verification, 'status') !== 'pass' || intval(arraySafeVal($applied, 'inserted_earnings_count')) !== $rows) return $this->forwardCatchupStage1DrainFail($report, 'post_apply_verification_failure', 'Committed batch did not reconcile to the approved projection.');
+				$progress = BadpoolStage1Manifest::completeBatch($manifest, $progress, $batchNumber, $batchIds, $rows, $amount, $verification);
+				$this->forwardCatchupStage1DrainSyncProgressReport($report, $progress);
+				try {
+					$this->forwardCatchupStage1DrainWriteProgress($options['progress-file'], $progress);
+				} catch (Exception $e) {
+					return $this->forwardCatchupStage1DrainFail($report, 'progress_write_failed_after_commit', $e->getMessage());
+				}
+				$report['per_batch'][] = $this->forwardCatchupStage1DrainCompletedBatchReport($batchNumber, $batchIds, $rows, $amount, 'committed', $verification);
+				$report['batches_applied']++;
+			}
+		} catch (Exception $e) {
+			return $this->forwardCatchupStage1DrainFail($report, 'progress_or_resume_failure', $e->getMessage());
+		} finally {
+			flock($lock, LOCK_UN);
+			fclose($lock);
+		}
+
+		$report['completed_batch_count'] = intval(arraySafeVal($progress, 'completed_batch_count'));
+		$report['completed_block_ids'] = arraySafeVal($progress, 'completed_block_ids', array());
+		$report['remaining_block_ids'] = arraySafeVal($progress, 'remaining_block_ids', array());
+		$report['cumulative_rows_created'] = intval(arraySafeVal($progress, 'cumulative_rows_created'));
+		$report['cumulative_amount'] = arraySafeVal($progress, 'cumulative_amount');
+		$report['total_inserted_earnings'] = $report['cumulative_rows_created'];
+		$report['excluded_newer_candidate_count'] = $this->forwardCatchupStage1DrainNewerCandidateCount($manifest);
+		$report['final_reconciliation'] = $this->forwardCatchupStage1DrainFinalReconciliation($manifest, $progress);
+		if (arraySafeVal($report['final_reconciliation'], 'status') !== 'pass') return $this->forwardCatchupStage1DrainFail($report, 'final_reconciliation_failed', 'Final cohort rows, recipients, or total amount differ from the approved manifest.');
 		$report['status'] = 'pass';
+		$report['stop_reason'] = 'manifest_complete';
 		$report['failed_batch_index'] = null;
 		$report['failure_phase'] = null;
+		$report['retry_safe'] = true;
+		$report['same_manifest_confirmation_required'] = true;
 		return BadpoolGuardReport::finalize($report);
 	}
 
 	private function forwardCatchupStage1DrainContextArgs($args)
 	{
 		$result = array();
-		foreach ($args as $arg) {
-			if (preg_match('/^--batch-limit=(.*)$/', $arg, $m)) $result[] = '--limit='.$m[1];
-			elseif (preg_match('/^--(coin-id|format)=/', $arg)) $result[] = $arg;
-		}
+		foreach ($args as $arg) if (preg_match('/^--(coin-id|format)=/', $arg)) $result[] = $arg;
 		return $result;
 	}
 
 	private function forwardCatchupStage1DrainOptions($args, $apply)
 	{
-		$allowed = array('coin-id','format','max-batches','batch-limit');
-		if ($apply) $allowed[] = 'operator-confirms-stage1-drain';
-		$options = array('batch-limit' => self::FORWARD_CATCHUP_STAGE1_DRYRUN_MAX_LIMIT);
+		$allowed = $apply ? array('coin-id','format','manifest-file','progress-file','package-checksum','operator-confirms-stage1-drain') : array('coin-id','format','internal-batch-size');
+		$options = array('internal-batch-size' => BadpoolStage1Manifest::DEFAULT_BATCH_SIZE);
 		foreach ($args as $arg) {
 			if (!preg_match('/^--([^=]+)=(.*)$/', $arg, $m)) { if (strpos($arg, '--') === 0) $options['__parse_error'] = 'Option requires an explicit value: '.$arg; continue; }
 			$name = strtolower($m[1]);
 			if (!in_array($name, $allowed, true)) $options['__parse_error'] = 'Unknown option refused: --'.$m[1];
-			elseif (isset($options[$name]) && $name !== 'batch-limit') $options['__parse_error'] = 'Duplicate option refused: --'.$m[1];
+			elseif (isset($options[$name]) && $name !== 'internal-batch-size') $options['__parse_error'] = 'Duplicate option refused: --'.$m[1];
 			else $options[$name] = $m[2];
 		}
 		return $options;
@@ -2275,10 +2357,13 @@ class BadpoolGuardCommand extends CConsoleCommand
 	{
 		if ($this->guard->isAllCoinsPreview()) return $this->forwardCatchupStage1DrainFail($report, 'coin_id_required', 'Stage1 drain requires --coin-id and refuses broad/all-coin scope.');
 		if ($this->guard->getFormat() !== 'json') return $this->forwardCatchupStage1DrainFail($report, 'json_format_required', 'Stage1 drain supports --format=json only.');
-		foreach (array('max-batches','batch-limit') as $name) if (!isset($options[$name]) || !preg_match('/^[0-9]+$/', (string)$options[$name]) || intval($options[$name]) <= 0) return $this->forwardCatchupStage1DrainFail($report, 'missing_required_option', 'Missing or invalid --'.$name.'.');
-		if (intval($options['batch-limit']) > self::FORWARD_CATCHUP_STAGE1_DRYRUN_MAX_LIMIT) return $this->forwardCatchupStage1DrainFail($report, 'limit_gt_50', '--batch-limit maximum is 50.');
-		if (intval($options['max-batches']) > self::FORWARD_CATCHUP_STAGE1_DRAIN_SAFE_MAX_BATCHES) return $this->forwardCatchupStage1DrainFail($report, 'max_batches_safe_cap_exceeded', '--max-batches exceeds configured safe cap '.self::FORWARD_CATCHUP_STAGE1_DRAIN_SAFE_MAX_BATCHES.'.');
-		if ($apply && arraySafeVal($options, 'operator-confirms-stage1-drain') !== self::FORWARD_CATCHUP_STAGE1_DRAIN_CONFIRMATION) return $this->forwardCatchupStage1DrainFail($report, 'operator_confirmation_required', 'Missing exact --operator-confirms-stage1-drain='.self::FORWARD_CATCHUP_STAGE1_DRAIN_CONFIRMATION.'.');
+		if (!$apply) {
+			if (!preg_match('/^[0-9]+$/', (string)arraySafeVal($options, 'internal-batch-size')) || intval($options['internal-batch-size']) <= 0 || intval($options['internal-batch-size']) > self::FORWARD_CATCHUP_STAGE1_MANIFEST_MAX_BATCH_SIZE) return $this->forwardCatchupStage1DrainFail($report, 'invalid_internal_batch_size', '--internal-batch-size must be between 1 and '.self::FORWARD_CATCHUP_STAGE1_MANIFEST_MAX_BATCH_SIZE.'.');
+			return true;
+		}
+		foreach (array('manifest-file','progress-file','package-checksum','operator-confirms-stage1-drain') as $name) if (!isset($options[$name]) || $options[$name] === '') return $this->forwardCatchupStage1DrainFail($report, 'missing_required_option', 'Missing required --'.$name.'.');
+		if (!preg_match('/^[a-f0-9]{64}$/i', (string)$options['package-checksum'])) return $this->forwardCatchupStage1DrainFail($report, 'invalid_package_checksum', '--package-checksum must be a SHA-256 hex value.');
+		if ($options['manifest-file'] === $options['progress-file']) return $this->forwardCatchupStage1DrainFail($report, 'artifact_path_collision', 'Manifest and progress files must be different paths.');
 		return true;
 	}
 
@@ -2290,9 +2375,11 @@ class BadpoolGuardCommand extends CConsoleCommand
 		$report['command'] = $command;
 		$report['read_only'] = $readOnly;
 		$report['coin_id'] = arraySafeVal($this->guard->getScope(), 'coin_id');
-		$report['batch_limit'] = intval(arraySafeVal($options, 'batch-limit', self::FORWARD_CATCHUP_STAGE1_DRYRUN_MAX_LIMIT));
-		$report['max_batches'] = intval(arraySafeVal($options, 'max-batches', 0));
+		$report['internal_batch_size'] = intval(arraySafeVal($options, 'internal-batch-size', 0));
+		$report['manifest_file'] = arraySafeVal($options, 'manifest-file');
+		$report['progress_file'] = arraySafeVal($options, 'progress-file');
 		foreach (array('batches_attempted','batches_applied','committed_batches','total_selected','total_generated','total_orphan','total_projected_earnings','total_inserted_earnings','final_preview_selected_count') as $k) $report[$k] = 0;
+		$report['batches_verified_on_resume'] = 0;
 		$report['apply_commands_executed'] = false;
 		$report['db_mutations'] = false;
 		$report['db_mutation_status'] = 'none';
@@ -2303,49 +2390,288 @@ class BadpoolGuardCommand extends CConsoleCommand
 		$report['prior_commit_state'] = 'none';
 		$report['manual_verification_required'] = false;
 		$report['manual_reconciliation_required'] = false;
-		$report['total_projected_pending_amount'] = 0.0;
+		$report['total_projected_pending_amount'] = BadpoolStage1Manifest::normalizeAmount('0');
 		$report['stop_reason'] = null;
 		$report['per_batch'] = array();
 		$report['account_credit'] = false; $report['payout_rows_created'] = false; $report['wallet_sends'] = false; $report['backend_loops_run'] = false; $report['shares_deleted'] = false;
 		return $report;
 	}
 
-	private function forwardCatchupStage1DrainBatchSummary($number, $classified, $plan, $totals)
+	private function forwardCatchupStage1ManifestRecords($classified, $earnings)
 	{
-		$generated = intval(arraySafeVal($totals, 'stage1_import_generate_count', 0)) + intval(arraySafeVal($totals, 'stage1_import_immature_count', 0));
-		$projectedEarnings = arraySafeVal($plan, 'projected_pending_earnings', array());
-		$selectedScope = array('coin_id'=>intval(arraySafeVal($this->guard->getScope(), 'coin_id')),'blocks'=>$this->forwardCatchupStage1BatchScopeBlocks($classified));
-		return array('batch_number'=>$number,'selected_scope'=>$selectedScope,'selected_count'=>intval(arraySafeVal($totals,'selected_count',0)),'projected_generated_rows'=>$generated,'projected_earnings_rows'=>count($projectedEarnings),'projected_orphan_rows'=>intval(arraySafeVal($totals,'stage1_mark_orphan_no_earnings_count',0)),'projected_pending_amount'=>floatval(arraySafeVal($totals,'projected_pending_earnings_amount_gross',0)),'batch_scope_checksum'=>BadpoolGuardReport::checksum($selectedScope),'projected_mutation_checksum'=>BadpoolGuardReport::checksum($this->forwardCatchupStage1StableProjectedMutations(arraySafeVal($plan,'projected_block_mutations',array()))),'projected_earnings_checksum'=>BadpoolGuardReport::checksum($projectedEarnings),'committed'=>false,'applied_generated_count'=>0,'applied_orphan_count'=>0,'inserted_earnings_count'=>0,'failure_phase'=>null,'verification_passed'=>null,'manual_verification_required'=>false,'reconciliation_status'=>'planned');
+		$earningsByBlock = array();
+		foreach ($earnings as $earning) $earningsByBlock[intval(arraySafeVal($earning, 'blockid'))] = $earning;
+		$records = array();
+		foreach ($classified as $item) {
+			$blockId = intval(arraySafeVal($item, 'id'));
+			$daemon = arraySafeVal($item, 'daemon', array());
+			$earning = arraySafeVal($earningsByBlock, $blockId, array());
+			$records[] = array(
+				'block_id' => $blockId,
+				'height' => intval(arraySafeVal($item, 'height')),
+				'time' => intval(arraySafeVal($item, 'time')),
+				'blockhash' => (string)arraySafeVal($item, 'blockhash'),
+				'userid' => intval(arraySafeVal($item, 'userid')),
+				'workerid' => intval(arraySafeVal($item, 'workerid')),
+				'current_category' => (string)arraySafeVal($item, 'category'),
+				'classification' => (string)arraySafeVal($item, 'classification'),
+				'projected_txhash' => arraySafeVal($daemon, 'txid'),
+				'projected_block_category' => arraySafeVal($item, 'classification') === 'stage1_mark_orphan_no_earnings' ? 'orphan' : 'immature',
+				'projected_earning_amount' => empty($earning) ? null : BadpoolStage1Manifest::normalizeAmount(arraySafeVal($earning, 'amount')),
+				'attribution_model' => 'block_userid_single_recipient',
+			);
+		}
+		return $records;
 	}
 
-	private function forwardCatchupStage1DrainAddTotals(&$report, $batch)
+	private function forwardCatchupStage1ManifestSnapshot($checkpoint, $candidates)
 	{
-		$report['total_selected'] += intval($batch['selected_count']);
-		$report['total_generated'] += intval($batch['projected_generated_rows']);
-		$report['total_orphan'] += intval($batch['projected_orphan_rows']);
-		$report['total_projected_earnings'] += intval(arraySafeVal($batch, 'projected_earnings_rows', $batch['projected_generated_rows']));
-		$report['total_inserted_earnings'] += intval(arraySafeVal($batch, 'inserted_earnings_count', 0));
-		$report['total_projected_pending_amount'] += floatval($batch['projected_pending_amount']);
+		$last = empty($candidates) ? array() : $candidates[count($candidates) - 1];
+		return array(
+			'checkpoint_last_payout_time' => arraySafeVal($checkpoint, 'last_payout_time'),
+			'checkpoint_source' => arraySafeVal($checkpoint, 'checkpoint_source'),
+			'candidate_query_completed_before_apply' => true,
+			'maximum_selected_order_key' => array(
+				'height' => arraySafeVal($last, 'height'),
+				'time' => arraySafeVal($last, 'time'),
+				'id' => arraySafeVal($last, 'id'),
+			),
+			'new_candidates_after_snapshot_are_excluded' => true,
+		);
+	}
+
+	private function forwardCatchupStage1DrainPopulateManifestReport($report, $manifest, $options)
+	{
+		$report['package_checksum'] = BadpoolStage1Manifest::checksumValue(arraySafeVal($manifest, 'package_checksum'));
+		$report['selection_checksum'] = BadpoolStage1Manifest::checksumValue(arraySafeVal($manifest, 'selection_checksum'));
+		$report['intended_mutation_checksum'] = BadpoolStage1Manifest::checksumValue(arraySafeVal($manifest, 'intended_mutation_checksum'));
+		$report['selected_count'] = intval(arraySafeVal($manifest, 'selected_count'));
+		$report['selected_block_ids'] = arraySafeVal($manifest, 'selected_block_ids', array());
+		$report['internal_batch_size'] = intval(arraySafeVal($manifest, 'internal_batch_size'));
+		$report['projected_batch_count'] = intval(arraySafeVal($manifest, 'projected_batch_count'));
+		$report['projected_earning_row_count'] = intval(arraySafeVal($manifest, 'projected_earning_row_count'));
+		$report['projected_recipient_totals'] = arraySafeVal($manifest, 'projected_recipient_totals', array());
+		$report['projected_total_amount'] = arraySafeVal($manifest, 'projected_total_amount');
+		$report['total_selected'] = $report['selected_count'];
+		$report['total_projected_earnings'] = $report['projected_earning_row_count'];
+		$report['total_projected_pending_amount'] = $report['projected_total_amount'];
+		foreach (arraySafeVal($manifest, 'selected_records', array()) as $record) {
+			if (arraySafeVal($record, 'classification') === 'stage1_mark_orphan_no_earnings') $report['total_orphan']++;
+			else $report['total_generated']++;
+		}
+		$report['exact_operator_confirmation_verified'] = true;
+		$report['wallet_reads'] = false;
+		$report['chain_reads'] = $report['selected_count'] > 0;
+		$report['daemon_rpc_used'] = $report['selected_count'] > 0;
+		$report['same_manifest_confirmation_required'] = true;
+		$report['retry_safe'] = true;
+		return $report;
+	}
+
+	private function forwardCatchupStage1DrainSyncProgressReport(&$report, $progress)
+	{
+		$report['completed_batch_count'] = intval(arraySafeVal($progress, 'completed_batch_count'));
+		$report['completed_block_ids'] = arraySafeVal($progress, 'completed_block_ids', array());
+		$report['remaining_block_ids'] = arraySafeVal($progress, 'remaining_block_ids', array());
+		$report['cumulative_rows_created'] = intval(arraySafeVal($progress, 'cumulative_rows_created'));
+		$report['cumulative_amount'] = arraySafeVal($progress, 'cumulative_amount');
+	}
+
+	private function forwardCatchupStage1DrainLoadJsonFile($path, $mustExist)
+	{
+		$this->forwardCatchupStage1DrainValidateArtifactPath($path, $mustExist);
+		$size = filesize($path);
+		if ($size === false || $size > self::FORWARD_CATCHUP_STAGE1_MANIFEST_MAX_BYTES) throw new CException('JSON artifact exceeds the 64 MiB safety limit.');
+		$json = file_get_contents($path);
+		if ($json === false) throw new CException('Unable to read JSON artifact.');
+		$data = json_decode($json, true);
+		if (!is_array($data) || json_last_error() !== JSON_ERROR_NONE) throw new CException('JSON artifact is invalid: '.json_last_error_msg().'.');
+		return $data;
+	}
+
+	private function forwardCatchupStage1DrainValidateArtifactPath($path, $mustExist)
+	{
+		if (!is_string($path) || $path === '' || substr($path, 0, 1) !== '/' || strpos($path, "\0") !== false) throw new CException('Artifact path must be an absolute path.');
+		if (strtolower(pathinfo($path, PATHINFO_EXTENSION)) !== 'json') throw new CException('Artifact path must end in .json.');
+		$parent = realpath(dirname($path));
+		if ($parent === false || !is_dir($parent)) throw new CException('Artifact parent directory does not exist.');
+		if ($mustExist && (!is_file($path) || is_link($path))) throw new CException('Required JSON artifact is missing, not a regular file, or is a symlink.');
+		if (!$mustExist && file_exists($path) && (!is_file($path) || is_link($path))) throw new CException('Progress artifact exists but is not a regular file or is a symlink.');
+		if (!$mustExist && !is_writable($parent)) throw new CException('Progress artifact parent directory is not writable.');
+		return true;
+	}
+
+	private function forwardCatchupStage1DrainAcquireLock($progressPath)
+	{
+		try { $this->forwardCatchupStage1DrainValidateArtifactPath($progressPath, false); }
+		catch (Exception $e) { return false; }
+		$lock = @fopen($progressPath.'.lock', 'c');
+		if (!$lock) return false;
+		if (!flock($lock, LOCK_EX | LOCK_NB)) { fclose($lock); return false; }
+		return $lock;
+	}
+
+	private function forwardCatchupStage1DrainWriteProgress($path, $progress)
+	{
+		$this->forwardCatchupStage1DrainValidateArtifactPath($path, false);
+		$json = json_encode($progress, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+		if ($json === false) throw new CException('Unable to encode Stage1 progress JSON.');
+		$temp = $path.'.tmp.'.getmypid();
+		if (file_put_contents($temp, $json."\n", LOCK_EX) === false) throw new CException('Unable to write temporary Stage1 progress file.');
+		if (!@rename($temp, $path)) { @unlink($temp); throw new CException('Unable to atomically publish Stage1 progress file.'); }
+	}
+
+	private function forwardCatchupStage1DrainManifestBatchParts($manifest, $batchIds)
+	{
+		$wanted = array(); foreach ($batchIds as $id) $wanted[intval($id)] = true;
+		$parts = array('records'=>array(), 'candidates'=>array(), 'mutations'=>array(), 'earnings'=>array());
+		foreach (arraySafeVal($manifest, 'selected_records', array()) as $record) if (isset($wanted[intval(arraySafeVal($record, 'block_id'))])) {
+			$parts['records'][] = $record;
+			$parts['candidates'][] = array('id'=>intval(arraySafeVal($record,'block_id')), 'height'=>intval(arraySafeVal($record,'height')), 'time'=>intval(arraySafeVal($record,'time')), 'blockhash'=>arraySafeVal($record,'blockhash'), 'userid'=>intval(arraySafeVal($record,'userid')), 'workerid'=>intval(arraySafeVal($record,'workerid')), 'category'=>'new');
+		}
+		foreach (arraySafeVal($manifest, 'projected_block_mutations', array()) as $mutation) if (isset($wanted[intval(arraySafeVal($mutation, 'blockid'))])) $parts['mutations'][] = $mutation;
+		foreach (arraySafeVal($manifest, 'projected_earning_rows', array()) as $earning) if (isset($wanted[intval(arraySafeVal($earning, 'blockid'))])) $parts['earnings'][] = $earning;
+		return $parts;
+	}
+
+	private function forwardCatchupStage1DrainInspectBatch($parts)
+	{
+		$pending = 0; $completed = 0;
+		$earningsByBlock = array();
+		foreach (arraySafeVal($parts, 'earnings', array()) as $earning) $earningsByBlock[intval(arraySafeVal($earning, 'blockid'))] = $earning;
+		foreach (arraySafeVal($parts, 'records', array()) as $record) {
+			$id = intval(arraySafeVal($record, 'block_id'));
+			$columns = array('id','coin_id','userid','height','time','blockhash','txhash','category','amount');
+			if ($this->guard->columnExists('blocks', 'workerid')) $columns[] = 'workerid';
+			$row = $this->guard->selectRow('SELECT '.$this->guard->selectColumns('blocks', $columns).' FROM '.$this->guard->qtable('blocks').' WHERE '.$this->guard->qcol('id').'=:id', array(':id'=>$id));
+			if (!$row) return array('status'=>'mismatch', 'message'=>'Selected block '.$id.' no longer exists.');
+			foreach (array('coin_id','userid','height','time','blockhash') as $field) if ((string)arraySafeVal($row, $field) !== (string)arraySafeVal($record, $field === 'coin_id' ? 'coin_id' : $field, $field === 'coin_id' ? arraySafeVal($this->guard->getScope(), 'coin_id') : null)) return array('status'=>'mismatch', 'message'=>'Selected block '.$id.' immutable field changed: '.$field.'.');
+			if ($this->guard->columnExists('blocks', 'workerid') && intval(arraySafeVal($row, 'workerid')) !== intval(arraySafeVal($record, 'workerid'))) return array('status'=>'mismatch', 'message'=>'Selected block '.$id.' worker attribution changed.');
+			$linked = $this->guard->selectAll('SELECT '.$this->guard->selectColumns('earnings', array('id','userid','coinid','blockid','amount','status')).' FROM '.$this->guard->qtable('earnings').' WHERE '.$this->guard->qcol('blockid').'=:blockid ORDER BY '.$this->guard->qcol('id').' ASC', array(':blockid'=>$id));
+			if (arraySafeVal($row, 'category') === 'new' && count($linked) === 0) { $pending++; continue; }
+
+			$class = arraySafeVal($record, 'classification');
+			if ($class === 'stage1_mark_orphan_no_earnings') {
+				if (arraySafeVal($row, 'category') !== 'orphan' || count($linked) !== 0) return array('status'=>'mismatch', 'message'=>'Previously handled orphan block '.$id.' does not match manifest closeout state.');
+				$completed++; continue;
+			}
+			$earning = arraySafeVal($earningsByBlock, $id, array());
+			if (arraySafeVal($row, 'category') !== 'immature' || (string)arraySafeVal($row, 'txhash') !== (string)arraySafeVal($record, 'projected_txhash') || count($linked) !== 1) return array('status'=>'mismatch', 'message'=>'Previously handled generated block '.$id.' does not match manifest closeout state.');
+			$actual = $linked[0];
+			try { $blockAmount = BadpoolStage1Manifest::normalizeAmount(arraySafeVal($row, 'amount')); $earningAmount = BadpoolStage1Manifest::normalizeAmount(arraySafeVal($actual, 'amount')); } catch (Exception $e) { return array('status'=>'mismatch', 'message'=>'Completed block '.$id.' has an invalid amount.'); }
+			if ($blockAmount !== BadpoolStage1Manifest::normalizeAmount(arraySafeVal($earning, 'amount')) || $earningAmount !== BadpoolStage1Manifest::normalizeAmount(arraySafeVal($earning, 'amount')) || intval(arraySafeVal($actual, 'userid')) !== intval(arraySafeVal($earning, 'userid')) || intval(arraySafeVal($actual, 'coinid')) !== intval(arraySafeVal($earning, 'coinid')) || intval(arraySafeVal($actual, 'status')) !== 0) return array('status'=>'mismatch', 'message'=>'Completed earning attribution or amount differs for block '.$id.'.');
+			$completed++;
+		}
+		$count = count(arraySafeVal($parts, 'records', array()));
+		if ($pending === $count) return array('status'=>'pending', 'pending_count'=>$pending, 'completed_count'=>0);
+		if ($completed === $count) return array('status'=>'completed', 'pending_count'=>0, 'completed_count'=>$completed, 'verification'=>'database_matches_manifest_closeout');
+		return array('status'=>'mismatch', 'message'=>'Batch contains a mixed pending/completed state and fails closed.');
+	}
+
+	private function forwardCatchupStage1DrainCompareBatchProjection($parts, $freshClassified, $freshPlan)
+	{
+		$freshMutations = $this->forwardCatchupStage1ManifestProjectedMutations(arraySafeVal($freshPlan, 'projected_block_mutations', array()));
+		$approvedMutations = arraySafeVal($parts, 'mutations', array());
+		$freshEarnings = arraySafeVal($freshPlan, 'projected_pending_earnings', array());
+		$approvedEarnings = arraySafeVal($parts, 'earnings', array());
+		$freshMutationChecksum = BadpoolStage1Manifest::checksum($freshMutations, 'batch projection comparison');
+		$approvedMutationChecksum = BadpoolStage1Manifest::checksum($approvedMutations, 'batch projection comparison');
+		$freshEarningChecksum = BadpoolStage1Manifest::checksum($freshEarnings, 'batch projection comparison');
+		$approvedEarningChecksum = BadpoolStage1Manifest::checksum($approvedEarnings, 'batch projection comparison');
+		if ($freshMutationChecksum['value'] !== $approvedMutationChecksum['value']) return array('status'=>'fail', 'message'=>'Fresh block mutation projection differs from the approved manifest batch.');
+		if ($freshEarningChecksum['value'] !== $approvedEarningChecksum['value']) return array('status'=>'fail', 'message'=>'Fresh earning amount or attribution differs from the approved manifest batch.');
+		return array('status'=>'pass');
+	}
+
+	private function forwardCatchupStage1ManifestProjectedMutations($mutations)
+	{
+		$stable = $this->forwardCatchupStage1StableProjectedMutations($mutations);
+		foreach ($stable as &$mutation) if (in_array(arraySafeVal($mutation, 'classification'), array('stage1_import_generate','stage1_import_immature'), true)) $mutation['classification'] = 'stage1_import_reward';
+		unset($mutation);
+		return $stable;
+	}
+
+	private function forwardCatchupStage1DrainEarningAmount($earnings)
+	{
+		$total = BadpoolStage1Manifest::normalizeAmount('0');
+		foreach ($earnings as $earning) $total = BadpoolStage1Manifest::addAmounts($total, arraySafeVal($earning, 'amount', '0'));
+		return $total;
+	}
+
+	private function forwardCatchupStage1DrainCompletedBatchReport($number, $ids, $rows, $amount, $mode, $verification)
+	{
+		return array('batch_number'=>intval($number), 'block_ids'=>array_values($ids), 'selected_count'=>count($ids), 'rows_created'=>intval($rows), 'amount'=>BadpoolStage1Manifest::normalizeAmount($amount), 'completion_mode'=>$mode, 'committed'=>$mode === 'committed', 'verification_passed'=>true, 'reconciliation_status'=>'pass', 'post_apply_db_verification'=>$verification, 'additional_operator_confirmation_required'=>false);
+	}
+
+	private function forwardCatchupStage1DrainNewerCandidateCount($manifest)
+	{
+		$checkpoint = arraySafeVal(arraySafeVal($manifest, 'snapshot_boundary', array()), 'checkpoint_last_payout_time');
+		$current = $this->forwardCatchupStage1DryrunCandidates($checkpoint, null);
+		$selected = array(); foreach (arraySafeVal($manifest, 'selected_block_ids', array()) as $id) $selected[intval($id)] = true;
+		$count = 0; foreach ($current as $candidate) if (!isset($selected[intval(arraySafeVal($candidate, 'id'))])) $count++;
+		return $count;
+	}
+
+	private function forwardCatchupStage1DrainExcludedCandidateCount($checkpoint, $records)
+	{
+		$selected = array(); foreach ($records as $record) $selected[intval(arraySafeVal($record, 'block_id'))] = true;
+		$count = 0;
+		foreach ($this->forwardCatchupStage1DryrunCandidates($checkpoint, null) as $candidate) if (!isset($selected[intval(arraySafeVal($candidate, 'id'))])) $count++;
+		return $count;
+	}
+
+	private function forwardCatchupStage1DrainFinalReconciliation($manifest, $progress)
+	{
+		$selected = arraySafeVal($manifest, 'selected_block_ids', array());
+		$completed = arraySafeVal($progress, 'completed_block_ids', array());
+		$actualEarnings = array();
+		foreach (array_chunk($selected, BadpoolStage1Manifest::DEFAULT_BATCH_SIZE) as $chunk) {
+			if (empty($chunk)) continue;
+			$params = array();
+			$holders = $this->forwardCatchupStage1IdPlaceholders($chunk, 'final', $params);
+			$rows = $this->guard->selectAll('SELECT '.$this->guard->selectColumns('earnings', array('userid','coinid','blockid','amount','status')).' FROM '.$this->guard->qtable('earnings').' WHERE '.$this->guard->qcol('blockid').' IN ('.implode(',', $holders).') ORDER BY '.$this->guard->qcol('blockid').' ASC', $params);
+			foreach ($rows as $row) $actualEarnings[] = array('userid'=>intval(arraySafeVal($row,'userid')), 'coinid'=>intval(arraySafeVal($row,'coinid')), 'blockid'=>intval(arraySafeVal($row,'blockid')), 'amount'=>BadpoolStage1Manifest::normalizeAmount(arraySafeVal($row,'amount')), 'status'=>intval(arraySafeVal($row,'status')), 'mature_time'=>null, 'attribution_model'=>'block_userid_single_recipient', 'attribution_model_requires_operator_confirmation'=>true, 'historical_evidence_mixed'=>true, 'backendblocknew_not_used'=>true, 'fee_policy'=>'not_applied_in_dryrun', 'create_time'=>$this->forwardCatchupStage1ManifestCreateTime($manifest, intval(arraySafeVal($row,'blockid'))));
+		}
+		usort($actualEarnings, function($a,$b){ return intval($a['blockid']) - intval($b['blockid']); });
+		$projected = arraySafeVal($manifest, 'projected_earning_rows', array());
+		usort($projected, function($a,$b){ return intval($a['blockid']) - intval($b['blockid']); });
+		$actualTotal = $this->forwardCatchupStage1DrainEarningAmount($actualEarnings);
+		$actualRecipients = BadpoolStage1Manifest::recipientTotalsForEarnings($actualEarnings);
+		$rowsMatch = BadpoolStage1Manifest::checksum($actualEarnings, 'final rows')['value'] === BadpoolStage1Manifest::checksum($projected, 'final rows')['value'];
+		$recipientsMatch = BadpoolStage1Manifest::checksum($actualRecipients, 'final recipients')['value'] === BadpoolStage1Manifest::checksum(arraySafeVal($manifest,'projected_recipient_totals',array()), 'final recipients')['value'];
+		$pass = count($completed) === count($selected) && empty(arraySafeVal($progress, 'remaining_block_ids', array())) && $rowsMatch && $recipientsMatch && $actualTotal === (string)arraySafeVal($manifest, 'projected_total_amount');
+		return array('status'=>$pass ? 'pass' : 'hold', 'selected_count'=>count($selected), 'completed_count'=>count($completed), 'projected_earning_rows'=>count($projected), 'actual_earning_rows'=>count($actualEarnings), 'rows_match'=>$rowsMatch, 'projected_recipient_totals'=>arraySafeVal($manifest,'projected_recipient_totals',array()), 'actual_recipient_totals'=>$actualRecipients, 'recipients_match'=>$recipientsMatch, 'projected_total_amount'=>arraySafeVal($manifest,'projected_total_amount'), 'actual_total_amount'=>$actualTotal, 'remaining_block_ids'=>arraySafeVal($progress,'remaining_block_ids',array()));
+	}
+
+	private function forwardCatchupStage1ManifestCreateTime($manifest, $blockId)
+	{
+		foreach (arraySafeVal($manifest, 'selected_records', array()) as $record) if (intval(arraySafeVal($record, 'block_id')) === intval($blockId)) return intval(arraySafeVal($record, 'time'));
+		return null;
 	}
 
 	private function forwardCatchupStage1DrainFail($report, $reason, $message)
 	{
-		$committed = intval(arraySafeVal($report, 'committed_batches', 0)) > 0 || arraySafeVal($report, 'db_mutations', false) === true;
-		$report['status'] = $committed ? 'hold' : 'refused';
+		$committedThisRun = intval(arraySafeVal($report, 'committed_batches', 0)) > 0 || arraySafeVal($report, 'db_mutations', false) === true;
+		$verifiedPrior = !empty(arraySafeVal($report, 'completed_block_ids', array()));
+		$hasCommittedCohortProgress = $committedThisRun || $verifiedPrior;
+		$report['status'] = $hasCommittedCohortProgress ? 'hold' : 'refused';
 		$report['stop_reason'] = $reason;
-		$report['db_mutations'] = $committed;
-		$report['db_mutation_status'] = $committed ? 'guarded_transaction_committed_partial_drain' : 'none';
-		$report['any_prior_transaction_committed'] = $committed;
-		$report['prior_commit_state'] = $committed ? 'committed' : 'none';
-		$report['manual_verification_required'] = $committed;
-		$report['manual_reconciliation_required'] = $committed;
-		if ($committed) {
-			$report['apply_commands_executed'] = true;
-			$report['operator_warning'] = 'One or more Stage1 drain transactions committed before this failure; stop and manually verify/reconcile database state before any retry.';
-			$message .= ' Prior database mutation committed; manual verification and reconciliation required.';
+		$report['failure_point'] = arraySafeVal($report, 'failure_phase');
+		$report['failure_reason'] = $reason;
+		$report['db_mutations'] = $committedThisRun;
+		$report['db_mutation_status'] = $committedThisRun ? 'guarded_transaction_committed_partial_drain' : ($verifiedPrior ? 'none_this_run_verified_prior_manifest_progress' : 'none');
+		$report['any_prior_transaction_committed'] = $hasCommittedCohortProgress;
+		$report['prior_commit_state'] = $committedThisRun ? 'committed_this_run' : ($verifiedPrior ? 'verified_prior_manifest_progress' : 'none');
+		$report['manual_verification_required'] = false;
+		$report['manual_reconciliation_required'] = false;
+		$report['retry_safe'] = true;
+		$report['same_manifest_confirmation_required'] = true;
+		if ($hasCommittedCohortProgress) {
+			if ($committedThisRun) $report['apply_commands_executed'] = true;
+			$report['operator_warning'] = 'One or more verified Stage1 batches committed before this stop. Retry is safe only with the identical manifest, package checksum, progress path, and exact manifest confirmation.';
 		}
 		$report['account_credit'] = false; $report['payout_rows_created'] = false; $report['wallet_sends'] = false; $report['backend_loops_run'] = false; $report['shares_deleted'] = false;
-		$report['errors'][] = $message;
+		$this->guard->addError($message);
 		return BadpoolGuardReport::finalize($report);
 	}
 
@@ -5301,7 +5627,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 		return $limit;
 	}
 
-	private function forwardCatchupStage1DryrunCandidates($lastPayoutTime, $limit)
+	private function forwardCatchupStage1DryrunCandidates($lastPayoutTime, $limit=null)
 	{
 		if (!$this->guard->tableExists('blocks') || $lastPayoutTime === null || !is_numeric($lastPayoutTime)) {
 			return array();
@@ -5317,6 +5643,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 			'B.'.$this->guard->qcol('id').' AS id',
 			'B.'.$this->guard->qcol('time').' AS time',
 			'B.'.$this->guard->qcol('blockhash').' AS blockhash',
+			'B.'.$this->guard->qcol('category').' AS category',
 		);
 		foreach (array('height', 'userid', 'workerid') as $column) {
 			if ($this->guard->columnExists('blocks', $column)) {
@@ -5326,15 +5653,18 @@ class BadpoolGuardCommand extends CConsoleCommand
 		$order = $this->guard->columnExists('blocks', 'height') ?
 			'B.'.$this->guard->qcol('height').' ASC, B.'.$this->guard->qcol('time').' ASC, B.'.$this->guard->qcol('id').' ASC' :
 			'B.'.$this->guard->qcol('time').' ASC, B.'.$this->guard->qcol('id').' ASC';
+		$candidateWhere = $this->forwardCatchupImportCandidateWhere();
+		if ($this->forwardCatchupCanJoinEarningsBlocks()) {
+			$candidateWhere .= ' AND NOT EXISTS (SELECT 1 FROM '.$this->guard->qtable('earnings').' E WHERE E.'.$this->guard->qcol('blockid').'=B.'.$this->guard->qcol('id').')';
+		}
 
+		$limitSql = $limit === null ? '' : ' LIMIT '.intval($limit);
 		return $this->guard->selectAll(
 			'SELECT '.implode(', ', $select).' FROM blocks B '.
 			'WHERE B.'.$this->guard->qcol('coin_id').'=:coin_id '.
-			"AND B.".$this->guard->qcol('category')."='new' ".
 			'AND B.'.$this->guard->qcol('time').'>:last_time '.
-			'AND B.'.$this->guard->qcol('blockhash').' IS NOT NULL '.
-			"AND B.".$this->guard->qcol('blockhash')."!='' ".
-			'ORDER BY '.$order.' LIMIT '.intval($limit),
+			'AND '.$candidateWhere.' '.
+			'ORDER BY '.$order.$limitSql,
 			array(':coin_id' => arraySafeVal($scope, 'coin_id'), ':last_time' => $lastPayoutTime)
 		);
 	}
@@ -5356,7 +5686,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 				'amount' => null,
 				'confirmations' => null,
 				'getblock_found' => false,
-				'gettransaction_found' => false,
+				'getrawtransaction_found' => false,
 			);
 			$item['classification'] = 'stage1_blocked_review';
 			if (!$remote) {
@@ -5369,25 +5699,24 @@ class BadpoolGuardCommand extends CConsoleCommand
 				$block = $this->forwardCatchupNormalizeRpcValue($remote->getblock(arraySafeVal($candidate, 'blockhash')));
 				$txids = is_array(arraySafeVal($block, 'tx')) ? arraySafeVal($block, 'tx') : array();
 				$txid = arraySafeVal($txids, 0);
-				$tx = $txid ? $this->forwardCatchupNormalizeRpcValue($remote->gettransaction($txid)) : array();
+				$tx = $txid ? $this->forwardCatchupNormalizeRpcValue($remote->getrawtransaction($txid, 1)) : array();
 			} catch (Exception $e) {
 				$item['daemon']['error'] = $e->getMessage();
 				$result[] = $item;
 				continue;
 			}
 
-			$details = is_array(arraySafeVal($tx, 'details')) ? arraySafeVal($tx, 'details') : array();
-			$detail = is_array(arraySafeVal($details, 0)) ? arraySafeVal($details, 0) : array();
-			$category = arraySafeVal($detail, 'category', arraySafeVal($tx, 'category'));
-			$amount = arraySafeVal($detail, 'amount', arraySafeVal($tx, 'amount'));
-			$confirmations = arraySafeVal($tx, 'confirmations', arraySafeVal($block, 'confirmations'));
+			$confirmations = arraySafeVal($block, 'confirmations', arraySafeVal($tx, 'confirmations'));
+			$amount = $this->forwardCatchupRawTransactionAmount($tx);
+			$matureBlocks = $coin && is_numeric($coin->mature_blocks) ? intval($coin->mature_blocks) : 0;
+			$category = is_numeric($confirmations) && intval($confirmations) < 0 ? 'orphan' : (is_numeric($confirmations) && intval($confirmations) >= $matureBlocks ? 'generate' : 'immature');
 			$item['daemon'] = array(
 				'txid' => $txid,
 				'category' => $category,
 				'amount' => $amount,
 				'confirmations' => $confirmations,
 				'getblock_found' => !empty($block),
-				'gettransaction_found' => !empty($tx),
+				'getrawtransaction_found' => !empty($tx),
 			);
 
 			$positiveAmount = is_numeric($amount) && floatval($amount) > 0;
@@ -5450,6 +5779,18 @@ class BadpoolGuardCommand extends CConsoleCommand
 			'projected_block_mutations' => $mutations,
 			'projected_pending_earnings' => $earnings,
 		);
+	}
+
+	private function forwardCatchupRawTransactionAmount($transaction)
+	{
+		$total = BadpoolStage1Manifest::normalizeAmount('0');
+		foreach (arraySafeVal($transaction, 'vout', array()) as $output) {
+			$value = arraySafeVal($output, 'value');
+			if (!is_numeric($value) || floatval($value) < 0) continue;
+			$decimal = is_float($value) ? sprintf('%.12F', $value) : (string)$value;
+			$total = BadpoolStage1Manifest::addAmounts($total, $decimal);
+		}
+		return $total;
 	}
 
 	private function forwardCatchupStage1DryrunTotals($classified, $plan)
