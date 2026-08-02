@@ -28,6 +28,13 @@ function manifest_clone($value)
 	return unserialize(serialize($value));
 }
 
+function manifest_reseal_progress($progress)
+{
+	unset($progress['progress_checksum']);
+	$progress['progress_checksum'] = BadpoolStage1Manifest::checksum($progress, 'detects alteration of persisted Stage1 drain progress');
+	return $progress;
+}
+
 $moreThanOneBatch = manifest_fixture(30);
 $validation = BadpoolStage1Manifest::validate($moreThanOneBatch);
 manifest_expect($validation['status'] === 'pass', '30-entry manifest must validate: '.implode(' | ', $validation['errors']), $failures);
@@ -55,13 +62,28 @@ $databaseAfterSnapshot = $approvedIds; $databaseAfterSnapshot[] = 999999;
 manifest_expect(count($databaseAfterSnapshot) === 1743 && $large['selected_block_ids'] === $approvedIds && $large['selected_count'] === 1742, 'new candidates must not join an existing manifest', $failures);
 
 $progress = BadpoolStage1Manifest::initialProgress($large);
-$progress = BadpoolStage1Manifest::completeBatch($large, $progress, 1, $batches[0], 25, '100.000000000000', array('status'=>'pass'));
+$firstBatchAmount = BadpoolStage1Manifest::normalizeAmount('0');
+foreach (array_slice($large['projected_earning_rows'], 0, 25) as $earning) $firstBatchAmount = BadpoolStage1Manifest::addAmounts($firstBatchAmount, $earning['amount']);
+$progress = BadpoolStage1Manifest::completeBatch($large, $progress, 1, $batches[0], 25, $firstBatchAmount, array('status'=>'pass'));
 $progressValidation = BadpoolStage1Manifest::validateProgress($large, $progress);
 manifest_expect($progressValidation['status'] === 'pass', 'progress must validate after one committed batch', $failures);
 manifest_expect($progress['completed_batch_count'] === 1 && count($progress['completed_block_ids']) === 25 && $progress['remaining_block_ids'][0] === $batches[1][0], 'resume must begin at the first uncompleted entry', $failures);
+$progressTamperCases = array();
+$case = manifest_clone($progress); $case['completed_batch_count'] = 70; $progressTamperCases['completed batch count'] = manifest_reseal_progress($case);
+$case = manifest_clone($progress); $case['completed_batches'][0]['rows_created'] = 999; $progressTamperCases['completed batch rows'] = manifest_reseal_progress($case);
+$case = manifest_clone($progress); $case['completed_batches'][0]['amount'] = '999.000000000000'; $progressTamperCases['completed batch amount'] = manifest_reseal_progress($case);
+$case = manifest_clone($progress); $case['cumulative_rows_created'] = 999; $progressTamperCases['cumulative rows'] = manifest_reseal_progress($case);
+$case = manifest_clone($progress); $case['cumulative_amount'] = '999.000000000000'; $progressTamperCases['cumulative amount'] = manifest_reseal_progress($case);
+$case = manifest_clone($progress); $case['retry_safe'] = false; $progressTamperCases['retry flag'] = manifest_reseal_progress($case);
+$case = manifest_clone($progress); $case['progress_checksum']['value'] = str_repeat('3',64); $progressTamperCases['progress checksum'] = $case;
+foreach ($progressTamperCases as $name => $tampered) manifest_expect(BadpoolStage1Manifest::validateProgress($large, $tampered)['status'] === 'fail', 'progress tampering must be refused: '.$name, $failures);
 $duplicateRefused = false;
 try { BadpoolStage1Manifest::completeBatch($large, $progress, 1, $batches[0], 25, '100', array('status'=>'pass')); } catch (InvalidArgumentException $e) { $duplicateRefused = true; }
 manifest_expect($duplicateRefused, 'already completed batch must not be duplicated', $failures);
+
+$oversizedBatchRefused = false;
+try { manifest_fixture(51, 51); } catch (InvalidArgumentException $e) { $oversizedBatchRefused = true; }
+manifest_expect($oversizedBatchRefused, 'manifest construction must refuse an internal batch above 50 entries', $failures);
 
 $tamperCases = array();
 $case = manifest_clone($large); $case['selected_block_ids'][0] = 42; $tamperCases['selected IDs'] = $case;

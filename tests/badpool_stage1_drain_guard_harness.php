@@ -26,6 +26,8 @@ drain_expect(strpos($apply, 'forwardCatchupStage1DrainInspectBatch')!==false, 'a
 drain_expect(strpos($apply, 'projection_reverification')!==false && strpos($apply, 'forwardCatchupStage1DrainCompareBatchProjection')!==false, 'apply must reverify authority-bearing projections before mutation',$failures);
 drain_expect(strpos($apply, '$tx->commit();')!==false && strpos($apply, 'post_apply_verification')!==false, 'each batch must independently commit then verify',$failures);
 drain_expect(strpos($apply, 'forwardCatchupStage1DrainWriteProgress')!==false, 'apply must persist resumable progress after verified batches',$failures);
+drain_expect(strpos($manifest, "'progress_checksum'")!==false && strpos($manifest, 'cumulative_rows_created differs from completed manifest batches')!==false, 'persisted progress must be sealed and semantically reconciled before resume',$failures);
+drain_expect(strpos($manifest, 'MAX_BATCH_SIZE = 50')!==false && strpos($manifest, 'internal_batch_size must be between 1 and')!==false, 'manifest validation must enforce the bounded transaction ceiling',$failures);
 drain_expect(strpos($apply, 'additional_operator_confirmation')===false, 'apply loop must not request per-batch confirmation',$failures);
 drain_expect(strpos($apply, 'forwardCatchupStage1DrainNewerCandidateCount($manifest)')!==false, 'apply must report newer excluded candidates',$failures);
 drain_expect(strpos($apply, 'forwardCatchupStage1DrainFinalReconciliation')!==false, 'apply must perform full-cohort final reconciliation',$failures);

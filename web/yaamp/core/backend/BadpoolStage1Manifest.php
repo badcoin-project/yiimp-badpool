@@ -6,13 +6,14 @@ class BadpoolStage1Manifest
 	const PACKAGE_TYPE = 'forward-catchup-stage1-drain';
 	const PROGRESS_SCHEMA = 'badpool.stage1_drain_progress.v1';
 	const DEFAULT_BATCH_SIZE = 25;
+	const MAX_BATCH_SIZE = 50;
 	const AMOUNT_SCALE = 12;
 	const CONFIRMATION_SUFFIX = 'stage1_only_no_later_accounting_no_wallet';
 
 	public static function build($coinId, $algo, $snapshot, $eligibleCandidateCount, $excludedNewerCount, $selectedRecords, $projectedMutations, $projectedEarnings, $internalBatchSize=self::DEFAULT_BATCH_SIZE)
 	{
 		$internalBatchSize = intval($internalBatchSize);
-		if ($internalBatchSize <= 0) throw new InvalidArgumentException('internal_batch_size must be positive.');
+		if ($internalBatchSize <= 0 || $internalBatchSize > self::MAX_BATCH_SIZE) throw new InvalidArgumentException('internal_batch_size must be between 1 and '.self::MAX_BATCH_SIZE.'.');
 
 		$records = array_values($selectedRecords);
 		$mutations = array_values($projectedMutations);
@@ -173,7 +174,7 @@ class BadpoolStage1Manifest
 
 		$batchSize = intval(self::value($manifest, 'internal_batch_size', 0));
 		$expectedBatchCount = $batchSize > 0 && count($normalizedIds) > 0 ? intval(ceil(count($normalizedIds) / $batchSize)) : 0;
-		if ($batchSize <= 0) $errors[] = 'internal_batch_size must be positive.';
+		if ($batchSize <= 0 || $batchSize > self::MAX_BATCH_SIZE) $errors[] = 'internal_batch_size must be between 1 and '.self::MAX_BATCH_SIZE.'.';
 		if (intval(self::value($manifest, 'projected_batch_count', -1)) !== $expectedBatchCount) $errors[] = 'projected_batch_count does not match selected_count/internal_batch_size.';
 		if (intval(self::value($manifest, 'eligible_candidate_count', -1)) !== count($normalizedIds)) $errors[] = 'eligible_candidate_count must equal selected_count for the complete snapshot cohort.';
 		if (intval(self::value($manifest, 'excluded_newer_candidate_count', -1)) < 0) $errors[] = 'excluded_newer_candidate_count must be non-negative.';
@@ -220,7 +221,7 @@ class BadpoolStage1Manifest
 	public static function initialProgress($manifest)
 	{
 		$ids = array_values(self::value($manifest, 'selected_block_ids', array()));
-		return array(
+		return self::sealProgress(array(
 			'schema' => self::PROGRESS_SCHEMA,
 			'package_checksum' => self::checksumValue(self::value($manifest, 'package_checksum')),
 			'selected_block_ids' => $ids,
@@ -235,13 +236,18 @@ class BadpoolStage1Manifest
 			'retry_safe' => true,
 			'same_manifest_confirmation_required' => true,
 			'updated_at' => gmdate('c'),
-		);
+		));
 	}
 
 	public static function validateProgress($manifest, $progress)
 	{
 		$errors = array();
 		if (!is_array($progress) || self::value($progress, 'schema') !== self::PROGRESS_SCHEMA) $errors[] = 'Unexpected progress schema.';
+		$checksum = self::value($progress, 'progress_checksum', array());
+		$checksumInput = is_array($progress) ? $progress : array();
+		unset($checksumInput['progress_checksum']);
+		$expectedChecksum = self::checksum($checksumInput, 'detects alteration of persisted Stage1 drain progress');
+		if ((string)self::checksumValue($checksum) !== $expectedChecksum['value']) $errors[] = 'progress_checksum mismatch.';
 		if ((string)self::value($progress, 'package_checksum') !== (string)self::checksumValue(self::value($manifest, 'package_checksum'))) $errors[] = 'Progress belongs to a different or altered manifest.';
 		$selected = array_values(self::value($manifest, 'selected_block_ids', array()));
 		$completed = array_values(self::value($progress, 'completed_block_ids', array()));
@@ -249,11 +255,50 @@ class BadpoolStage1Manifest
 		if (self::canonicalJson(self::value($progress, 'selected_block_ids', array())) !== self::canonicalJson($selected)) $errors[] = 'Progress selected cohort differs from manifest.';
 		if (self::canonicalJson(array_slice($selected, 0, count($completed))) !== self::canonicalJson($completed)) $errors[] = 'Completed IDs are not the deterministic manifest prefix.';
 		if (self::canonicalJson(array_slice($selected, count($completed))) !== self::canonicalJson($remaining)) $errors[] = 'Remaining IDs are not the deterministic manifest suffix.';
+
+		$batches = self::batches($manifest);
+		$completedBatchCount = intval(self::value($progress, 'completed_batch_count', -1));
+		$completedBatches = self::value($progress, 'completed_batches', array());
+		if (!is_array($completedBatches)) { $errors[] = 'completed_batches must be an array.'; $completedBatches = array(); }
+		if ($completedBatchCount < 0 || $completedBatchCount > count($batches)) $errors[] = 'completed_batch_count is outside the manifest batch range.';
+		if (count($completedBatches) !== $completedBatchCount) $errors[] = 'completed_batches count differs from completed_batch_count.';
+		$expectedCompleted = array();
+		$expectedRows = 0;
+		$expectedAmount = self::zeroAmount();
+		$earnings = self::value($manifest, 'projected_earning_rows', array());
+		for ($index = 0; $index < $completedBatchCount && isset($batches[$index]); $index++) {
+			$batchIds = array_values($batches[$index]);
+			$expectedCompleted = array_merge($expectedCompleted, $batchIds);
+			$batchRows = 0;
+			$batchAmount = self::zeroAmount();
+			$wanted = array();
+			foreach ($batchIds as $id) $wanted[intval($id)] = true;
+			foreach ($earnings as $earning) if (isset($wanted[intval(self::value($earning, 'blockid'))])) {
+				$batchRows++;
+				$batchAmount = self::addAmounts($batchAmount, self::value($earning, 'amount', '0'));
+			}
+			$expectedRows += $batchRows;
+			$expectedAmount = self::addAmounts($expectedAmount, $batchAmount);
+			$entry = self::value($completedBatches, $index, array());
+			if (intval(self::value($entry, 'batch_number')) !== $index + 1) $errors[] = 'Completed batch number differs at index '.$index.'.';
+			if (self::canonicalJson(self::value($entry, 'block_ids', array())) !== self::canonicalJson($batchIds)) $errors[] = 'Completed batch IDs differ at index '.$index.'.';
+			if (intval(self::value($entry, 'rows_created', -1)) !== $batchRows) $errors[] = 'Completed batch row count differs at index '.$index.'.';
+			try { if (self::normalizeAmount(self::value($entry, 'amount')) !== $batchAmount) $errors[] = 'Completed batch amount differs at index '.$index.'.'; }
+			catch (InvalidArgumentException $e) { $errors[] = 'Completed batch amount is invalid at index '.$index.'.'; }
+		}
+		if (self::canonicalJson($completed) !== self::canonicalJson($expectedCompleted)) $errors[] = 'Completed IDs do not equal the declared complete batch prefix.';
+		if (intval(self::value($progress, 'cumulative_rows_created', -1)) !== $expectedRows) $errors[] = 'cumulative_rows_created differs from completed manifest batches.';
+		try { if (self::normalizeAmount(self::value($progress, 'cumulative_amount')) !== $expectedAmount) $errors[] = 'cumulative_amount differs from completed manifest batches.'; }
+		catch (InvalidArgumentException $e) { $errors[] = 'cumulative_amount is invalid.'; }
+		if (self::value($progress, 'retry_safe') !== true) $errors[] = 'retry_safe must remain true.';
+		if (self::value($progress, 'same_manifest_confirmation_required') !== true) $errors[] = 'same_manifest_confirmation_required must remain true.';
 		return array('status'=>empty($errors) ? 'pass' : 'fail', 'errors'=>$errors);
 	}
 
 	public static function completeBatch($manifest, $progress, $batchNumber, $blockIds, $rowsCreated, $amount, $verification)
 	{
+		$validation = self::validateProgress($manifest, $progress);
+		if (self::value($validation, 'status') !== 'pass') throw new InvalidArgumentException('Existing progress is invalid: '.implode(' ', self::value($validation, 'errors', array())));
 		$expectedBatches = self::batches($manifest);
 		$expected = self::value($expectedBatches, intval($batchNumber) - 1, array());
 		if (self::canonicalJson(array_values($blockIds)) !== self::canonicalJson(array_values($expected))) throw new InvalidArgumentException('Completed batch does not match deterministic manifest batch.');
@@ -269,6 +314,16 @@ class BadpoolStage1Manifest
 		$progress['failure_reason'] = null;
 		$progress['retry_safe'] = true;
 		$progress['updated_at'] = gmdate('c');
+		$progress = self::sealProgress($progress);
+		$validation = self::validateProgress($manifest, $progress);
+		if (self::value($validation, 'status') !== 'pass') throw new InvalidArgumentException('Completed progress is invalid: '.implode(' ', self::value($validation, 'errors', array())));
+		return $progress;
+	}
+
+	private static function sealProgress($progress)
+	{
+		unset($progress['progress_checksum']);
+		$progress['progress_checksum'] = self::checksum($progress, 'detects alteration of persisted Stage1 drain progress');
 		return $progress;
 	}
 

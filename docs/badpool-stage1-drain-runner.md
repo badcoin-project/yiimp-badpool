@@ -2,6 +2,8 @@
 
 The forward Stage1 drain uses one finite approval manifest for one complete selected cohort. The operator approves the manifest once. The default 25-block batch is an internal transaction, verification, progress, and resume boundary; it is not another human approval boundary.
 
+The internal batch size must remain between 1 and 50. Both manifest generation and apply-time manifest validation enforce this transaction ceiling.
+
 ## Generate and preserve the approval manifest
 
 The approval-package command performs chain and database reads, emits every selected block ID and every projected row, and performs no database write:
@@ -57,9 +59,10 @@ The progress file binds to the package checksum and full selected cohort. It rec
 * cumulative rows and amount;
 * failure point and reason;
 * whether retry is safe; and
-* that the identical manifest confirmation remains required.
+* that the identical manifest confirmation remains required; and
+* a `progress_checksum` covering the complete persisted progress record.
 
-On every invocation, database state is checked before mutation. A manifest entry is either fully pending, fully completed exactly as projected, or a mismatch. Fully completed batches are verified and skipped. A mixed, partially linked, differently attributed, differently valued, or otherwise incompatible state fails closed. This makes resume safe even if the process stopped after a commit but before progress-file publication.
+On every invocation, the progress checksum, complete-batch prefix, per-batch rows and amounts, and cumulative totals are independently validated before database state is checked. A manifest entry is then either fully pending, fully completed exactly as projected, or a mismatch. Fully completed batches are verified and skipped. Altered progress, a mixed or partially linked state, different attribution or value, or any other incompatible state fails closed. This makes resume safe even if the process stopped after a commit but before progress-file publication.
 
 New production candidates are counted for visibility but never appended. Resume always begins with the first uncompleted manifest entry and accepts only the same package checksum and cohort.
 
