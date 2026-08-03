@@ -52,20 +52,24 @@ foreach (array('payout-row-preflight-preview','wallet-send-dryrun','forward-catc
 // batches_applied (which intentionally remains zero until verification passes).
 contract_expect(strpos($drain, '$tx->commit();') < strpos($drain, '$report[\'committed_batches\']++;'), 'commit count must follow commit', $failures);
 contract_expect(strpos($drain, '$report[\'committed_batches\']++;') < strpos($drain, 'forwardCatchupStage1ApplyCloseoutVerification'), 'commit count must precede post-apply verification', $failures);
-contract_expect(strpos($drain, "\$report['per_batch'][] = \$batch;") < strpos($drain, 'forwardCatchupStage1ApplyCloseoutVerification'), 'committed batch detail must be preserved before post-apply verification', $failures);
-foreach (array("'selected_scope'", "'committed'", "'applied_generated_count'", "'applied_orphan_count'", "'inserted_earnings_count'", "'failure_phase'", "'verification_passed'", "'manual_verification_required'") as $needle) {
+$completeProgress = strpos($drain, 'BadpoolStage1Manifest::completeBatch');
+$writeAfterComplete = $completeProgress === false ? false : strpos($drain, 'forwardCatchupStage1DrainWriteProgress', $completeProgress);
+contract_expect($completeProgress !== false && $writeAfterComplete !== false && $completeProgress < $writeAfterComplete, 'verified batch progress must be assembled before atomic progress publication', $failures);
+foreach (array("'block_ids'", "'committed'", "'rows_created'", "'amount'", "'completion_mode'", "'verification_passed'", "'reconciliation_status'", "'additional_operator_confirmation_required'") as $needle) {
 	contract_expect(strpos($command, $needle) !== false, "per-batch contract missing $needle", $failures);
 }
-foreach (array('approval_regeneration','preflight_validation','mutation_execution','post_apply_verification') as $phase) {
+foreach (array('resume_preflight','projection_reverification','preflight_validation','mutation_execution','post_apply_verification') as $phase) {
 	contract_expect(strpos($drain, "'failure_phase'] = '$phase'") !== false, "missing failure phase $phase", $failures);
 }
 contract_expect(strpos($drain, "'failing_transaction_rolled_back'] = true") !== false, 'rollback confirmation missing', $failures);
 contract_expect(strpos($drainFail, "? 'hold' : 'refused'") !== false, 'post-commit failure must be hold while pre-commit failure remains refused', $failures);
-contract_expect(strpos($drainFail, "'db_mutations'] = \$committed") !== false, 'committed mutation boolean is not preserved', $failures);
-contract_expect(strpos($drainFail, "'manual_verification_required'] = \$committed") !== false, 'manual verification must follow committed state', $failures);
-contract_expect(strpos($drainFail, "'manual_reconciliation_required'] = \$committed") !== false, 'manual reconciliation must follow committed state', $failures);
-contract_expect(strpos($drainFail, "'prior_commit_state'] = \$committed ? 'committed' : 'none'") !== false, 'explicit prior commit state is missing', $failures);
-contract_expect(strpos($drainFail, "'apply_commands_executed'] = true") !== false, 'post-commit hold must record execution', $failures);
+contract_expect(strpos($drainFail, "'db_mutations'] = \$committedThisRun") !== false, 'current-run mutation boolean is not preserved', $failures);
+contract_expect(strpos($drainFail, "'manual_verification_required'] = false") !== false, 'verified committed batches must remain automatically resumable', $failures);
+contract_expect(strpos($drainFail, "'manual_reconciliation_required'] = false") !== false, 'verified committed batches must not force manual reconciliation', $failures);
+contract_expect(strpos($drainFail, "'retry_safe'] = true") !== false, 'same-manifest retry safety must be explicit', $failures);
+contract_expect(strpos($drainFail, "'same_manifest_confirmation_required'] = true") !== false, 'resume must require the same manifest confirmation', $failures);
+contract_expect(strpos($drainFail, "'verified_prior_manifest_progress'") !== false && strpos($drainFail, "'committed_this_run'") !== false, 'explicit current/prior commit state is missing', $failures);
+contract_expect(strpos($drainFail, "if (\$committedThisRun) \$report['apply_commands_executed'] = true") !== false, 'current-run commit must record execution without misreporting resume-only checks', $failures);
 
 // Preserve the independent wallet boundary: a completed send followed by a rolled
 // back DB completion is a hold with no committed DB mutation and no safe retry.

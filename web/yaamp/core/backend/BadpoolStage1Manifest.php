@@ -1,0 +1,484 @@
+<?php
+
+class BadpoolStage1Manifest
+{
+	const SCHEMA = 'badpool.stage1_drain_manifest.v1';
+	const PACKAGE_TYPE = 'forward-catchup-stage1-drain';
+	const PROGRESS_SCHEMA = 'badpool.stage1_drain_progress.v1';
+	const DEFAULT_BATCH_SIZE = 25;
+	const MAX_BATCH_SIZE = 50;
+	const AMOUNT_SCALE = 12;
+	const CONFIRMATION_SUFFIX = 'stage1_only_no_later_accounting_no_wallet';
+
+	public static function build($coinId, $algo, $snapshot, $eligibleCandidateCount, $excludedNewerCount, $selectedRecords, $projectedMutations, $projectedEarnings, $internalBatchSize=self::DEFAULT_BATCH_SIZE)
+	{
+		$internalBatchSize = intval($internalBatchSize);
+		if ($internalBatchSize <= 0 || $internalBatchSize > self::MAX_BATCH_SIZE) throw new InvalidArgumentException('internal_batch_size must be between 1 and '.self::MAX_BATCH_SIZE.'.');
+
+		$records = array_values($selectedRecords);
+		$mutations = array_values($projectedMutations);
+		$earnings = array_values($projectedEarnings);
+		$selectedIds = array();
+		foreach ($records as $record) $selectedIds[] = intval(self::value($record, 'block_id'));
+		$recipientTotals = self::recipientTotals($earnings);
+		$projectedTotal = self::earningTotal($earnings);
+		$projectedBatchCount = count($selectedIds) === 0 ? 0 : intval(ceil(count($selectedIds) / $internalBatchSize));
+		$approvalStatus = 'pass';
+		foreach ($mutations as $mutation) if (!in_array(self::value($mutation, 'classification'), array('stage1_import_generate','stage1_import_immature','stage1_import_reward','stage1_mark_orphan_no_earnings'), true)) $approvalStatus = 'blocked';
+		if (count($selectedIds) === 0 || count($mutations) !== count($selectedIds)) $approvalStatus = 'blocked';
+
+		$selectionInput = array(
+			'coin_id' => intval($coinId),
+			'snapshot_boundary' => $snapshot,
+			'selection_order' => 'height,time,id',
+			'selected_block_ids' => $selectedIds,
+			'selected_records' => $records,
+		);
+		$selectionChecksum = self::checksum($selectionInput, 'authorizes the exact immutable Stage1 selected cohort');
+		$mutationInput = array(
+			'coin_id' => intval($coinId),
+			'selection_checksum' => $selectionChecksum['value'],
+			'projected_block_mutations' => $mutations,
+			'projected_earning_rows' => $earnings,
+			'projected_recipient_totals' => $recipientTotals,
+			'projected_total_amount' => $projectedTotal,
+			'approval_status' => $approvalStatus,
+		);
+		$mutationChecksum = self::checksum($mutationInput, 'authorizes the complete intended Stage1 mutation and attribution');
+		$packageInput = array(
+			'schema' => self::SCHEMA,
+			'package_type' => self::PACKAGE_TYPE,
+			'coin_id' => intval($coinId),
+			'algo' => (string)$algo,
+			'snapshot_boundary' => $snapshot,
+			'eligible_candidate_count' => intval($eligibleCandidateCount),
+			'selected_count' => count($selectedIds),
+			'excluded_newer_candidate_count' => intval($excludedNewerCount),
+			'internal_batch_size' => $internalBatchSize,
+			'projected_batch_count' => $projectedBatchCount,
+			'projected_earning_row_count' => count($earnings),
+			'projected_recipient_count' => count($recipientTotals),
+			'projected_total_amount' => $projectedTotal,
+			'approval_status' => $approvalStatus,
+			'selection_checksum' => $selectionChecksum['value'],
+			'intended_mutation_checksum' => $mutationChecksum['value'],
+		);
+		$packageChecksum = self::checksum($packageInput, 'operator authorization boundary for the complete Stage1 drain manifest');
+
+		return array(
+			'schema' => self::SCHEMA,
+			'package_type' => self::PACKAGE_TYPE,
+			'generated_at' => gmdate('c'),
+			'coin_id' => intval($coinId),
+			'algo' => (string)$algo,
+			'snapshot_boundary' => $snapshot,
+			'eligible_candidate_count' => intval($eligibleCandidateCount),
+			'selected_count' => count($selectedIds),
+			'selected_block_ids' => $selectedIds,
+			'excluded_newer_candidate_count' => intval($excludedNewerCount),
+			'selected_records' => $records,
+			'projected_block_mutations' => $mutations,
+			'projected_earning_rows' => $earnings,
+			'projected_recipient_totals' => $recipientTotals,
+			'projected_earning_row_count' => count($earnings),
+			'projected_recipient_count' => count($recipientTotals),
+			'projected_total_amount' => $projectedTotal,
+			'approval_status' => $approvalStatus,
+			'internal_batch_size' => $internalBatchSize,
+			'projected_batch_count' => $projectedBatchCount,
+			'canonical_checksum_inputs' => array(
+				'selection' => $selectionInput,
+				'intended_mutation' => $mutationInput,
+				'package' => $packageInput,
+			),
+			'selection_checksum' => $selectionChecksum,
+			'intended_mutation_checksum' => $mutationChecksum,
+			'package_checksum' => $packageChecksum,
+			'exact_operator_confirmation' => self::confirmationValue($packageChecksum['value']),
+			'authorization_boundary' => 'One exact confirmation authorizes this complete immutable manifest. Internal batches require no additional confirmation.',
+			'pipeline_boundary' => array(
+				'stage1_only' => true,
+				'maturity_transition' => false,
+				'account_credit' => false,
+				'payout_row_creation' => false,
+				'wallet_reads' => false,
+				'wallet_sends' => false,
+				'backend_loops' => false,
+				'service_actions' => false,
+				'share_deletion' => false,
+			),
+		);
+	}
+
+	public static function validate($manifest)
+	{
+		$errors = array();
+		if (!is_array($manifest)) return array('status'=>'fail', 'errors'=>array('Manifest must be a JSON object.'));
+		if (self::value($manifest, 'schema') !== self::SCHEMA) $errors[] = 'Unexpected manifest schema.';
+		if (self::value($manifest, 'package_type') !== self::PACKAGE_TYPE) $errors[] = 'Unexpected manifest package_type.';
+		$ids = self::value($manifest, 'selected_block_ids', array());
+		$records = self::value($manifest, 'selected_records', array());
+		$mutations = self::value($manifest, 'projected_block_mutations', array());
+		$earnings = self::value($manifest, 'projected_earning_rows', array());
+		if (!is_array($ids) || !is_array($records) || !is_array($mutations) || !is_array($earnings)) $errors[] = 'Manifest cohort and projection fields must be arrays.';
+		if (!empty($errors)) return array('status'=>'fail', 'errors'=>$errors);
+
+		$normalizedIds = array();
+		$seen = array();
+		foreach ($ids as $id) {
+			if (!is_int($id) && !ctype_digit((string)$id)) { $errors[] = 'selected_block_ids contains a non-integer value.'; continue; }
+			$id = intval($id);
+			if ($id <= 0) $errors[] = 'selected_block_ids contains a non-positive value.';
+			if (isset($seen[$id])) $errors[] = 'selected_block_ids contains a duplicate ID: '.$id.'.';
+			$seen[$id] = true;
+			$normalizedIds[] = $id;
+		}
+		if (intval(self::value($manifest, 'selected_count', -1)) !== count($normalizedIds)) $errors[] = 'selected_count does not equal count(selected_block_ids).';
+		if (count($records) !== count($normalizedIds)) $errors[] = 'selected_records count does not equal selected_count.';
+		if (count($mutations) !== count($normalizedIds)) $errors[] = 'projected_block_mutations count does not equal selected_count.';
+		foreach ($records as $index => $record) if (intval(self::value($record, 'block_id')) !== self::value($normalizedIds, $index)) $errors[] = 'selected_records ordering or block ID differs at index '.$index.'.';
+		foreach ($mutations as $index => $mutation) if (intval(self::value($mutation, 'blockid')) !== self::value($normalizedIds, $index)) $errors[] = 'projected_block_mutations ordering or block ID differs at index '.$index.'.';
+		$lastOrder = null;
+		$earningsByBlock = array();
+		foreach ($earnings as $earning) {
+			$blockId = intval(self::value($earning, 'blockid'));
+			if (isset($earningsByBlock[$blockId])) $errors[] = 'Multiple projected earnings exist for block '.$blockId.'.';
+			$earningsByBlock[$blockId] = $earning;
+			if (!isset($seen[$blockId])) $errors[] = 'Projected earning references a block outside selected_block_ids.';
+			if (intval(self::value($earning, 'coinid')) !== intval(self::value($manifest, 'coin_id'))) $errors[] = 'Projected earning coin attribution mismatch for block '.$blockId.'.';
+			if (intval(self::value($earning, 'status', -1)) !== 0) $errors[] = 'Projected earning status must be zero for block '.$blockId.'.';
+		}
+		foreach ($records as $index => $record) {
+			$order = array(intval(self::value($record, 'height')), intval(self::value($record, 'time')), intval(self::value($record, 'block_id')));
+			if ($lastOrder !== null && self::compareOrder($lastOrder, $order) > 0) $errors[] = 'Selected records are not deterministically ordered by height,time,id.';
+			$lastOrder = $order;
+			$mutation = self::value($mutations, $index, array());
+			$class = self::value($record, 'classification');
+			$mutationClass = self::value($mutation, 'classification');
+			$classMatches = $class === $mutationClass || (in_array($class, array('stage1_import_generate','stage1_import_immature'), true) && $mutationClass === 'stage1_import_reward');
+			if (!$classMatches) $errors[] = 'Record and mutation classification differ for block '.self::value($record, 'block_id').'.';
+			if (self::value($record, 'current_category') !== 'new') $errors[] = 'Selected record is not category=new.';
+			$blockId = intval(self::value($record, 'block_id'));
+			if ($class === 'stage1_mark_orphan_no_earnings') {
+				if (isset($earningsByBlock[$blockId])) $errors[] = 'Orphan projection contains an earning for block '.$blockId.'.';
+			} elseif (in_array($class, array('stage1_import_generate','stage1_import_immature'), true)) {
+				if (!isset($earningsByBlock[$blockId])) $errors[] = 'Generated projection is missing an earning for block '.$blockId.'.';
+				else {
+					if (intval(self::value($earningsByBlock[$blockId], 'userid')) !== intval(self::value($record, 'userid'))) $errors[] = 'Projected earning recipient differs from block userid for block '.$blockId.'.';
+					try { if (self::normalizeAmount(self::value($earningsByBlock[$blockId], 'amount')) !== self::normalizeAmount(self::value($record, 'projected_earning_amount'))) $errors[] = 'Record and earning amount differ for block '.$blockId.'.'; } catch (InvalidArgumentException $e) { $errors[] = 'Invalid projected amount for block '.$blockId.'.'; }
+				}
+			} else $errors[] = 'Unapproved Stage1 classification for block '.$blockId.'.';
+			if ((string)self::value($record, 'projected_txhash') !== (string)self::value($mutation, 'would_set_txhash')) $errors[] = 'Record and mutation txhash differ for block '.$blockId.'.';
+			if ((string)self::value($record, 'projected_block_category') !== (string)self::value($mutation, 'would_set_category')) $errors[] = 'Record and mutation category differ for block '.$blockId.'.';
+		}
+
+		$batchSize = intval(self::value($manifest, 'internal_batch_size', 0));
+		$expectedBatchCount = $batchSize > 0 && count($normalizedIds) > 0 ? intval(ceil(count($normalizedIds) / $batchSize)) : 0;
+		if ($batchSize <= 0 || $batchSize > self::MAX_BATCH_SIZE) $errors[] = 'internal_batch_size must be between 1 and '.self::MAX_BATCH_SIZE.'.';
+		if (intval(self::value($manifest, 'projected_batch_count', -1)) !== $expectedBatchCount) $errors[] = 'projected_batch_count does not match selected_count/internal_batch_size.';
+		if (intval(self::value($manifest, 'eligible_candidate_count', -1)) !== count($normalizedIds)) $errors[] = 'eligible_candidate_count must equal selected_count for the complete snapshot cohort.';
+		if (intval(self::value($manifest, 'excluded_newer_candidate_count', -1)) < 0) $errors[] = 'excluded_newer_candidate_count must be non-negative.';
+
+		$recipientTotals = self::recipientTotals($earnings);
+		$projectedTotal = self::earningTotal($earnings);
+		if (self::canonicalJson(self::value($manifest, 'projected_recipient_totals', array())) !== self::canonicalJson($recipientTotals)) $errors[] = 'projected_recipient_totals mismatch.';
+		if ((string)self::value($manifest, 'projected_total_amount') !== $projectedTotal) $errors[] = 'projected_total_amount mismatch.';
+		if (intval(self::value($manifest, 'projected_earning_row_count', -1)) !== count($earnings)) $errors[] = 'projected_earning_row_count mismatch.';
+		if (intval(self::value($manifest, 'projected_recipient_count', -1)) !== count($recipientTotals)) $errors[] = 'projected_recipient_count mismatch.';
+		$boundary = self::value($manifest, 'pipeline_boundary', array());
+		if (self::value($boundary, 'stage1_only') !== true) $errors[] = 'pipeline_boundary must authorize Stage1 only.';
+		foreach (array('maturity_transition','account_credit','payout_row_creation','wallet_reads','wallet_sends','backend_loops','service_actions','share_deletion') as $field) if (self::value($boundary, $field) !== false) $errors[] = 'Forbidden pipeline boundary enabled: '.$field.'.';
+
+		$inputs = self::value($manifest, 'canonical_checksum_inputs', array());
+		$selectionInput = array('coin_id'=>intval(self::value($manifest,'coin_id')), 'snapshot_boundary'=>self::value($manifest,'snapshot_boundary'), 'selection_order'=>'height,time,id', 'selected_block_ids'=>$normalizedIds, 'selected_records'=>$records);
+		$selectionChecksum = self::checksum($selectionInput, 'authorizes the exact immutable Stage1 selected cohort');
+		$mutationInput = array('coin_id'=>intval(self::value($manifest,'coin_id')), 'selection_checksum'=>$selectionChecksum['value'], 'projected_block_mutations'=>$mutations, 'projected_earning_rows'=>$earnings, 'projected_recipient_totals'=>$recipientTotals, 'projected_total_amount'=>$projectedTotal, 'approval_status'=>self::value($manifest,'approval_status'));
+		$mutationChecksum = self::checksum($mutationInput, 'authorizes the complete intended Stage1 mutation and attribution');
+		$packageInput = array('schema'=>self::value($manifest,'schema'), 'package_type'=>self::value($manifest,'package_type'), 'coin_id'=>intval(self::value($manifest,'coin_id')), 'algo'=>(string)self::value($manifest,'algo'), 'snapshot_boundary'=>self::value($manifest,'snapshot_boundary'), 'eligible_candidate_count'=>intval(self::value($manifest,'eligible_candidate_count')), 'selected_count'=>intval(self::value($manifest,'selected_count')), 'excluded_newer_candidate_count'=>intval(self::value($manifest,'excluded_newer_candidate_count')), 'internal_batch_size'=>$batchSize, 'projected_batch_count'=>intval(self::value($manifest,'projected_batch_count')), 'projected_earning_row_count'=>intval(self::value($manifest,'projected_earning_row_count')), 'projected_recipient_count'=>intval(self::value($manifest,'projected_recipient_count')), 'projected_total_amount'=>$projectedTotal, 'approval_status'=>self::value($manifest,'approval_status'), 'selection_checksum'=>$selectionChecksum['value'], 'intended_mutation_checksum'=>$mutationChecksum['value']);
+		if (self::canonicalJson(self::value($inputs, 'selection', array())) !== self::canonicalJson($selectionInput)) $errors[] = 'Canonical selection input differs from visible manifest fields.';
+		if (self::canonicalJson(self::value($inputs, 'intended_mutation', array())) !== self::canonicalJson($mutationInput)) $errors[] = 'Canonical intended mutation input differs from visible manifest fields.';
+		if (self::canonicalJson(self::value($inputs, 'package', array())) !== self::canonicalJson($packageInput)) $errors[] = 'Canonical package input differs from visible manifest fields.';
+
+		$checks = array(
+			'selection_checksum' => $selectionChecksum,
+			'intended_mutation_checksum' => $mutationChecksum,
+			'package_checksum' => self::checksum($packageInput, 'operator authorization boundary for the complete Stage1 drain manifest'),
+		);
+		foreach ($checks as $field => $expected) if ((string)self::checksumValue(self::value($manifest, $field)) !== $expected['value']) $errors[] = $field.' mismatch.';
+		$expectedConfirmation = self::confirmationValue($checks['package_checksum']['value']);
+		if ((string)self::value($manifest, 'exact_operator_confirmation') !== $expectedConfirmation) $errors[] = 'exact_operator_confirmation mismatch.';
+
+		return array('status'=>empty($errors) ? 'pass' : 'fail', 'errors'=>$errors, 'package_checksum'=>$checks['package_checksum']['value']);
+	}
+
+	public static function batches($manifest)
+	{
+		$size = intval(self::value($manifest, 'internal_batch_size', 0));
+		if ($size <= 0) return array();
+		return array_chunk(self::value($manifest, 'selected_block_ids', array()), $size);
+	}
+
+	public static function initialProgress($manifest)
+	{
+		$ids = array_values(self::value($manifest, 'selected_block_ids', array()));
+		return self::sealProgress(array(
+			'schema' => self::PROGRESS_SCHEMA,
+			'package_checksum' => self::checksumValue(self::value($manifest, 'package_checksum')),
+			'selected_block_ids' => $ids,
+			'completed_batch_count' => 0,
+			'completed_block_ids' => array(),
+			'remaining_block_ids' => $ids,
+			'completed_batches' => array(),
+			'cumulative_rows_created' => 0,
+			'cumulative_amount' => self::zeroAmount(),
+			'failure_point' => null,
+			'failure_reason' => null,
+			'retry_safe' => true,
+			'same_manifest_confirmation_required' => true,
+			'updated_at' => gmdate('c'),
+		));
+	}
+
+	public static function validateProgress($manifest, $progress)
+	{
+		$errors = array();
+		if (!is_array($progress) || self::value($progress, 'schema') !== self::PROGRESS_SCHEMA) $errors[] = 'Unexpected progress schema.';
+		$checksum = self::value($progress, 'progress_checksum', array());
+		$checksumInput = is_array($progress) ? $progress : array();
+		unset($checksumInput['progress_checksum']);
+		$expectedChecksum = self::checksum($checksumInput, 'detects alteration of persisted Stage1 drain progress');
+		if ((string)self::checksumValue($checksum) !== $expectedChecksum['value']) $errors[] = 'progress_checksum mismatch.';
+		if ((string)self::value($progress, 'package_checksum') !== (string)self::checksumValue(self::value($manifest, 'package_checksum'))) $errors[] = 'Progress belongs to a different or altered manifest.';
+		$selected = array_values(self::value($manifest, 'selected_block_ids', array()));
+		$completed = array_values(self::value($progress, 'completed_block_ids', array()));
+		$remaining = array_values(self::value($progress, 'remaining_block_ids', array()));
+		if (self::canonicalJson(self::value($progress, 'selected_block_ids', array())) !== self::canonicalJson($selected)) $errors[] = 'Progress selected cohort differs from manifest.';
+		if (self::canonicalJson(array_slice($selected, 0, count($completed))) !== self::canonicalJson($completed)) $errors[] = 'Completed IDs are not the deterministic manifest prefix.';
+		if (self::canonicalJson(array_slice($selected, count($completed))) !== self::canonicalJson($remaining)) $errors[] = 'Remaining IDs are not the deterministic manifest suffix.';
+
+		$batches = self::batches($manifest);
+		$completedBatchCount = intval(self::value($progress, 'completed_batch_count', -1));
+		$completedBatches = self::value($progress, 'completed_batches', array());
+		if (!is_array($completedBatches)) { $errors[] = 'completed_batches must be an array.'; $completedBatches = array(); }
+		if ($completedBatchCount < 0 || $completedBatchCount > count($batches)) $errors[] = 'completed_batch_count is outside the manifest batch range.';
+		if (count($completedBatches) !== $completedBatchCount) $errors[] = 'completed_batches count differs from completed_batch_count.';
+		$expectedCompleted = array();
+		$expectedRows = 0;
+		$expectedAmount = self::zeroAmount();
+		$earnings = self::value($manifest, 'projected_earning_rows', array());
+		for ($index = 0; $index < $completedBatchCount && isset($batches[$index]); $index++) {
+			$batchIds = array_values($batches[$index]);
+			$expectedCompleted = array_merge($expectedCompleted, $batchIds);
+			$batchRows = 0;
+			$batchAmount = self::zeroAmount();
+			$wanted = array();
+			foreach ($batchIds as $id) $wanted[intval($id)] = true;
+			foreach ($earnings as $earning) if (isset($wanted[intval(self::value($earning, 'blockid'))])) {
+				$batchRows++;
+				$batchAmount = self::addAmounts($batchAmount, self::value($earning, 'amount', '0'));
+			}
+			$expectedRows += $batchRows;
+			$expectedAmount = self::addAmounts($expectedAmount, $batchAmount);
+			$entry = self::value($completedBatches, $index, array());
+			if (intval(self::value($entry, 'batch_number')) !== $index + 1) $errors[] = 'Completed batch number differs at index '.$index.'.';
+			if (self::canonicalJson(self::value($entry, 'block_ids', array())) !== self::canonicalJson($batchIds)) $errors[] = 'Completed batch IDs differ at index '.$index.'.';
+			if (intval(self::value($entry, 'rows_created', -1)) !== $batchRows) $errors[] = 'Completed batch row count differs at index '.$index.'.';
+			try { if (self::normalizeAmount(self::value($entry, 'amount')) !== $batchAmount) $errors[] = 'Completed batch amount differs at index '.$index.'.'; }
+			catch (InvalidArgumentException $e) { $errors[] = 'Completed batch amount is invalid at index '.$index.'.'; }
+		}
+		if (self::canonicalJson($completed) !== self::canonicalJson($expectedCompleted)) $errors[] = 'Completed IDs do not equal the declared complete batch prefix.';
+		if (intval(self::value($progress, 'cumulative_rows_created', -1)) !== $expectedRows) $errors[] = 'cumulative_rows_created differs from completed manifest batches.';
+		try { if (self::normalizeAmount(self::value($progress, 'cumulative_amount')) !== $expectedAmount) $errors[] = 'cumulative_amount differs from completed manifest batches.'; }
+		catch (InvalidArgumentException $e) { $errors[] = 'cumulative_amount is invalid.'; }
+		if (self::value($progress, 'retry_safe') !== true) $errors[] = 'retry_safe must remain true.';
+		if (self::value($progress, 'same_manifest_confirmation_required') !== true) $errors[] = 'same_manifest_confirmation_required must remain true.';
+		return array('status'=>empty($errors) ? 'pass' : 'fail', 'errors'=>$errors);
+	}
+
+	public static function completeBatch($manifest, $progress, $batchNumber, $blockIds, $rowsCreated, $amount, $verification)
+	{
+		$validation = self::validateProgress($manifest, $progress);
+		if (self::value($validation, 'status') !== 'pass') throw new InvalidArgumentException('Existing progress is invalid: '.implode(' ', self::value($validation, 'errors', array())));
+		$expectedBatches = self::batches($manifest);
+		$expected = self::value($expectedBatches, intval($batchNumber) - 1, array());
+		if (self::canonicalJson(array_values($blockIds)) !== self::canonicalJson(array_values($expected))) throw new InvalidArgumentException('Completed batch does not match deterministic manifest batch.');
+		$already = array_values(self::value($progress, 'completed_block_ids', array()));
+		if (count($already) !== (intval($batchNumber) - 1) * intval(self::value($manifest, 'internal_batch_size'))) throw new InvalidArgumentException('Completed batch is not the first uncompleted manifest batch.');
+		$progress['completed_block_ids'] = array_merge($already, array_values($blockIds));
+		$progress['remaining_block_ids'] = array_slice(self::value($manifest, 'selected_block_ids', array()), count($progress['completed_block_ids']));
+		$progress['completed_batch_count'] = intval($batchNumber);
+		$progress['completed_batches'][] = array('batch_number'=>intval($batchNumber), 'block_ids'=>array_values($blockIds), 'rows_created'=>intval($rowsCreated), 'amount'=>self::normalizeAmount($amount), 'verification'=>$verification);
+		$progress['cumulative_rows_created'] = intval(self::value($progress, 'cumulative_rows_created', 0)) + intval($rowsCreated);
+		$progress['cumulative_amount'] = self::addAmounts(self::value($progress, 'cumulative_amount', self::zeroAmount()), $amount);
+		$progress['failure_point'] = null;
+		$progress['failure_reason'] = null;
+		$progress['retry_safe'] = true;
+		$progress['updated_at'] = gmdate('c');
+		$progress = self::sealProgress($progress);
+		$validation = self::validateProgress($manifest, $progress);
+		if (self::value($validation, 'status') !== 'pass') throw new InvalidArgumentException('Completed progress is invalid: '.implode(' ', self::value($validation, 'errors', array())));
+		return $progress;
+	}
+
+	private static function sealProgress($progress)
+	{
+		unset($progress['progress_checksum']);
+		$progress['progress_checksum'] = self::checksum($progress, 'detects alteration of persisted Stage1 drain progress');
+		return $progress;
+	}
+
+	public static function checksumValue($checksum)
+	{
+		return is_array($checksum) ? self::value($checksum, 'value') : $checksum;
+	}
+
+	public static function checksum($value, $purpose)
+	{
+		return array('algorithm'=>'sha256', 'value'=>hash('sha256', self::canonicalJson($value)), 'purpose'=>$purpose);
+	}
+
+	public static function confirmationValue($packageChecksum)
+	{
+		return 'stage1_manifest_'.strtolower((string)$packageChecksum).'_'.self::CONFIRMATION_SUFFIX;
+	}
+
+	public static function normalizeAmount($value)
+	{
+		$value = trim((string)$value);
+		if (!preg_match('/^(-?)([0-9]+)(?:\.([0-9]+))?$/', $value, $m)) throw new InvalidArgumentException('Invalid decimal amount.');
+		$negative = $m[1] === '-';
+		$whole = ltrim($m[2], '0');
+		if ($whole === '') $whole = '0';
+		$fraction = isset($m[3]) ? $m[3] : '';
+		if (strlen($fraction) > self::AMOUNT_SCALE && trim(substr($fraction, self::AMOUNT_SCALE), '0') !== '') throw new InvalidArgumentException('Decimal amount exceeds supported precision.');
+		$fraction = substr(str_pad($fraction, self::AMOUNT_SCALE, '0'), 0, self::AMOUNT_SCALE);
+		if ($negative && ($whole !== '0' || trim($fraction, '0') !== '')) return '-'.$whole.'.'.$fraction;
+		return $whole.'.'.$fraction;
+	}
+
+	public static function addAmounts($left, $right)
+	{
+		$a = self::amountInteger($left);
+		$b = self::amountInteger($right);
+		$sum = self::signedIntegerAdd($a, $b);
+		return self::integerAmount($sum);
+	}
+
+	public static function recipientTotalsForEarnings($earnings)
+	{
+		return self::recipientTotals($earnings);
+	}
+
+	private static function recipientTotals($earnings)
+	{
+		$totals = array();
+		foreach ($earnings as $earning) {
+			$id = intval(self::value($earning, 'userid'));
+			$key = (string)$id;
+			if (!isset($totals[$key])) $totals[$key] = self::zeroAmount();
+			$totals[$key] = self::addAmounts($totals[$key], self::value($earning, 'amount', '0'));
+		}
+		ksort($totals, SORT_NUMERIC);
+		$result = array();
+		foreach ($totals as $id => $amount) $result[] = array('userid'=>intval($id), 'amount'=>$amount, 'attribution_model'=>'block_userid_single_recipient');
+		return $result;
+	}
+
+	private static function earningTotal($earnings)
+	{
+		$total = self::zeroAmount();
+		foreach ($earnings as $earning) $total = self::addAmounts($total, self::value($earning, 'amount', '0'));
+		return $total;
+	}
+
+	private static function zeroAmount()
+	{
+		return '0.'.str_repeat('0', self::AMOUNT_SCALE);
+	}
+
+	private static function amountInteger($value)
+	{
+		$normalized = self::normalizeAmount($value);
+		$negative = substr($normalized, 0, 1) === '-';
+		if ($negative) $normalized = substr($normalized, 1);
+		$integer = ltrim(str_replace('.', '', $normalized), '0');
+		if ($integer === '') $integer = '0';
+		return $negative && $integer !== '0' ? '-'.$integer : $integer;
+	}
+
+	private static function integerAmount($integer)
+	{
+		$negative = substr($integer, 0, 1) === '-';
+		if ($negative) $integer = substr($integer, 1);
+		$integer = str_pad($integer, self::AMOUNT_SCALE + 1, '0', STR_PAD_LEFT);
+		$whole = substr($integer, 0, -self::AMOUNT_SCALE);
+		$fraction = substr($integer, -self::AMOUNT_SCALE);
+		return ($negative && trim($integer, '0') !== '' ? '-' : '').ltrim($whole, '0').($whole === str_repeat('0', strlen($whole)) ? '0' : '').'.'.$fraction;
+	}
+
+	private static function signedIntegerAdd($left, $right)
+	{
+		$leftNegative = substr($left, 0, 1) === '-';
+		$rightNegative = substr($right, 0, 1) === '-';
+		$a = $leftNegative ? substr($left, 1) : $left;
+		$b = $rightNegative ? substr($right, 1) : $right;
+		if ($leftNegative === $rightNegative) return ($leftNegative ? '-' : '').self::unsignedAdd($a, $b);
+		$cmp = self::unsignedCompare($a, $b);
+		if ($cmp === 0) return '0';
+		if ($cmp > 0) return ($leftNegative ? '-' : '').self::unsignedSubtract($a, $b);
+		return ($rightNegative ? '-' : '').self::unsignedSubtract($b, $a);
+	}
+
+	private static function unsignedAdd($a, $b)
+	{
+		$carry = 0; $out = ''; $i = strlen($a) - 1; $j = strlen($b) - 1;
+		while ($i >= 0 || $j >= 0 || $carry) { $sum = ($i >= 0 ? intval($a[$i--]) : 0) + ($j >= 0 ? intval($b[$j--]) : 0) + $carry; $out = ($sum % 10).$out; $carry = intval($sum / 10); }
+		return ltrim($out, '0') === '' ? '0' : ltrim($out, '0');
+	}
+
+	private static function unsignedSubtract($a, $b)
+	{
+		$borrow = 0; $out = ''; $i = strlen($a) - 1; $j = strlen($b) - 1;
+		while ($i >= 0) { $digit = intval($a[$i--]) - $borrow - ($j >= 0 ? intval($b[$j--]) : 0); if ($digit < 0) { $digit += 10; $borrow = 1; } else $borrow = 0; $out = $digit.$out; }
+		$out = ltrim($out, '0'); return $out === '' ? '0' : $out;
+	}
+
+	private static function unsignedCompare($a, $b)
+	{
+		$a = ltrim($a, '0'); $b = ltrim($b, '0'); if ($a === '') $a = '0'; if ($b === '') $b = '0';
+		if (strlen($a) !== strlen($b)) return strlen($a) > strlen($b) ? 1 : -1;
+		return strcmp($a, $b) === 0 ? 0 : (strcmp($a, $b) > 0 ? 1 : -1);
+	}
+
+	private static function compareOrder($left, $right)
+	{
+		for ($i = 0; $i < 3; $i++) if ($left[$i] !== $right[$i]) return $left[$i] > $right[$i] ? 1 : -1;
+		return 0;
+	}
+
+	private static function canonicalJson($value)
+	{
+		return json_encode(self::canonicalize($value), JSON_UNESCAPED_SLASHES | JSON_PRESERVE_ZERO_FRACTION);
+	}
+
+	private static function canonicalize($value)
+	{
+		if (!is_array($value)) return $value;
+		$result = array();
+		foreach ($value as $key => $item) $result[$key] = self::canonicalize($item);
+		if (!self::isList($result)) ksort($result);
+		return $result;
+	}
+
+	private static function isList($value)
+	{
+		$index = 0;
+		foreach (array_keys($value) as $key) if ($key !== $index++) return false;
+		return true;
+	}
+
+	private static function value($array, $key, $default=null)
+	{
+		return is_array($array) && array_key_exists($key, $array) ? $array[$key] : $default;
+	}
+}
