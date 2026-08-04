@@ -16,11 +16,15 @@ foreach (array('eligible_candidate_count','selected_count','selected_block_ids',
 drain_expect(strpos($approval, 'forwardCatchupStage1DryrunCandidates($lastPayoutTime, null)')!==false, 'approval must select the complete cohort without a batch limit',$failures);
 drain_expect(strpos($command, '$candidateWhere = $this->forwardCatchupImportCandidateWhere();')!==false && strpos($command, 'AND NOT EXISTS (SELECT 1 FROM')!==false, 'manifest selection must exclude linked or otherwise ineligible candidates',$failures);
 drain_expect(strpos($approval, 'BadpoolStage1Manifest::build')!==false, 'approval must build immutable manifest',$failures);
+drain_expect(strpos($approval, "\$manifest['command'] =")===false, 'approval must not rewrite the builder-owned manifest command after checksum construction',$failures);
 drain_expect(strpos($approval, "'wallet_reads'] = false")!==false, 'approval must report no wallet reads',$failures);
 drain_expect(strpos($approval, 'forwardCatchupStage1ApplyMutations')===false, 'approval package must not mutate',$failures);
 drain_expect(strpos($apply, 'forwardCatchupStage1ApplyApprovalPackageReport')===false, 'apply must not regenerate moving 25-entry approval packages',$failures);
-drain_expect(strpos($apply, 'BadpoolStage1Manifest::validate($manifest)')!==false, 'apply must independently validate manifest checksums',$failures);
-drain_expect(strpos($apply, "'package-checksum'")!==false && strpos($apply, "'exact_operator_confirmation'")!==false, 'apply must bind checksum and exact confirmation',$failures);
+drain_expect(strpos($apply, 'BadpoolStage1Manifest::validateApplyAuthorization($manifest')!==false, 'apply must use the shared producer/consumer authorization contract',$failures);
+drain_expect(strpos($apply, 'validateApplyAuthorization') < strpos($apply, 'forwardCatchupStage1DrainPopulateManifestReport'), 'manifest authorization must pass before the post-validation apply path',$failures);
+drain_expect(strpos($apply, 'validateApplyAuthorization') < strpos($apply, 'forwardCatchupStage1DrainWriteProgress'), 'manifest authorization failure must occur before progress creation',$failures);
+drain_expect(strpos($apply, 'validateApplyAuthorization') < strpos($apply, '$tx = app()->db->beginTransaction()'), 'manifest authorization failure must occur before any database transaction',$failures);
+drain_expect(strpos($apply, "'package-checksum'")!==false && strpos($manifest, "'exact_operator_confirmation'")!==false && strpos($manifest, 'providedConfirmation')!==false, 'apply must bind checksum and exact confirmation through the shared authorization contract',$failures);
 drain_expect(strpos($apply, 'BadpoolStage1Manifest::batches($manifest)')!==false, 'apply must use deterministic internal manifest batches',$failures);
 drain_expect(strpos($apply, 'forwardCatchupStage1DrainInspectBatch')!==false, 'apply must inspect pending/completed database state',$failures);
 drain_expect(strpos($apply, 'projection_reverification')!==false && strpos($apply, 'forwardCatchupStage1DrainCompareBatchProjection')!==false, 'apply must reverify authority-bearing projections before mutation',$failures);
@@ -32,6 +36,7 @@ drain_expect(strpos($apply, 'additional_operator_confirmation')===false, 'apply 
 drain_expect(strpos($apply, 'forwardCatchupStage1DrainNewerCandidateCount($manifest)')!==false, 'apply must report newer excluded candidates',$failures);
 drain_expect(strpos($apply, 'forwardCatchupStage1DrainFinalReconciliation')!==false, 'apply must perform full-cohort final reconciliation',$failures);
 drain_expect(strpos($command, '$this->guard->addError($message);')!==false, 'refusals and holds must produce a nonzero command result with preserved errors',$failures);
+drain_expect(strpos($command, "'artifact_path_collision'")!==false, 'manifest/progress path collision must remain rejected',$failures);
 drain_expect(strpos($inspect, "'status'=>'pending'")!==false && strpos($inspect, "'status'=>'completed'")!==false && strpos($inspect, "'status'=>'mismatch'")!==false, 'resume inspection must distinguish pending, completed, and mismatch states',$failures);
 drain_expect(strpos($inspect, "arraySafeVal(\$row, 'category') === 'new' && count(\$linked) === 0")!==false, 'pending state must require no already-linked earnings',$failures);
 drain_expect(strpos($inspect, 'mixed pending/completed state and fails closed')!==false, 'partially completed or newly ineligible batch must fail closed',$failures);

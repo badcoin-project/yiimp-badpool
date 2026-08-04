@@ -1,5 +1,6 @@
 <?php
 require_once(dirname(__FILE__).'/BadpoolGuardAutomationContracts.php');
+require_once(dirname(__FILE__).'/BadpoolStage1Manifest.php');
 
 class BadpoolGuardReport
 {
@@ -49,7 +50,7 @@ class BadpoolGuardReport
 		}
 
 		if ($isPreview) {
-			$report['schema'] = self::PREVIEW_SCHEMA;
+			if (!self::isCanonicalStage1Manifest($report)) $report['schema'] = self::PREVIEW_SCHEMA;
 			$report['mode'] = self::PREVIEW_MODE;
 			$report['read_only'] = true;
 			$report['db_mutations'] = false;
@@ -68,6 +69,13 @@ class BadpoolGuardReport
 			$report['db_mutation_status'] = $report['db_mutations'] ? 'performed' : 'none';
 		}
 		return $report;
+	}
+
+	private static function isCanonicalStage1Manifest($report)
+	{
+		return self::arrayValue($report, 'schema') === BadpoolStage1Manifest::SCHEMA
+			&& self::arrayValue($report, 'package_type') === BadpoolStage1Manifest::PACKAGE_TYPE
+			&& self::arrayValue($report, 'command') === BadpoolStage1Manifest::COMMAND;
 	}
 
 	private static function isPreviewCommand($command)

@@ -1,5 +1,6 @@
 <?php
 $root = dirname(__DIR__);
+require_once($root.'/web/yaamp/core/backend/BadpoolStage1Manifest.php');
 require_once($root.'/web/yaamp/core/backend/BadpoolGuardReport.php');
 $command = file_get_contents($root.'/web/yaamp/commands/BadpoolGuardCommand.php');
 $reportSource = file_get_contents($root.'/web/yaamp/core/backend/BadpoolGuardReport.php');
@@ -47,6 +48,12 @@ foreach (array('payout-row-preflight-preview','wallet-send-dryrun','forward-catc
 	contract_expect($previewReport['db_mutations'] === false, "$previewCommand db_mutations was not forced false", $failures);
 	contract_expect($previewReport['wallet_rpc_send_performed'] === false, "$previewCommand wallet RPC flag was not forced false", $failures);
 }
+
+$canonicalManifestSurface = BadpoolGuardReport::finalize(array('schema'=>BadpoolStage1Manifest::SCHEMA,'package_type'=>BadpoolStage1Manifest::PACKAGE_TYPE,'command'=>BadpoolStage1Manifest::COMMAND,'mode'=>'read-only-preview','read_only'=>true,'db_mutations'=>false));
+contract_expect($canonicalManifestSurface['schema'] === BadpoolStage1Manifest::SCHEMA, 'canonical Stage1 manifest schema must survive generic report finalization', $failures);
+contract_expect(BadpoolStage1Manifest::validate($canonicalManifestSurface)['status'] === 'fail', 'schema/package_type/command alone must not make a generic preview report an apply manifest', $failures);
+$genericPreviewSurface = BadpoolGuardReport::finalize(array('schema'=>BadpoolStage1Manifest::SCHEMA,'package_type'=>'unrelated-preview','command'=>BadpoolStage1Manifest::COMMAND,'mode'=>'wrong','read_only'=>false,'db_mutations'=>true));
+contract_expect($genericPreviewSurface['schema'] === 'badpool.guardrail.preview.v1', 'unrelated preview report must not inherit the Stage1 manifest schema', $failures);
 
 // A successful commit is recorded before verification, rather than inferred from
 // batches_applied (which intentionally remains zero until verification passes).
