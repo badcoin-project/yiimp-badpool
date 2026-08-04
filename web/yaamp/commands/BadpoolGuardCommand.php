@@ -2144,7 +2144,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 	private function forwardCatchupStage1DrainPlanReport($args)
 	{
 		$report = $this->forwardCatchupStage1DrainApprovalPackageReport($args);
-		$report['command'] = 'forward-catchup-stage1-drain-plan';
+		$report['requested_command'] = 'forward-catchup-stage1-drain-plan';
 		$report['alias_notice'] = 'This plan is the complete authority-bearing manifest; internal batches are transaction boundaries, not approval boundaries.';
 		return BadpoolGuardReport::finalize($report);
 	}
@@ -2179,7 +2179,6 @@ class BadpoolGuardCommand extends CConsoleCommand
 			intval($options['internal-batch-size'])
 		);
 		$validation = BadpoolStage1Manifest::validate($manifest);
-		$manifest['command'] = 'forward-catchup-stage1-drain-approval-package';
 		$manifest['mode'] = 'read-only-preview';
 		$manifest['read_only'] = true;
 		$manifest['wallet_reads'] = false;
@@ -2216,14 +2215,10 @@ class BadpoolGuardCommand extends CConsoleCommand
 		} catch (Exception $e) {
 			return $this->forwardCatchupStage1DrainFail($report, 'manifest_load_failed', $e->getMessage());
 		}
-		$manifestValidation = BadpoolStage1Manifest::validate($manifest);
-		$report['manifest_validation'] = $manifestValidation;
-		if (arraySafeVal($manifestValidation, 'status') !== 'pass') return $this->forwardCatchupStage1DrainFail($report, 'manifest_validation_failed', implode(' ', arraySafeVal($manifestValidation, 'errors', array())));
-		$packageChecksum = BadpoolStage1Manifest::checksumValue(arraySafeVal($manifest, 'package_checksum'));
-		if ((string)$options['package-checksum'] !== (string)$packageChecksum) return $this->forwardCatchupStage1DrainFail($report, 'package_checksum_mismatch', 'Provided package checksum does not match the independently verified manifest.');
-		if (intval(arraySafeVal($manifest, 'coin_id')) !== intval(arraySafeVal($this->guard->getScope(), 'coin_id'))) return $this->forwardCatchupStage1DrainFail($report, 'coin_scope_mismatch', 'Manifest coin_id differs from command scope.');
-		if (arraySafeVal($manifest, 'approval_status') !== 'pass') return $this->forwardCatchupStage1DrainFail($report, 'manifest_not_approved', 'Manifest approval_status is not pass.');
-		if ((string)$options['operator-confirms-stage1-drain'] !== (string)arraySafeVal($manifest, 'exact_operator_confirmation')) return $this->forwardCatchupStage1DrainFail($report, 'operator_confirmation_required', 'Missing exact operator confirmation from the approved manifest.');
+		$authorization = BadpoolStage1Manifest::validateApplyAuthorization($manifest, $options['package-checksum'], $options['operator-confirms-stage1-drain'], arraySafeVal($this->guard->getScope(), 'coin_id'));
+		$report['manifest_validation'] = arraySafeVal($authorization, 'manifest_validation', array());
+		if (arraySafeVal($authorization, 'status') !== 'pass') return $this->forwardCatchupStage1DrainFail($report, arraySafeVal($authorization, 'stop_reason'), arraySafeVal($authorization, 'error'));
+		$packageChecksum = arraySafeVal($authorization, 'package_checksum');
 
 		$report = $this->forwardCatchupStage1DrainPopulateManifestReport($report, $manifest, $options);
 		try {

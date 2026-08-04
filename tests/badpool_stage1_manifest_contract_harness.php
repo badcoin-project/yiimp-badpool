@@ -1,6 +1,7 @@
 <?php
 $root = dirname(__DIR__);
 require_once($root.'/web/yaamp/core/backend/BadpoolStage1Manifest.php');
+require_once($root.'/web/yaamp/core/backend/BadpoolGuardReport.php');
 $failures = array();
 
 function manifest_expect($condition, $message, &$failures)
@@ -37,10 +38,32 @@ function manifest_reseal_progress($progress)
 
 $moreThanOneBatch = manifest_fixture(30);
 $validation = BadpoolStage1Manifest::validate($moreThanOneBatch);
+manifest_expect($moreThanOneBatch['schema'] === BadpoolStage1Manifest::SCHEMA, 'producer must emit the canonical Stage1 manifest schema', $failures);
+manifest_expect($moreThanOneBatch['package_type'] === BadpoolStage1Manifest::PACKAGE_TYPE, 'producer must emit the canonical Stage1 package_type', $failures);
+manifest_expect($moreThanOneBatch['command'] === BadpoolStage1Manifest::COMMAND, 'producer must emit the canonical Stage1 command', $failures);
 manifest_expect($validation['status'] === 'pass', '30-entry manifest must validate: '.implode(' | ', $validation['errors']), $failures);
 manifest_expect($moreThanOneBatch['selected_count'] === 30, 'manifest must expose all entries beyond the first batch', $failures);
 manifest_expect(count($moreThanOneBatch['selected_block_ids']) === 30, 'selected_block_ids must contain the complete cohort', $failures);
 manifest_expect($moreThanOneBatch['projected_batch_count'] === 2, '30 entries at size 25 must project two batches', $failures);
+
+// Exercise the same producer/finalizer boundary used by the approval-package
+// command. The generic safety finalizer must preserve the dedicated manifest
+// schema while still forcing preview operations to remain read-only.
+$generatedPackage = manifest_clone($moreThanOneBatch);
+$generatedPackage['mode'] = 'read-only-preview';
+$generatedPackage['read_only'] = true;
+$generatedPackage['db_mutations'] = false;
+$generatedPackage['wallet_rpc_send_performed'] = false;
+$generatedPackage = BadpoolGuardReport::finalize($generatedPackage);
+$generatedValidation = BadpoolStage1Manifest::validate($generatedPackage);
+manifest_expect($generatedPackage['schema'] === BadpoolStage1Manifest::SCHEMA, 'approval-package finalization must preserve the canonical Stage1 schema', $failures);
+manifest_expect($generatedValidation['status'] === 'pass', 'the exact finalized producer package must pass the apply validator: '.implode(' | ', $generatedValidation['errors']), $failures);
+
+$progressProbe = sys_get_temp_dir().'/badpool-stage1-contract-progress-'.getmypid().'.json';
+if (is_file($progressProbe)) unlink($progressProbe);
+$authorization = BadpoolStage1Manifest::validateApplyAuthorization($generatedPackage, $generatedPackage['package_checksum']['value'], $generatedPackage['exact_operator_confirmation'], 1267);
+manifest_expect($authorization['status'] === 'pass' && $authorization['post_manifest_validation'] === true, 'generated package must enter the apply post-manifest-validation authorization path', $failures);
+manifest_expect(!is_file($progressProbe), 'pre-batch authorization must not create a progress file', $failures);
 
 $large = manifest_fixture(1742);
 $largeValidation = BadpoolStage1Manifest::validate($large);
@@ -86,15 +109,30 @@ try { manifest_fixture(51, 51); } catch (InvalidArgumentException $e) { $oversiz
 manifest_expect($oversizedBatchRefused, 'manifest construction must refuse an internal batch above 50 entries', $failures);
 
 $tamperCases = array();
+$case = manifest_clone($large); $case['schema'] = 'badpool.guardrail.preview.v1'; $tamperCases['generic preview schema'] = $case;
+$case = manifest_clone($large); $case['schema'] = 'badpool.stage1_drain_manifest.v999'; $tamperCases['wrong schema'] = $case;
+$case = manifest_clone($large); $case['package_type'] = 'forward-catchup-stage1-drain-preview'; $tamperCases['wrong package type'] = $case;
+$case = manifest_clone($large); $case['command'] = 'forward-catchup-stage1-drain-plan'; $tamperCases['wrong command'] = $case;
 $case = manifest_clone($large); $case['selected_block_ids'][0] = 42; $tamperCases['selected IDs'] = $case;
+$case = manifest_clone($large); $case['selected_count']++; $tamperCases['selected count'] = $case;
 $case = manifest_clone($large); $case['projected_block_mutations'][0]['would_set_amount'] = '999.000000000000'; $tamperCases['projection'] = $case;
 $case = manifest_clone($large); $case['projected_earning_rows'][0]['amount'] = '999.000000000000'; $tamperCases['amount'] = $case;
 $case = manifest_clone($large); $case['projected_earning_rows'][0]['userid']++; $tamperCases['attribution'] = $case;
+$case = manifest_clone($large); $case['projected_recipient_totals'][0]['amount'] = '999.000000000000'; $tamperCases['recipient total'] = $case;
+$case = manifest_clone($large); $case['snapshot_boundary']['maximum_selected_order_key']['id']++; $tamperCases['snapshot'] = $case;
+$case = manifest_clone($large); $case['projected_batch_count']++; $tamperCases['projected batch count'] = $case;
+$case = manifest_clone($large); $case['projected_earning_row_count']++; $tamperCases['projected earning count'] = $case;
 $case = manifest_clone($large); $swap = $case['selected_records'][0]; $case['selected_records'][0] = $case['selected_records'][1]; $case['selected_records'][1] = $swap; $tamperCases['ordering'] = $case;
 $case = manifest_clone($large); $case['selection_checksum']['value'] = str_repeat('0',64); $tamperCases['selection checksum'] = $case;
 $case = manifest_clone($large); $case['intended_mutation_checksum']['value'] = str_repeat('1',64); $tamperCases['mutation checksum'] = $case;
 $case = manifest_clone($large); $case['package_checksum']['value'] = str_repeat('2',64); $tamperCases['package checksum'] = $case;
+$case = manifest_clone($large); $case['exact_operator_confirmation'] = 'tampered'; $tamperCases['operator confirmation'] = $case;
 foreach ($tamperCases as $name => $tampered) manifest_expect(BadpoolStage1Manifest::validate($tampered)['status'] === 'fail', 'tampering must be refused: '.$name, $failures);
+
+$badPackageAuthorization = BadpoolStage1Manifest::validateApplyAuthorization($large, str_repeat('f',64), $large['exact_operator_confirmation'], 1267);
+manifest_expect($badPackageAuthorization['status'] === 'fail' && $badPackageAuthorization['stop_reason'] === 'package_checksum_mismatch', 'apply authorization must reject package-checksum tampering', $failures);
+$badConfirmationAuthorization = BadpoolStage1Manifest::validateApplyAuthorization($large, $large['package_checksum']['value'], 'tampered', 1267);
+manifest_expect($badConfirmationAuthorization['status'] === 'fail' && $badConfirmationAuthorization['stop_reason'] === 'operator_confirmation_required', 'apply authorization must reject operator-confirmation tampering', $failures);
 
 $differentManifest = manifest_fixture(1741);
 manifest_expect(BadpoolStage1Manifest::validateProgress($differentManifest, $progress)['status'] === 'fail', 'resume must refuse a different manifest', $failures);

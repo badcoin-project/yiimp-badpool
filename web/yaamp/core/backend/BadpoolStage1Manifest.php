@@ -4,6 +4,7 @@ class BadpoolStage1Manifest
 {
 	const SCHEMA = 'badpool.stage1_drain_manifest.v1';
 	const PACKAGE_TYPE = 'forward-catchup-stage1-drain';
+	const COMMAND = 'forward-catchup-stage1-drain-approval-package';
 	const PROGRESS_SCHEMA = 'badpool.stage1_drain_progress.v1';
 	const DEFAULT_BATCH_SIZE = 25;
 	const MAX_BATCH_SIZE = 50;
@@ -48,6 +49,7 @@ class BadpoolStage1Manifest
 		$packageInput = array(
 			'schema' => self::SCHEMA,
 			'package_type' => self::PACKAGE_TYPE,
+			'command' => self::COMMAND,
 			'coin_id' => intval($coinId),
 			'algo' => (string)$algo,
 			'snapshot_boundary' => $snapshot,
@@ -68,6 +70,7 @@ class BadpoolStage1Manifest
 		return array(
 			'schema' => self::SCHEMA,
 			'package_type' => self::PACKAGE_TYPE,
+			'command' => self::COMMAND,
 			'generated_at' => gmdate('c'),
 			'coin_id' => intval($coinId),
 			'algo' => (string)$algo,
@@ -116,6 +119,7 @@ class BadpoolStage1Manifest
 		if (!is_array($manifest)) return array('status'=>'fail', 'errors'=>array('Manifest must be a JSON object.'));
 		if (self::value($manifest, 'schema') !== self::SCHEMA) $errors[] = 'Unexpected manifest schema.';
 		if (self::value($manifest, 'package_type') !== self::PACKAGE_TYPE) $errors[] = 'Unexpected manifest package_type.';
+		if (self::value($manifest, 'command') !== self::COMMAND) $errors[] = 'Unexpected manifest command.';
 		$ids = self::value($manifest, 'selected_block_ids', array());
 		$records = self::value($manifest, 'selected_records', array());
 		$mutations = self::value($manifest, 'projected_block_mutations', array());
@@ -194,7 +198,7 @@ class BadpoolStage1Manifest
 		$selectionChecksum = self::checksum($selectionInput, 'authorizes the exact immutable Stage1 selected cohort');
 		$mutationInput = array('coin_id'=>intval(self::value($manifest,'coin_id')), 'selection_checksum'=>$selectionChecksum['value'], 'projected_block_mutations'=>$mutations, 'projected_earning_rows'=>$earnings, 'projected_recipient_totals'=>$recipientTotals, 'projected_total_amount'=>$projectedTotal, 'approval_status'=>self::value($manifest,'approval_status'));
 		$mutationChecksum = self::checksum($mutationInput, 'authorizes the complete intended Stage1 mutation and attribution');
-		$packageInput = array('schema'=>self::value($manifest,'schema'), 'package_type'=>self::value($manifest,'package_type'), 'coin_id'=>intval(self::value($manifest,'coin_id')), 'algo'=>(string)self::value($manifest,'algo'), 'snapshot_boundary'=>self::value($manifest,'snapshot_boundary'), 'eligible_candidate_count'=>intval(self::value($manifest,'eligible_candidate_count')), 'selected_count'=>intval(self::value($manifest,'selected_count')), 'excluded_newer_candidate_count'=>intval(self::value($manifest,'excluded_newer_candidate_count')), 'internal_batch_size'=>$batchSize, 'projected_batch_count'=>intval(self::value($manifest,'projected_batch_count')), 'projected_earning_row_count'=>intval(self::value($manifest,'projected_earning_row_count')), 'projected_recipient_count'=>intval(self::value($manifest,'projected_recipient_count')), 'projected_total_amount'=>$projectedTotal, 'approval_status'=>self::value($manifest,'approval_status'), 'selection_checksum'=>$selectionChecksum['value'], 'intended_mutation_checksum'=>$mutationChecksum['value']);
+		$packageInput = array('schema'=>self::value($manifest,'schema'), 'package_type'=>self::value($manifest,'package_type'), 'command'=>self::value($manifest,'command'), 'coin_id'=>intval(self::value($manifest,'coin_id')), 'algo'=>(string)self::value($manifest,'algo'), 'snapshot_boundary'=>self::value($manifest,'snapshot_boundary'), 'eligible_candidate_count'=>intval(self::value($manifest,'eligible_candidate_count')), 'selected_count'=>intval(self::value($manifest,'selected_count')), 'excluded_newer_candidate_count'=>intval(self::value($manifest,'excluded_newer_candidate_count')), 'internal_batch_size'=>$batchSize, 'projected_batch_count'=>intval(self::value($manifest,'projected_batch_count')), 'projected_earning_row_count'=>intval(self::value($manifest,'projected_earning_row_count')), 'projected_recipient_count'=>intval(self::value($manifest,'projected_recipient_count')), 'projected_total_amount'=>$projectedTotal, 'approval_status'=>self::value($manifest,'approval_status'), 'selection_checksum'=>$selectionChecksum['value'], 'intended_mutation_checksum'=>$mutationChecksum['value']);
 		if (self::canonicalJson(self::value($inputs, 'selection', array())) !== self::canonicalJson($selectionInput)) $errors[] = 'Canonical selection input differs from visible manifest fields.';
 		if (self::canonicalJson(self::value($inputs, 'intended_mutation', array())) !== self::canonicalJson($mutationInput)) $errors[] = 'Canonical intended mutation input differs from visible manifest fields.';
 		if (self::canonicalJson(self::value($inputs, 'package', array())) !== self::canonicalJson($packageInput)) $errors[] = 'Canonical package input differs from visible manifest fields.';
@@ -209,6 +213,42 @@ class BadpoolStage1Manifest
 		if ((string)self::value($manifest, 'exact_operator_confirmation') !== $expectedConfirmation) $errors[] = 'exact_operator_confirmation mismatch.';
 
 		return array('status'=>empty($errors) ? 'pass' : 'fail', 'errors'=>$errors, 'package_checksum'=>$checks['package_checksum']['value']);
+	}
+
+	public static function validateApplyAuthorization($manifest, $providedPackageChecksum, $providedConfirmation, $coinId)
+	{
+		$validation = self::validate($manifest);
+		$result = array('status'=>'fail', 'stop_reason'=>'manifest_validation_failed', 'error'=>implode(' ', self::value($validation, 'errors', array())), 'manifest_validation'=>$validation, 'package_checksum'=>null);
+		if (self::value($validation, 'status') !== 'pass') return $result;
+
+		$packageChecksum = self::checksumValue(self::value($manifest, 'package_checksum'));
+		$result['package_checksum'] = $packageChecksum;
+		if ((string)$providedPackageChecksum !== (string)$packageChecksum) {
+			$result['stop_reason'] = 'package_checksum_mismatch';
+			$result['error'] = 'Provided package checksum does not match the independently verified manifest.';
+			return $result;
+		}
+		if (intval(self::value($manifest, 'coin_id')) !== intval($coinId)) {
+			$result['stop_reason'] = 'coin_scope_mismatch';
+			$result['error'] = 'Manifest coin_id differs from command scope.';
+			return $result;
+		}
+		if (self::value($manifest, 'approval_status') !== 'pass') {
+			$result['stop_reason'] = 'manifest_not_approved';
+			$result['error'] = 'Manifest approval_status is not pass.';
+			return $result;
+		}
+		if ((string)$providedConfirmation !== (string)self::value($manifest, 'exact_operator_confirmation')) {
+			$result['stop_reason'] = 'operator_confirmation_required';
+			$result['error'] = 'Missing exact operator confirmation from the approved manifest.';
+			return $result;
+		}
+
+		$result['status'] = 'pass';
+		$result['stop_reason'] = null;
+		$result['error'] = null;
+		$result['post_manifest_validation'] = true;
+		return $result;
 	}
 
 	public static function batches($manifest)
