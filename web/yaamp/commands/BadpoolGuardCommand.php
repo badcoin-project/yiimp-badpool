@@ -240,8 +240,8 @@ class BadpoolGuardCommand extends CConsoleCommand
 			"       php yaamp/yiic.php badpoolguard forward-catchup-approval-package --coin-id=<id> [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard forward-catchup-stage1-apply-dryrun --coin-id=<id> [--limit=<n>] [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard forward-catchup-stage1-apply-approval-package --coin-id=<id> [--limit=<n>] [--format=json|text]\n".
-			"       php yaamp/yiic.php badpoolguard forward-catchup-stage1-drain-plan --coin-id=<id> [--internal-batch-size=25] --format=json\n".
-			"       php yaamp/yiic.php badpoolguard forward-catchup-stage1-drain-approval-package --coin-id=<id> [--internal-batch-size=25] --format=json\n".
+			"       php yaamp/yiic.php badpoolguard forward-catchup-stage1-drain-plan --coin-id=<id> --selection-limit=<n> [--internal-batch-size=25] --format=json\n".
+			"       php yaamp/yiic.php badpoolguard forward-catchup-stage1-drain-approval-package --coin-id=<id> --selection-limit=<n> [--internal-batch-size=25] --format=json\n".
 			"       php yaamp/yiic.php badpoolguard forward-catchup-stage1-drain-apply --coin-id=<id> --manifest-file=<absolute-json-path> --progress-file=<absolute-json-path> --package-checksum=<sha256> --operator-confirms-stage1-drain=<exact-manifest-confirmation> --format=json\n".
 			"       php yaamp/yiic.php badpoolguard forward-catchup-stage1-apply --coin-id=<id> --limit=<approved_n> --selected-count=<approved_n> --approval-package-checksum=<sha256> --batch-scope-checksum=<sha256> --projected-mutation-checksum=<sha256> --projected-earnings-checksum=<sha256> --operator-confirms-attribution-model=block_userid_single_recipient --format=json\n".
 			"       php yaamp/yiic.php badpoolguard earnings-maturity-transition-dryrun --coin-id=<id> [--format=json|text]\n".
@@ -2145,7 +2145,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 	{
 		$report = $this->forwardCatchupStage1DrainApprovalPackageReport($args);
 		$report['requested_command'] = 'forward-catchup-stage1-drain-plan';
-		$report['alias_notice'] = 'This plan is the complete authority-bearing manifest; internal batches are transaction boundaries, not approval boundaries.';
+		$report['alias_notice'] = 'This plan is the bounded authority-bearing manifest; internal batches are transaction boundaries, not approval boundaries.';
 		return BadpoolGuardReport::finalize($report);
 	}
 
@@ -2159,19 +2159,24 @@ class BadpoolGuardCommand extends CConsoleCommand
 
 		$checkpoint = $this->forwardCatchupCheckpoint();
 		$lastPayoutTime = arraySafeVal($checkpoint, 'last_payout_time');
-		$candidates = $this->forwardCatchupStage1DryrunCandidates($lastPayoutTime, null);
+		$eligibleCandidates = $this->forwardCatchupStage1DryrunCandidates($lastPayoutTime, null);
+		$selectionLimit = BadpoolStage1Manifest::parseSelectionLimit($options['selection-limit']);
+		$candidates = array_slice($eligibleCandidates, 0, $selectionLimit);
 		$classified = $this->forwardCatchupStage1DryrunClassify($candidates);
 		$plan = $this->forwardCatchupStage1DryrunPlan($classified);
 		$manifestPreflight = $this->forwardCatchupStage1ApplyPreflightGates($classified, arraySafeVal($plan, 'projected_block_mutations', array()), arraySafeVal($plan, 'projected_pending_earnings', array()));
 		$records = $this->forwardCatchupStage1ManifestRecords($classified, arraySafeVal($plan, 'projected_pending_earnings', array()));
-		$snapshot = $this->forwardCatchupStage1ManifestSnapshot($checkpoint, $candidates);
-		$excludedNewer = $this->forwardCatchupStage1DrainExcludedCandidateCount($lastPayoutTime, $records);
+		$snapshot = $this->forwardCatchupStage1ManifestSnapshot($checkpoint, $candidates, $eligibleCandidates, $selectionLimit);
+		$excludedBySelectionLimit = count($eligibleCandidates) - count($candidates);
+		$excludedNewer = $this->forwardCatchupStage1DrainExcludedCandidateCount($lastPayoutTime, $snapshot);
 		$coin = $this->guard->getCoin();
 		$manifest = BadpoolStage1Manifest::build(
 			intval(arraySafeVal($this->guard->getScope(), 'coin_id')),
 			is_array($coin) ? arraySafeVal($coin, 'algo') : (is_object($coin) ? $coin->algo : ''),
 			$snapshot,
-			count($candidates),
+			$selectionLimit,
+			count($eligibleCandidates),
+			$excludedBySelectionLimit,
 			$excludedNewer,
 			$records,
 			$this->forwardCatchupStage1ManifestProjectedMutations(arraySafeVal($plan, 'projected_block_mutations', array())),
@@ -2336,14 +2341,15 @@ class BadpoolGuardCommand extends CConsoleCommand
 
 	private function forwardCatchupStage1DrainOptions($args, $apply)
 	{
-		$allowed = $apply ? array('coin-id','format','manifest-file','progress-file','package-checksum','operator-confirms-stage1-drain') : array('coin-id','format','internal-batch-size');
+		$allowed = $apply ? array('coin-id','format','manifest-file','progress-file','package-checksum','operator-confirms-stage1-drain') : array('coin-id','format','selection-limit','internal-batch-size');
 		$options = array('internal-batch-size' => BadpoolStage1Manifest::DEFAULT_BATCH_SIZE);
+		$seen = array();
 		foreach ($args as $arg) {
 			if (!preg_match('/^--([^=]+)=(.*)$/', $arg, $m)) { if (strpos($arg, '--') === 0) $options['__parse_error'] = 'Option requires an explicit value: '.$arg; continue; }
 			$name = strtolower($m[1]);
 			if (!in_array($name, $allowed, true)) $options['__parse_error'] = 'Unknown option refused: --'.$m[1];
-			elseif (isset($options[$name]) && $name !== 'internal-batch-size') $options['__parse_error'] = 'Duplicate option refused: --'.$m[1];
-			else $options[$name] = $m[2];
+			elseif (isset($seen[$name])) $options['__parse_error'] = 'Duplicate option refused: --'.$m[1];
+			else { $seen[$name] = true; $options[$name] = $m[2]; }
 		}
 		return $options;
 	}
@@ -2353,6 +2359,9 @@ class BadpoolGuardCommand extends CConsoleCommand
 		if ($this->guard->isAllCoinsPreview()) return $this->forwardCatchupStage1DrainFail($report, 'coin_id_required', 'Stage1 drain requires --coin-id and refuses broad/all-coin scope.');
 		if ($this->guard->getFormat() !== 'json') return $this->forwardCatchupStage1DrainFail($report, 'json_format_required', 'Stage1 drain supports --format=json only.');
 		if (!$apply) {
+			if (!isset($options['selection-limit'])) return $this->forwardCatchupStage1DrainFail($report, 'missing_required_option', 'Missing required --selection-limit.');
+			try { BadpoolStage1Manifest::parseSelectionLimit($options['selection-limit']); }
+			catch (InvalidArgumentException $e) { return $this->forwardCatchupStage1DrainFail($report, 'invalid_selection_limit', '--selection-limit must be a canonical positive integer no greater than '.BadpoolStage1Manifest::MAX_SELECTION_LIMIT.'.'); }
 			if (!preg_match('/^[0-9]+$/', (string)arraySafeVal($options, 'internal-batch-size')) || intval($options['internal-batch-size']) <= 0 || intval($options['internal-batch-size']) > self::FORWARD_CATCHUP_STAGE1_MANIFEST_MAX_BATCH_SIZE) return $this->forwardCatchupStage1DrainFail($report, 'invalid_internal_batch_size', '--internal-batch-size must be between 1 and '.self::FORWARD_CATCHUP_STAGE1_MANIFEST_MAX_BATCH_SIZE.'.');
 			return true;
 		}
@@ -2370,6 +2379,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 		$report['command'] = $command;
 		$report['read_only'] = $readOnly;
 		$report['coin_id'] = arraySafeVal($this->guard->getScope(), 'coin_id');
+		$report['selection_limit'] = isset($options['selection-limit']) ? intval($options['selection-limit']) : null;
 		$report['internal_batch_size'] = intval(arraySafeVal($options, 'internal-batch-size', 0));
 		$report['manifest_file'] = arraySafeVal($options, 'manifest-file');
 		$report['progress_file'] = arraySafeVal($options, 'progress-file');
@@ -2419,19 +2429,29 @@ class BadpoolGuardCommand extends CConsoleCommand
 		return $records;
 	}
 
-	private function forwardCatchupStage1ManifestSnapshot($checkpoint, $candidates)
+	private function forwardCatchupStage1ManifestSnapshot($checkpoint, $selectedCandidates, $eligibleCandidates, $selectionLimit)
 	{
-		$last = empty($candidates) ? array() : $candidates[count($candidates) - 1];
+		$lastSelected = empty($selectedCandidates) ? array() : $selectedCandidates[count($selectedCandidates) - 1];
+		$lastEligible = empty($eligibleCandidates) ? array() : $eligibleCandidates[count($eligibleCandidates) - 1];
 		return array(
 			'checkpoint_last_payout_time' => arraySafeVal($checkpoint, 'last_payout_time'),
 			'checkpoint_source' => arraySafeVal($checkpoint, 'checkpoint_source'),
 			'candidate_query_completed_before_apply' => true,
 			'maximum_selected_order_key' => array(
-				'height' => arraySafeVal($last, 'height'),
-				'time' => arraySafeVal($last, 'time'),
-				'id' => arraySafeVal($last, 'id'),
+				'height' => intval(arraySafeVal($lastSelected, 'height')),
+				'time' => intval(arraySafeVal($lastSelected, 'time')),
+				'id' => intval(arraySafeVal($lastSelected, 'id')),
 			),
+			'maximum_eligible_snapshot_order_key' => array(
+				'height' => intval(arraySafeVal($lastEligible, 'height')),
+				'time' => intval(arraySafeVal($lastEligible, 'time')),
+				'id' => intval(arraySafeVal($lastEligible, 'id')),
+			),
+			'selection_limit' => intval($selectionLimit),
+			'eligible_candidate_count' => count($eligibleCandidates),
+			'excluded_by_selection_limit_count' => count($eligibleCandidates) - count($selectedCandidates),
 			'new_candidates_after_snapshot_are_excluded' => true,
+			'post_snapshot_candidates_are_separately_counted' => true,
 		);
 	}
 
@@ -2440,7 +2460,10 @@ class BadpoolGuardCommand extends CConsoleCommand
 		$report['package_checksum'] = BadpoolStage1Manifest::checksumValue(arraySafeVal($manifest, 'package_checksum'));
 		$report['selection_checksum'] = BadpoolStage1Manifest::checksumValue(arraySafeVal($manifest, 'selection_checksum'));
 		$report['intended_mutation_checksum'] = BadpoolStage1Manifest::checksumValue(arraySafeVal($manifest, 'intended_mutation_checksum'));
+		$report['selection_limit'] = intval(arraySafeVal($manifest, 'selection_limit'));
+		$report['eligible_candidate_count'] = intval(arraySafeVal($manifest, 'eligible_candidate_count'));
 		$report['selected_count'] = intval(arraySafeVal($manifest, 'selected_count'));
+		$report['excluded_by_selection_limit_count'] = intval(arraySafeVal($manifest, 'excluded_by_selection_limit_count'));
 		$report['selected_block_ids'] = arraySafeVal($manifest, 'selected_block_ids', array());
 		$report['internal_batch_size'] = intval(arraySafeVal($manifest, 'internal_batch_size'));
 		$report['projected_batch_count'] = intval(arraySafeVal($manifest, 'projected_batch_count'));
@@ -2600,19 +2623,39 @@ class BadpoolGuardCommand extends CConsoleCommand
 
 	private function forwardCatchupStage1DrainNewerCandidateCount($manifest)
 	{
-		$checkpoint = arraySafeVal(arraySafeVal($manifest, 'snapshot_boundary', array()), 'checkpoint_last_payout_time');
-		$current = $this->forwardCatchupStage1DryrunCandidates($checkpoint, null);
-		$selected = array(); foreach (arraySafeVal($manifest, 'selected_block_ids', array()) as $id) $selected[intval($id)] = true;
-		$count = 0; foreach ($current as $candidate) if (!isset($selected[intval(arraySafeVal($candidate, 'id'))])) $count++;
+		$snapshot = arraySafeVal($manifest, 'snapshot_boundary', array());
+		$checkpoint = arraySafeVal($snapshot, 'checkpoint_last_payout_time');
+		return $this->forwardCatchupStage1DrainCandidatesAfterSnapshot($checkpoint, $snapshot);
+	}
+
+	private function forwardCatchupStage1DrainExcludedCandidateCount($checkpoint, $snapshot)
+	{
+		return $this->forwardCatchupStage1DrainCandidatesAfterSnapshot($checkpoint, $snapshot);
+	}
+
+	private function forwardCatchupStage1DrainCandidatesAfterSnapshot($checkpoint, $snapshot)
+	{
+		$boundary = arraySafeVal($snapshot, 'maximum_eligible_snapshot_order_key', array());
+		$count = 0;
+		foreach ($this->forwardCatchupStage1DryrunCandidates($checkpoint, null) as $candidate) {
+			if ($this->forwardCatchupStage1DrainCompareOrderKeys($this->forwardCatchupStage1DrainCandidateOrderKey($candidate), $boundary) > 0) $count++;
+		}
 		return $count;
 	}
 
-	private function forwardCatchupStage1DrainExcludedCandidateCount($checkpoint, $records)
+	private function forwardCatchupStage1DrainCandidateOrderKey($candidate)
 	{
-		$selected = array(); foreach ($records as $record) $selected[intval(arraySafeVal($record, 'block_id'))] = true;
-		$count = 0;
-		foreach ($this->forwardCatchupStage1DryrunCandidates($checkpoint, null) as $candidate) if (!isset($selected[intval(arraySafeVal($candidate, 'id'))])) $count++;
-		return $count;
+		return array('height'=>intval(arraySafeVal($candidate, 'height')), 'time'=>intval(arraySafeVal($candidate, 'time')), 'id'=>intval(arraySafeVal($candidate, 'id')));
+	}
+
+	private function forwardCatchupStage1DrainCompareOrderKeys($left, $right)
+	{
+		foreach (array('height','time','id') as $field) {
+			$l = intval(arraySafeVal($left, $field));
+			$r = intval(arraySafeVal($right, $field));
+			if ($l !== $r) return $l > $r ? 1 : -1;
+		}
+		return 0;
 	}
 
 	private function forwardCatchupStage1DrainFinalReconciliation($manifest, $progress)
