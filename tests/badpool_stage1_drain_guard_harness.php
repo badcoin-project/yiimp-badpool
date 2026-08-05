@@ -12,8 +12,12 @@ $inspect = drain_section($command, 'private function forwardCatchupStage1DrainIn
 $final = drain_section($command, 'private function forwardCatchupStage1DrainFinalReconciliation', 'private function forwardCatchupStage1ManifestCreateTime');
 
 foreach (array("'forward-catchup-stage1-drain-approval-package'", "'forward-catchup-stage1-drain-apply'", 'BadpoolStage1Manifest.php') as $needle) drain_expect(strpos($command,$needle)!==false,'missing aggregate drain contract: '.$needle,$failures);
-foreach (array('eligible_candidate_count','selected_count','selected_block_ids','excluded_newer_candidate_count','projected_earning_rows','projected_recipient_totals','projected_total_amount','canonical_checksum_inputs','selection_checksum','intended_mutation_checksum','package_checksum','internal_batch_size','projected_batch_count','exact_operator_confirmation') as $field) drain_expect(strpos($manifest,"'$field'")!==false,'manifest missing field '.$field,$failures);
-drain_expect(strpos($approval, 'forwardCatchupStage1DryrunCandidates($lastPayoutTime, null)')!==false, 'approval must select the complete cohort without a batch limit',$failures);
+foreach (array('selection_limit','eligible_candidate_count','selected_count','selected_block_ids','excluded_by_selection_limit_count','excluded_newer_candidate_count','projected_earning_rows','projected_recipient_totals','projected_total_amount','canonical_checksum_inputs','selection_checksum','intended_mutation_checksum','package_checksum','internal_batch_size','projected_batch_count','exact_operator_confirmation') as $field) drain_expect(strpos($manifest,"'$field'")!==false,'manifest missing field '.$field,$failures);
+drain_expect(strpos($approval, '$eligibleCandidates = $this->forwardCatchupStage1DryrunCandidates($lastPayoutTime, null)')!==false, 'approval must query the complete eligible cohort before limiting',$failures);
+drain_expect(strpos($approval, '$candidates = array_slice($eligibleCandidates, 0, $selectionLimit)')!==false, 'approval must classify only the deterministic bounded prefix',$failures);
+drain_expect(strpos($approval, 'count($eligibleCandidates)')!==false && strpos($approval, '$excludedBySelectionLimit')!==false, 'approval must retain full eligibility and bounded exclusion counts',$failures);
+drain_expect(strpos($command, "'maximum_eligible_snapshot_order_key'")!==false && strpos($command, "'maximum_selected_order_key'")!==false, 'snapshot must distinguish selected and eligible boundaries',$failures);
+drain_expect(strpos($command, 'forwardCatchupStage1DrainCandidatesAfterSnapshot')!==false && strpos($command, 'forwardCatchupStage1DrainCompareOrderKeys')!==false, 'newer-candidate reporting must compare against the eligibility snapshot boundary',$failures);
 drain_expect(strpos($command, '$candidateWhere = $this->forwardCatchupImportCandidateWhere();')!==false && strpos($command, 'AND NOT EXISTS (SELECT 1 FROM')!==false, 'manifest selection must exclude linked or otherwise ineligible candidates',$failures);
 drain_expect(strpos($approval, 'BadpoolStage1Manifest::build')!==false, 'approval must build immutable manifest',$failures);
 drain_expect(strpos($approval, "\$manifest['command'] =")===false, 'approval must not rewrite the builder-owned manifest command after checksum construction',$failures);
@@ -33,8 +37,13 @@ drain_expect(strpos($apply, 'forwardCatchupStage1DrainWriteProgress')!==false, '
 drain_expect(strpos($manifest, "'progress_checksum'")!==false && strpos($manifest, 'cumulative_rows_created differs from completed manifest batches')!==false, 'persisted progress must be sealed and semantically reconciled before resume',$failures);
 drain_expect(strpos($manifest, 'MAX_BATCH_SIZE = 50')!==false && strpos($manifest, 'internal_batch_size must be between 1 and')!==false, 'manifest validation must enforce the bounded transaction ceiling',$failures);
 drain_expect(strpos($apply, 'additional_operator_confirmation')===false, 'apply loop must not request per-batch confirmation',$failures);
+drain_expect(strpos($command, "array('coin-id','format','selection-limit','internal-batch-size')")!==false, 'generation must accept selection-limit',$failures);
+drain_expect(strpos($command, "array('coin-id','format','manifest-file','progress-file','package-checksum','operator-confirms-stage1-drain')")!==false, 'apply allowlist must exclude selection-limit',$failures);
+drain_expect(strpos($command, 'Duplicate option refused: --')!==false, 'duplicate selection-limit must be refused',$failures);
+drain_expect(strpos($command, 'Missing required --selection-limit.')!==false && strpos($command, 'invalid_selection_limit')!==false, 'missing and invalid selection limits must be refused',$failures);
+drain_expect(strpos($manifest, 'MAX_SELECTION_LIMIT = 1000000')!==false && strpos($manifest, "'/^[1-9][0-9]*$/'")!==false, 'selection limit parser must be canonical and bounded',$failures);
 drain_expect(strpos($apply, 'forwardCatchupStage1DrainNewerCandidateCount($manifest)')!==false, 'apply must report newer excluded candidates',$failures);
-drain_expect(strpos($apply, 'forwardCatchupStage1DrainFinalReconciliation')!==false, 'apply must perform full-cohort final reconciliation',$failures);
+drain_expect(strpos($apply, 'forwardCatchupStage1DrainFinalReconciliation')!==false, 'apply must perform selected-cohort final reconciliation',$failures);
 drain_expect(strpos($command, '$this->guard->addError($message);')!==false, 'refusals and holds must produce a nonzero command result with preserved errors',$failures);
 drain_expect(strpos($command, "'artifact_path_collision'")!==false, 'manifest/progress path collision must remain rejected',$failures);
 drain_expect(strpos($inspect, "'status'=>'pending'")!==false && strpos($inspect, "'status'=>'completed'")!==false && strpos($inspect, "'status'=>'mismatch'")!==false, 'resume inspection must distinguish pending, completed, and mismatch states',$failures);

@@ -2,17 +2,19 @@
 
 class BadpoolStage1Manifest
 {
-	const SCHEMA = 'badpool.stage1_drain_manifest.v1';
+	const SCHEMA = 'badpool.stage1_drain_manifest.v2';
 	const PACKAGE_TYPE = 'forward-catchup-stage1-drain';
 	const COMMAND = 'forward-catchup-stage1-drain-approval-package';
 	const PROGRESS_SCHEMA = 'badpool.stage1_drain_progress.v1';
 	const DEFAULT_BATCH_SIZE = 25;
 	const MAX_BATCH_SIZE = 50;
+	const MAX_SELECTION_LIMIT = 1000000;
 	const AMOUNT_SCALE = 12;
 	const CONFIRMATION_SUFFIX = 'stage1_only_no_later_accounting_no_wallet';
 
-	public static function build($coinId, $algo, $snapshot, $eligibleCandidateCount, $excludedNewerCount, $selectedRecords, $projectedMutations, $projectedEarnings, $internalBatchSize=self::DEFAULT_BATCH_SIZE)
+	public static function build($coinId, $algo, $snapshot, $selectionLimit, $eligibleCandidateCount, $excludedBySelectionLimitCount, $excludedNewerCount, $selectedRecords, $projectedMutations, $projectedEarnings, $internalBatchSize=self::DEFAULT_BATCH_SIZE)
 	{
+		$selectionLimit = self::parseSelectionLimit($selectionLimit);
 		$internalBatchSize = intval($internalBatchSize);
 		if ($internalBatchSize <= 0 || $internalBatchSize > self::MAX_BATCH_SIZE) throw new InvalidArgumentException('internal_batch_size must be between 1 and '.self::MAX_BATCH_SIZE.'.');
 
@@ -31,11 +33,14 @@ class BadpoolStage1Manifest
 		$selectionInput = array(
 			'coin_id' => intval($coinId),
 			'snapshot_boundary' => $snapshot,
+			'selection_limit' => $selectionLimit,
+			'eligible_candidate_count' => intval($eligibleCandidateCount),
+			'excluded_by_selection_limit_count' => intval($excludedBySelectionLimitCount),
 			'selection_order' => 'height,time,id',
 			'selected_block_ids' => $selectedIds,
 			'selected_records' => $records,
 		);
-		$selectionChecksum = self::checksum($selectionInput, 'authorizes the exact immutable Stage1 selected cohort');
+		$selectionChecksum = self::checksum($selectionInput, 'authorizes the exact bounded immutable Stage1 selected cohort');
 		$mutationInput = array(
 			'coin_id' => intval($coinId),
 			'selection_checksum' => $selectionChecksum['value'],
@@ -53,8 +58,10 @@ class BadpoolStage1Manifest
 			'coin_id' => intval($coinId),
 			'algo' => (string)$algo,
 			'snapshot_boundary' => $snapshot,
+			'selection_limit' => $selectionLimit,
 			'eligible_candidate_count' => intval($eligibleCandidateCount),
 			'selected_count' => count($selectedIds),
+			'excluded_by_selection_limit_count' => intval($excludedBySelectionLimitCount),
 			'excluded_newer_candidate_count' => intval($excludedNewerCount),
 			'internal_batch_size' => $internalBatchSize,
 			'projected_batch_count' => $projectedBatchCount,
@@ -65,7 +72,7 @@ class BadpoolStage1Manifest
 			'selection_checksum' => $selectionChecksum['value'],
 			'intended_mutation_checksum' => $mutationChecksum['value'],
 		);
-		$packageChecksum = self::checksum($packageInput, 'operator authorization boundary for the complete Stage1 drain manifest');
+		$packageChecksum = self::checksum($packageInput, 'operator authorization boundary for one exact bounded Stage1 drain manifest');
 
 		return array(
 			'schema' => self::SCHEMA,
@@ -75,9 +82,11 @@ class BadpoolStage1Manifest
 			'coin_id' => intval($coinId),
 			'algo' => (string)$algo,
 			'snapshot_boundary' => $snapshot,
+			'selection_limit' => $selectionLimit,
 			'eligible_candidate_count' => intval($eligibleCandidateCount),
 			'selected_count' => count($selectedIds),
 			'selected_block_ids' => $selectedIds,
+			'excluded_by_selection_limit_count' => intval($excludedBySelectionLimitCount),
 			'excluded_newer_candidate_count' => intval($excludedNewerCount),
 			'selected_records' => $records,
 			'projected_block_mutations' => $mutations,
@@ -98,7 +107,7 @@ class BadpoolStage1Manifest
 			'intended_mutation_checksum' => $mutationChecksum,
 			'package_checksum' => $packageChecksum,
 			'exact_operator_confirmation' => self::confirmationValue($packageChecksum['value']),
-			'authorization_boundary' => 'One exact confirmation authorizes this complete immutable manifest. Internal batches require no additional confirmation.',
+			'authorization_boundary' => 'One exact confirmation authorizes this bounded immutable Stage1 cohort. Internal batches require no additional confirmation.',
 			'pipeline_boundary' => array(
 				'stage1_only' => true,
 				'maturity_transition' => false,
@@ -177,11 +186,47 @@ class BadpoolStage1Manifest
 		}
 
 		$batchSize = intval(self::value($manifest, 'internal_batch_size', 0));
+		$selectionLimitValue = self::value($manifest, 'selection_limit');
+		$eligibleCandidateCountValue = self::value($manifest, 'eligible_candidate_count');
+		$selectedCountValue = self::value($manifest, 'selected_count');
+		$excludedBySelectionLimitCountValue = self::value($manifest, 'excluded_by_selection_limit_count');
+		$selectionLimit = is_int($selectionLimitValue) ? $selectionLimitValue : 0;
+		$eligibleCandidateCount = is_int($eligibleCandidateCountValue) ? $eligibleCandidateCountValue : -1;
+		$selectedCount = is_int($selectedCountValue) ? $selectedCountValue : -1;
+		$excludedBySelectionLimitCount = is_int($excludedBySelectionLimitCountValue) ? $excludedBySelectionLimitCountValue : -1;
 		$expectedBatchCount = $batchSize > 0 && count($normalizedIds) > 0 ? intval(ceil(count($normalizedIds) / $batchSize)) : 0;
 		if ($batchSize <= 0 || $batchSize > self::MAX_BATCH_SIZE) $errors[] = 'internal_batch_size must be between 1 and '.self::MAX_BATCH_SIZE.'.';
 		if (intval(self::value($manifest, 'projected_batch_count', -1)) !== $expectedBatchCount) $errors[] = 'projected_batch_count does not match selected_count/internal_batch_size.';
-		if (intval(self::value($manifest, 'eligible_candidate_count', -1)) !== count($normalizedIds)) $errors[] = 'eligible_candidate_count must equal selected_count for the complete snapshot cohort.';
-		if (intval(self::value($manifest, 'excluded_newer_candidate_count', -1)) < 0) $errors[] = 'excluded_newer_candidate_count must be non-negative.';
+		if (!is_int($selectionLimitValue) || $selectionLimit <= 0 || $selectionLimit > self::MAX_SELECTION_LIMIT) $errors[] = 'selection_limit must be a bounded positive integer.';
+		if (!is_int($eligibleCandidateCountValue) || $eligibleCandidateCount < 0) $errors[] = 'eligible_candidate_count must be a non-negative integer.';
+		if (!is_int($selectedCountValue) || $selectedCount < 0) $errors[] = 'selected_count must be a non-negative integer.';
+		if (!is_int($excludedBySelectionLimitCountValue) || $excludedBySelectionLimitCount < 0) $errors[] = 'excluded_by_selection_limit_count must be a non-negative integer.';
+		$expectedSelectedCount = $selectionLimit > 0 && $eligibleCandidateCount >= 0 ? min($selectionLimit, $eligibleCandidateCount) : -1;
+		if ($selectedCount !== $expectedSelectedCount) $errors[] = 'selected_count must equal min(selection_limit, eligible_candidate_count).';
+		if ($excludedBySelectionLimitCount !== $eligibleCandidateCount - $selectedCount) $errors[] = 'excluded_by_selection_limit_count must equal eligible_candidate_count minus selected_count.';
+		if (!is_int(self::value($manifest, 'excluded_newer_candidate_count')) || intval(self::value($manifest, 'excluded_newer_candidate_count', -1)) < 0) $errors[] = 'excluded_newer_candidate_count must be a non-negative integer.';
+
+		$snapshot = self::value($manifest, 'snapshot_boundary', array());
+		$selectedOrderKey = self::orderKey(self::value($snapshot, 'maximum_selected_order_key'));
+		$eligibleOrderKey = self::orderKey(self::value($snapshot, 'maximum_eligible_snapshot_order_key'));
+		if (!is_array($snapshot)) $errors[] = 'snapshot_boundary must be an object.';
+		if (self::value($snapshot, 'candidate_query_completed_before_apply') !== true) $errors[] = 'snapshot candidate query must complete before apply.';
+		if (self::value($snapshot, 'new_candidates_after_snapshot_are_excluded') !== true) $errors[] = 'post-snapshot candidates must remain excluded.';
+		if (self::value($snapshot, 'post_snapshot_candidates_are_separately_counted') !== true) $errors[] = 'post-snapshot candidates must be counted separately.';
+		if (self::value($snapshot, 'selection_limit') !== $selectionLimit) $errors[] = 'snapshot selection_limit mismatch.';
+		if (self::value($snapshot, 'eligible_candidate_count') !== $eligibleCandidateCount) $errors[] = 'snapshot eligible_candidate_count mismatch.';
+		if (self::value($snapshot, 'excluded_by_selection_limit_count') !== $excludedBySelectionLimitCount) $errors[] = 'snapshot excluded_by_selection_limit_count mismatch.';
+		if ($selectedOrderKey === null || $eligibleOrderKey === null) $errors[] = 'snapshot order-key boundaries must contain integer height,time,id values.';
+		if ($selectedOrderKey !== null && !empty($records)) {
+			$lastRecord = $records[count($records) - 1];
+			$lastSelectedOrderKey = array(intval(self::value($lastRecord, 'height')), intval(self::value($lastRecord, 'time')), intval(self::value($lastRecord, 'block_id')));
+			if (self::compareOrder($selectedOrderKey, $lastSelectedOrderKey) !== 0) $errors[] = 'maximum_selected_order_key does not match the selected cohort boundary.';
+		}
+		if ($selectedOrderKey !== null && $eligibleOrderKey !== null) {
+			$boundaryComparison = self::compareOrder($eligibleOrderKey, $selectedOrderKey);
+			if ($excludedBySelectionLimitCount === 0 && $boundaryComparison !== 0) $errors[] = 'maximum eligible and selected order keys must match when no snapshot candidate is excluded by the limit.';
+			if ($excludedBySelectionLimitCount > 0 && $boundaryComparison <= 0) $errors[] = 'maximum eligible order key must follow the selected order key when the limit excludes snapshot candidates.';
+		}
 
 		$recipientTotals = self::recipientTotals($earnings);
 		$projectedTotal = self::earningTotal($earnings);
@@ -194,11 +239,11 @@ class BadpoolStage1Manifest
 		foreach (array('maturity_transition','account_credit','payout_row_creation','wallet_reads','wallet_sends','backend_loops','service_actions','share_deletion') as $field) if (self::value($boundary, $field) !== false) $errors[] = 'Forbidden pipeline boundary enabled: '.$field.'.';
 
 		$inputs = self::value($manifest, 'canonical_checksum_inputs', array());
-		$selectionInput = array('coin_id'=>intval(self::value($manifest,'coin_id')), 'snapshot_boundary'=>self::value($manifest,'snapshot_boundary'), 'selection_order'=>'height,time,id', 'selected_block_ids'=>$normalizedIds, 'selected_records'=>$records);
-		$selectionChecksum = self::checksum($selectionInput, 'authorizes the exact immutable Stage1 selected cohort');
+		$selectionInput = array('coin_id'=>intval(self::value($manifest,'coin_id')), 'snapshot_boundary'=>self::value($manifest,'snapshot_boundary'), 'selection_limit'=>$selectionLimit, 'eligible_candidate_count'=>$eligibleCandidateCount, 'excluded_by_selection_limit_count'=>$excludedBySelectionLimitCount, 'selection_order'=>'height,time,id', 'selected_block_ids'=>$normalizedIds, 'selected_records'=>$records);
+		$selectionChecksum = self::checksum($selectionInput, 'authorizes the exact bounded immutable Stage1 selected cohort');
 		$mutationInput = array('coin_id'=>intval(self::value($manifest,'coin_id')), 'selection_checksum'=>$selectionChecksum['value'], 'projected_block_mutations'=>$mutations, 'projected_earning_rows'=>$earnings, 'projected_recipient_totals'=>$recipientTotals, 'projected_total_amount'=>$projectedTotal, 'approval_status'=>self::value($manifest,'approval_status'));
 		$mutationChecksum = self::checksum($mutationInput, 'authorizes the complete intended Stage1 mutation and attribution');
-		$packageInput = array('schema'=>self::value($manifest,'schema'), 'package_type'=>self::value($manifest,'package_type'), 'command'=>self::value($manifest,'command'), 'coin_id'=>intval(self::value($manifest,'coin_id')), 'algo'=>(string)self::value($manifest,'algo'), 'snapshot_boundary'=>self::value($manifest,'snapshot_boundary'), 'eligible_candidate_count'=>intval(self::value($manifest,'eligible_candidate_count')), 'selected_count'=>intval(self::value($manifest,'selected_count')), 'excluded_newer_candidate_count'=>intval(self::value($manifest,'excluded_newer_candidate_count')), 'internal_batch_size'=>$batchSize, 'projected_batch_count'=>intval(self::value($manifest,'projected_batch_count')), 'projected_earning_row_count'=>intval(self::value($manifest,'projected_earning_row_count')), 'projected_recipient_count'=>intval(self::value($manifest,'projected_recipient_count')), 'projected_total_amount'=>$projectedTotal, 'approval_status'=>self::value($manifest,'approval_status'), 'selection_checksum'=>$selectionChecksum['value'], 'intended_mutation_checksum'=>$mutationChecksum['value']);
+		$packageInput = array('schema'=>self::value($manifest,'schema'), 'package_type'=>self::value($manifest,'package_type'), 'command'=>self::value($manifest,'command'), 'coin_id'=>intval(self::value($manifest,'coin_id')), 'algo'=>(string)self::value($manifest,'algo'), 'snapshot_boundary'=>self::value($manifest,'snapshot_boundary'), 'selection_limit'=>$selectionLimit, 'eligible_candidate_count'=>$eligibleCandidateCount, 'selected_count'=>$selectedCount, 'excluded_by_selection_limit_count'=>$excludedBySelectionLimitCount, 'excluded_newer_candidate_count'=>intval(self::value($manifest,'excluded_newer_candidate_count')), 'internal_batch_size'=>$batchSize, 'projected_batch_count'=>intval(self::value($manifest,'projected_batch_count')), 'projected_earning_row_count'=>intval(self::value($manifest,'projected_earning_row_count')), 'projected_recipient_count'=>intval(self::value($manifest,'projected_recipient_count')), 'projected_total_amount'=>$projectedTotal, 'approval_status'=>self::value($manifest,'approval_status'), 'selection_checksum'=>$selectionChecksum['value'], 'intended_mutation_checksum'=>$mutationChecksum['value']);
 		if (self::canonicalJson(self::value($inputs, 'selection', array())) !== self::canonicalJson($selectionInput)) $errors[] = 'Canonical selection input differs from visible manifest fields.';
 		if (self::canonicalJson(self::value($inputs, 'intended_mutation', array())) !== self::canonicalJson($mutationInput)) $errors[] = 'Canonical intended mutation input differs from visible manifest fields.';
 		if (self::canonicalJson(self::value($inputs, 'package', array())) !== self::canonicalJson($packageInput)) $errors[] = 'Canonical package input differs from visible manifest fields.';
@@ -206,7 +251,7 @@ class BadpoolStage1Manifest
 		$checks = array(
 			'selection_checksum' => $selectionChecksum,
 			'intended_mutation_checksum' => $mutationChecksum,
-			'package_checksum' => self::checksum($packageInput, 'operator authorization boundary for the complete Stage1 drain manifest'),
+			'package_checksum' => self::checksum($packageInput, 'operator authorization boundary for one exact bounded Stage1 drain manifest'),
 		);
 		foreach ($checks as $field => $expected) if ((string)self::checksumValue(self::value($manifest, $field)) !== $expected['value']) $errors[] = $field.' mismatch.';
 		$expectedConfirmation = self::confirmationValue($checks['package_checksum']['value']);
@@ -372,6 +417,15 @@ class BadpoolStage1Manifest
 		return is_array($checksum) ? self::value($checksum, 'value') : $checksum;
 	}
 
+	public static function parseSelectionLimit($value)
+	{
+		$text = (string)$value;
+		$maximum = (string)self::MAX_SELECTION_LIMIT;
+		if (!preg_match('/^[1-9][0-9]*$/', $text)) throw new InvalidArgumentException('selection_limit must be a canonical positive integer.');
+		if (strlen($text) > strlen($maximum) || (strlen($text) === strlen($maximum) && strcmp($text, $maximum) > 0)) throw new InvalidArgumentException('selection_limit exceeds the supported maximum of '.self::MAX_SELECTION_LIMIT.'.');
+		return intval($text);
+	}
+
 	public static function checksum($value, $purpose)
 	{
 		return array('algorithm'=>'sha256', 'value'=>hash('sha256', self::canonicalJson($value)), 'purpose'=>$purpose);
@@ -494,6 +548,18 @@ class BadpoolStage1Manifest
 	{
 		for ($i = 0; $i < 3; $i++) if ($left[$i] !== $right[$i]) return $left[$i] > $right[$i] ? 1 : -1;
 		return 0;
+	}
+
+	private static function orderKey($value)
+	{
+		if (!is_array($value)) return null;
+		$result = array();
+		foreach (array('height','time','id') as $field) {
+			$item = self::value($value, $field);
+			if (!is_int($item)) return null;
+			$result[] = $item;
+		}
+		return $result;
 	}
 
 	private static function canonicalJson($value)

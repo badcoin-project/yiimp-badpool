@@ -1,6 +1,6 @@
 # Badpool immutable Stage1 drain manifest
 
-The forward Stage1 drain uses one finite approval manifest for one complete selected cohort. The operator approves the manifest once. The default 25-block batch is an internal transaction, verification, progress, and resume boundary; it is not another human approval boundary.
+The forward Stage1 drain uses one finite approval manifest for one exact bounded cohort. The required selection limit authorizes only the first deterministic eligible candidates in `height,time,id` order. The operator approves the manifest once. The default 25-block batch is an internal transaction, verification, progress, and resume boundary; it is not another human approval boundary.
 
 The internal batch size must remain between 1 and 50. Both manifest generation and apply-time manifest validation enforce this transaction ceiling.
 
@@ -12,23 +12,24 @@ The approval-package command performs chain and database reads, emits every sele
 cd /srv/badpool/yiimp-badpool/web
 php yaamp/yiic.php badpoolguard forward-catchup-stage1-drain-approval-package \
   --coin-id=1267 \
+  --selection-limit=50 \
   --internal-batch-size=25 \
   --format=json > /var/lib/badpool/stage1-scrypt-manifest.json
 ```
 
-`forward-catchup-stage1-drain-plan` is a compatibility alias for the same complete manifest. It no longer selects a manually bounded number of batches.
+`forward-catchup-stage1-drain-plan` is a compatibility alias for the same bounded manifest. The selection limit controls the authorized cohort; the internal batch size controls only transaction boundaries.
 
 The operator reviews the full JSON and preserves it unchanged. Important authority-bearing fields include:
 
-* `eligible_candidate_count`, `selected_count`, and complete `selected_block_ids`;
-* `excluded_newer_candidate_count` and `snapshot_boundary`;
+* `selection_limit`, `eligible_candidate_count`, `selected_count`, and complete `selected_block_ids`;
+* `excluded_by_selection_limit_count`, `excluded_newer_candidate_count`, and `snapshot_boundary`;
 * complete `selected_records`, `projected_block_mutations`, and `projected_earning_rows`;
 * `projected_recipient_totals` and `projected_total_amount`;
 * `canonical_checksum_inputs`, `selection_checksum`, `intended_mutation_checksum`, and `package_checksum`;
 * `internal_batch_size` and `projected_batch_count`; and
 * `exact_operator_confirmation`.
 
-The snapshot selection is fixed before daemon classification begins. A block arriving after that query is reported as newer/excluded and cannot join the manifest.
+The complete eligibility snapshot is fixed before daemon classification begins. Only its first `selection_limit` candidates are classified and projected. The snapshot records both the maximum selected order key and maximum eligible order key, so intentionally unselected snapshot candidates are not mislabeled as newer. A block arriving after the eligibility query is separately reported as newer/excluded and cannot join the manifest.
 
 ## Apply the approved manifest
 
@@ -64,7 +65,7 @@ The progress file binds to the package checksum and full selected cohort. It rec
 
 On every invocation, the progress checksum, complete-batch prefix, per-batch rows and amounts, and cumulative totals are independently validated before database state is checked. A manifest entry is then either fully pending, fully completed exactly as projected, or a mismatch. Fully completed batches are verified and skipped. Altered progress, a mixed or partially linked state, different attribution or value, or any other incompatible state fails closed. This makes resume safe even if the process stopped after a commit but before progress-file publication.
 
-New production candidates are counted for visibility but never appended. Resume always begins with the first uncompleted manifest entry and accepts only the same package checksum and cohort.
+Unselected candidates inside the eligibility snapshot and newer production candidates are never appended. Newer candidates are counted separately for visibility. Resume always begins with the first uncompleted manifest entry and accepts only the same package checksum and bounded cohort.
 
 ## Final reconciliation and hard boundary
 

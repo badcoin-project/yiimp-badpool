@@ -9,10 +9,12 @@ function manifest_expect($condition, $message, &$failures)
 	if (!$condition) $failures[] = $message;
 }
 
-function manifest_fixture($count, $batchSize=25)
+function manifest_fixture($eligibleCount, $selectionLimit=null, $batchSize=25)
 {
+	if ($selectionLimit === null) $selectionLimit = $eligibleCount;
+	$selectedCount = min($eligibleCount, $selectionLimit);
 	$records = array(); $mutations = array(); $earnings = array();
-	for ($i = 0; $i < $count; $i++) {
+	for ($i = 0; $i < $selectedCount; $i++) {
 		$id = 10000 + $i;
 		$userid = 200 + ($i % 3);
 		$amount = (($i % 7) + 1).'.'.str_pad((string)($i % 1000), 12, '0', STR_PAD_LEFT);
@@ -20,8 +22,10 @@ function manifest_fixture($count, $batchSize=25)
 		$mutations[] = array('blockid'=>$id, 'height'=>1900000+$i, 'classification'=>'stage1_import_generate', 'would_set_txhash'=>str_pad(dechex($id+50000),64,'0',STR_PAD_LEFT), 'would_set_category'=>'immature', 'would_set_amount'=>BadpoolStage1Manifest::normalizeAmount($amount));
 		$earnings[] = array('userid'=>$userid, 'coinid'=>1267, 'blockid'=>$id, 'create_time'=>1800000000+$i, 'amount'=>BadpoolStage1Manifest::normalizeAmount($amount), 'status'=>0, 'mature_time'=>null, 'attribution_model'=>'block_userid_single_recipient', 'attribution_model_requires_operator_confirmation'=>true, 'historical_evidence_mixed'=>true, 'backendblocknew_not_used'=>true, 'fee_policy'=>'not_applied_in_dryrun');
 	}
-	$snapshot = array('checkpoint_last_payout_time'=>1784860501, 'checkpoint_source'=>'latest_completed_payout', 'candidate_query_completed_before_apply'=>true, 'maximum_selected_order_key'=>array('height'=>1900000+max(0,$count-1),'time'=>1800000000+max(0,$count-1),'id'=>10000+max(0,$count-1)), 'new_candidates_after_snapshot_are_excluded'=>true);
-	return BadpoolStage1Manifest::build(1267, 'scrypt', $snapshot, $count, 0, $records, $mutations, $earnings, $batchSize);
+	$selectedLast = max(0, $selectedCount - 1);
+	$eligibleLast = max(0, $eligibleCount - 1);
+	$snapshot = array('checkpoint_last_payout_time'=>1784860501, 'checkpoint_source'=>'latest_completed_payout', 'candidate_query_completed_before_apply'=>true, 'maximum_selected_order_key'=>array('height'=>1900000+$selectedLast,'time'=>1800000000+$selectedLast,'id'=>10000+$selectedLast), 'maximum_eligible_snapshot_order_key'=>array('height'=>1900000+$eligibleLast,'time'=>1800000000+$eligibleLast,'id'=>10000+$eligibleLast), 'selection_limit'=>$selectionLimit, 'eligible_candidate_count'=>$eligibleCount, 'excluded_by_selection_limit_count'=>$eligibleCount-$selectedCount, 'new_candidates_after_snapshot_are_excluded'=>true, 'post_snapshot_candidates_are_separately_counted'=>true);
+	return BadpoolStage1Manifest::build(1267, 'scrypt', $snapshot, $selectionLimit, $eligibleCount, $eligibleCount-$selectedCount, 0, $records, $mutations, $earnings, $batchSize);
 }
 
 function manifest_clone($value)
@@ -65,24 +69,30 @@ $authorization = BadpoolStage1Manifest::validateApplyAuthorization($generatedPac
 manifest_expect($authorization['status'] === 'pass' && $authorization['post_manifest_validation'] === true, 'generated package must enter the apply post-manifest-validation authorization path', $failures);
 manifest_expect(!is_file($progressProbe), 'pre-batch authorization must not create a progress file', $failures);
 
-$large = manifest_fixture(1742);
+$large = manifest_fixture(1742, 50);
 $largeValidation = BadpoolStage1Manifest::validate($large);
 $batches = BadpoolStage1Manifest::batches($large);
 manifest_expect($largeValidation['status'] === 'pass', '1,742-entry manifest must validate: '.implode(' | ', $largeValidation['errors']), $failures);
-manifest_expect($large['selected_count'] === 1742, '1,742 fixture selected_count mismatch', $failures);
+manifest_expect($large['selection_limit'] === 50, '1,742 fixture selection_limit mismatch', $failures);
+manifest_expect($large['eligible_candidate_count'] === 1742, '1,742 fixture eligible_candidate_count mismatch', $failures);
+manifest_expect($large['selected_count'] === 50, '1,742 fixture selected_count mismatch', $failures);
+manifest_expect($large['excluded_by_selection_limit_count'] === 1692, '1,742 fixture excluded_by_selection_limit_count mismatch', $failures);
+manifest_expect($large['excluded_newer_candidate_count'] === 0, 'in-snapshot exclusions must not be labeled newer', $failures);
 manifest_expect($large['internal_batch_size'] === 25, 'default internal batch size must be 25', $failures);
-manifest_expect($large['projected_batch_count'] === 70 && count($batches) === 70, '1,742 entries must produce 70 batches', $failures);
-$fullBatches = 0; foreach ($batches as $batch) if (count($batch) === 25) $fullBatches++;
-manifest_expect($fullBatches === 69, '1,742 entries must produce 69 full batches', $failures);
-manifest_expect(count($batches[69]) === 17, 'final 1,742-entry batch must contain 17 entries', $failures);
+manifest_expect($large['projected_batch_count'] === 2 && count($batches) === 2, '50 selected entries must produce two batches', $failures);
+manifest_expect(count($batches[0]) === 25 && count($batches[1]) === 25, 'both bounded fixture batches must contain 25 entries', $failures);
+manifest_expect($large['selected_block_ids'] === range(10000, 10049), 'bounded fixture must select the deterministic first 50 IDs', $failures);
+manifest_expect(!in_array(10050, $large['selected_block_ids'], true), 'candidate 51 must remain outside the manifest', $failures);
+manifest_expect($large['snapshot_boundary']['maximum_selected_order_key']['id'] === 10049, 'maximum selected order key mismatch', $failures);
+manifest_expect($large['snapshot_boundary']['maximum_eligible_snapshot_order_key']['id'] === 11741, 'maximum eligible snapshot order key mismatch', $failures);
 
 $confirmation = $large['exact_operator_confirmation'];
 manifest_expect($confirmation === BadpoolStage1Manifest::confirmationValue($large['package_checksum']['value']), 'one exact confirmation must bind the package checksum', $failures);
 manifest_expect(strpos($large['authorization_boundary'], 'Internal batches require no additional confirmation') !== false, 'internal batches must not require repeated confirmations', $failures);
 
 $approvedIds = $large['selected_block_ids'];
-$databaseAfterSnapshot = $approvedIds; $databaseAfterSnapshot[] = 999999;
-manifest_expect(count($databaseAfterSnapshot) === 1743 && $large['selected_block_ids'] === $approvedIds && $large['selected_count'] === 1742, 'new candidates must not join an existing manifest', $failures);
+$databaseAfterSnapshot = $approvedIds; $databaseAfterSnapshot[] = 10050; $databaseAfterSnapshot[] = 999999;
+manifest_expect(count($databaseAfterSnapshot) === 52 && $large['selected_block_ids'] === $approvedIds && $large['selected_count'] === 50, 'unselected or post-snapshot candidates must not join an existing manifest', $failures);
 
 $progress = BadpoolStage1Manifest::initialProgress($large);
 $firstBatchAmount = BadpoolStage1Manifest::normalizeAmount('0');
@@ -92,12 +102,13 @@ $progressValidation = BadpoolStage1Manifest::validateProgress($large, $progress)
 manifest_expect($progressValidation['status'] === 'pass', 'progress must validate after one committed batch', $failures);
 manifest_expect($progress['completed_batch_count'] === 1 && count($progress['completed_block_ids']) === 25 && $progress['remaining_block_ids'][0] === $batches[1][0], 'resume must begin at the first uncompleted entry', $failures);
 $progressTamperCases = array();
-$case = manifest_clone($progress); $case['completed_batch_count'] = 70; $progressTamperCases['completed batch count'] = manifest_reseal_progress($case);
+$case = manifest_clone($progress); $case['completed_batch_count'] = 2; $progressTamperCases['completed batch count'] = manifest_reseal_progress($case);
 $case = manifest_clone($progress); $case['completed_batches'][0]['rows_created'] = 999; $progressTamperCases['completed batch rows'] = manifest_reseal_progress($case);
 $case = manifest_clone($progress); $case['completed_batches'][0]['amount'] = '999.000000000000'; $progressTamperCases['completed batch amount'] = manifest_reseal_progress($case);
 $case = manifest_clone($progress); $case['cumulative_rows_created'] = 999; $progressTamperCases['cumulative rows'] = manifest_reseal_progress($case);
 $case = manifest_clone($progress); $case['cumulative_amount'] = '999.000000000000'; $progressTamperCases['cumulative amount'] = manifest_reseal_progress($case);
 $case = manifest_clone($progress); $case['retry_safe'] = false; $progressTamperCases['retry flag'] = manifest_reseal_progress($case);
+$case = manifest_clone($progress); $case['remaining_block_ids'][] = 10050; $progressTamperCases['cohort expansion'] = manifest_reseal_progress($case);
 $case = manifest_clone($progress); $case['progress_checksum']['value'] = str_repeat('3',64); $progressTamperCases['progress checksum'] = $case;
 foreach ($progressTamperCases as $name => $tampered) manifest_expect(BadpoolStage1Manifest::validateProgress($large, $tampered)['status'] === 'fail', 'progress tampering must be refused: '.$name, $failures);
 $duplicateRefused = false;
@@ -105,7 +116,7 @@ try { BadpoolStage1Manifest::completeBatch($large, $progress, 1, $batches[0], 25
 manifest_expect($duplicateRefused, 'already completed batch must not be duplicated', $failures);
 
 $oversizedBatchRefused = false;
-try { manifest_fixture(51, 51); } catch (InvalidArgumentException $e) { $oversizedBatchRefused = true; }
+try { manifest_fixture(51, 51, 51); } catch (InvalidArgumentException $e) { $oversizedBatchRefused = true; }
 manifest_expect($oversizedBatchRefused, 'manifest construction must refuse an internal batch above 50 entries', $failures);
 
 $tamperCases = array();
@@ -115,11 +126,15 @@ $case = manifest_clone($large); $case['package_type'] = 'forward-catchup-stage1-
 $case = manifest_clone($large); $case['command'] = 'forward-catchup-stage1-drain-plan'; $tamperCases['wrong command'] = $case;
 $case = manifest_clone($large); $case['selected_block_ids'][0] = 42; $tamperCases['selected IDs'] = $case;
 $case = manifest_clone($large); $case['selected_count']++; $tamperCases['selected count'] = $case;
+$case = manifest_clone($large); $case['selection_limit']++; $tamperCases['selection limit'] = $case;
+$case = manifest_clone($large); $case['eligible_candidate_count']++; $tamperCases['eligible candidate count'] = $case;
+$case = manifest_clone($large); $case['excluded_by_selection_limit_count']++; $tamperCases['excluded by selection limit count'] = $case;
 $case = manifest_clone($large); $case['projected_block_mutations'][0]['would_set_amount'] = '999.000000000000'; $tamperCases['projection'] = $case;
 $case = manifest_clone($large); $case['projected_earning_rows'][0]['amount'] = '999.000000000000'; $tamperCases['amount'] = $case;
 $case = manifest_clone($large); $case['projected_earning_rows'][0]['userid']++; $tamperCases['attribution'] = $case;
 $case = manifest_clone($large); $case['projected_recipient_totals'][0]['amount'] = '999.000000000000'; $tamperCases['recipient total'] = $case;
-$case = manifest_clone($large); $case['snapshot_boundary']['maximum_selected_order_key']['id']++; $tamperCases['snapshot'] = $case;
+$case = manifest_clone($large); $case['snapshot_boundary']['maximum_selected_order_key']['id']++; $tamperCases['maximum selected order key'] = $case;
+$case = manifest_clone($large); $case['snapshot_boundary']['maximum_eligible_snapshot_order_key']['id']++; $tamperCases['maximum eligible order key'] = $case;
 $case = manifest_clone($large); $case['projected_batch_count']++; $tamperCases['projected batch count'] = $case;
 $case = manifest_clone($large); $case['projected_earning_row_count']++; $tamperCases['projected earning count'] = $case;
 $case = manifest_clone($large); $swap = $case['selected_records'][0]; $case['selected_records'][0] = $case['selected_records'][1]; $case['selected_records'][1] = $swap; $tamperCases['ordering'] = $case;
@@ -127,14 +142,35 @@ $case = manifest_clone($large); $case['selection_checksum']['value'] = str_repea
 $case = manifest_clone($large); $case['intended_mutation_checksum']['value'] = str_repeat('1',64); $tamperCases['mutation checksum'] = $case;
 $case = manifest_clone($large); $case['package_checksum']['value'] = str_repeat('2',64); $tamperCases['package checksum'] = $case;
 $case = manifest_clone($large); $case['exact_operator_confirmation'] = 'tampered'; $tamperCases['operator confirmation'] = $case;
+$case = manifest_clone($large); $case['selected_block_ids'][] = 10050; $tamperCases['unselected candidate injection'] = $case;
+$case = manifest_clone($large); $case['selected_block_ids'][] = 999999; $tamperCases['post-snapshot candidate injection'] = $case;
 foreach ($tamperCases as $name => $tampered) manifest_expect(BadpoolStage1Manifest::validate($tampered)['status'] === 'fail', 'tampering must be refused: '.$name, $failures);
+
+$v1 = manifest_clone($large); $v1['schema'] = 'badpool.stage1_drain_manifest.v1';
+manifest_expect(BadpoolStage1Manifest::validateApplyAuthorization($v1, $large['package_checksum']['value'], $large['exact_operator_confirmation'], 1267)['status'] === 'fail', 'v1 manifest must be refused by the v2 apply contract', $failures);
+
+$equalLimit = manifest_fixture(30, 30);
+$largerLimit = manifest_fixture(30, 50);
+$one = manifest_fixture(30, 1);
+manifest_expect($equalLimit['selected_count'] === 30 && $equalLimit['excluded_by_selection_limit_count'] === 0, 'limit equal to eligible count must select all candidates', $failures);
+manifest_expect($largerLimit['selected_count'] === 30 && $largerLimit['excluded_by_selection_limit_count'] === 0, 'limit above eligible count must select all candidates', $failures);
+manifest_expect($one['selected_count'] === 1 && $one['excluded_by_selection_limit_count'] === 29 && $one['projected_batch_count'] === 1, 'limit of one must select exactly one candidate', $failures);
+
+$invalidLimits = array('', '0', '-1', '1.5', '1e2', 'abc', '12x', ' 50', '50 ', '00050', '1000001', '999999999999999999999999999');
+foreach ($invalidLimits as $invalidLimit) {
+	$refused = false;
+	try { BadpoolStage1Manifest::parseSelectionLimit($invalidLimit); } catch (InvalidArgumentException $e) { $refused = true; }
+	manifest_expect($refused, 'invalid selection limit must be refused: '.var_export($invalidLimit, true), $failures);
+}
+manifest_expect(BadpoolStage1Manifest::parseSelectionLimit('1') === 1, 'selection limit parser must accept one', $failures);
+manifest_expect(BadpoolStage1Manifest::parseSelectionLimit('1000000') === 1000000, 'selection limit parser must accept its maximum', $failures);
 
 $badPackageAuthorization = BadpoolStage1Manifest::validateApplyAuthorization($large, str_repeat('f',64), $large['exact_operator_confirmation'], 1267);
 manifest_expect($badPackageAuthorization['status'] === 'fail' && $badPackageAuthorization['stop_reason'] === 'package_checksum_mismatch', 'apply authorization must reject package-checksum tampering', $failures);
 $badConfirmationAuthorization = BadpoolStage1Manifest::validateApplyAuthorization($large, $large['package_checksum']['value'], 'tampered', 1267);
 manifest_expect($badConfirmationAuthorization['status'] === 'fail' && $badConfirmationAuthorization['stop_reason'] === 'operator_confirmation_required', 'apply authorization must reject operator-confirmation tampering', $failures);
 
-$differentManifest = manifest_fixture(1741);
+$differentManifest = manifest_fixture(1741, 50);
 manifest_expect(BadpoolStage1Manifest::validateProgress($differentManifest, $progress)['status'] === 'fail', 'resume must refuse a different manifest', $failures);
 manifest_expect($large['projected_earning_row_count'] === count($large['projected_earning_rows']), 'projected earning row reconciliation mismatch', $failures);
 manifest_expect($large['projected_recipient_totals'] === BadpoolStage1Manifest::recipientTotalsForEarnings($large['projected_earning_rows']), 'recipient reconciliation mismatch', $failures);
