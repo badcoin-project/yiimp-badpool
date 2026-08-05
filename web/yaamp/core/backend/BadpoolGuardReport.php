@@ -7,6 +7,9 @@ class BadpoolGuardReport
 	const CHECKSUM_ALGORITHM = 'sha256';
 	const APPLY_SCHEMA = 'badpool.guardrail.apply.v1';
 	const APPLY_MODE = 'guarded-apply';
+	const APPROVAL_PACKAGE_SCHEMA = 'badpool.approval_package.v1';
+	const APPROVAL_PACKAGE_MODE = 'read-only-approval-package';
+	const APPROVAL_CHECKSUM_PURPOSE = 'immutable approval binding; authorization requires fresh recomputation and exact match';
 	const PREVIEW_SCHEMA = 'badpool.guardrail.preview.v1';
 	const PREVIEW_MODE = 'read-only-preview';
 
@@ -50,8 +53,14 @@ class BadpoolGuardReport
 		}
 
 		if ($isPreview) {
-			if (!self::isCanonicalStage1Manifest($report)) $report['schema'] = self::PREVIEW_SCHEMA;
-			$report['mode'] = self::PREVIEW_MODE;
+			if (self::isCanonicalApprovalPackage($report)) {
+				$report['schema'] = self::APPROVAL_PACKAGE_SCHEMA;
+				$report['mode'] = self::APPROVAL_PACKAGE_MODE;
+			}
+			else {
+				if (!self::isCanonicalStage1Manifest($report)) $report['schema'] = self::PREVIEW_SCHEMA;
+				$report['mode'] = self::PREVIEW_MODE;
+			}
 			$report['read_only'] = true;
 			$report['db_mutations'] = false;
 			$report['wallet_rpc_send_performed'] = false;
@@ -76,6 +85,22 @@ class BadpoolGuardReport
 		return self::arrayValue($report, 'schema') === BadpoolStage1Manifest::SCHEMA
 			&& self::arrayValue($report, 'package_type') === BadpoolStage1Manifest::PACKAGE_TYPE
 			&& self::arrayValue($report, 'command') === BadpoolStage1Manifest::COMMAND;
+	}
+
+	private static function isCanonicalApprovalPackage($report)
+	{
+		if (self::arrayValue($report, 'schema') !== self::APPROVAL_PACKAGE_SCHEMA) return false;
+		$packageType = (string)self::arrayValue($report, 'package_type', '');
+		if ($packageType === '' || self::arrayValue($report, 'approval_package_type') !== $packageType) return false;
+		if (self::arrayValue($report, 'approval_required') !== true) return false;
+		$commands = array(
+			'forward-catchup-stage1-apply' => 'forward-catchup-stage1-apply-approval-package',
+			'earnings-maturity-transition' => 'earnings-maturity-transition-approval-package',
+			'account-credit-clear' => 'account-credit-clear-approval-package',
+			'payout-row-creation' => 'payout-row-approval-package',
+			'wallet-send' => 'wallet-send-approval-package',
+		);
+		return isset($commands[$packageType]) && self::arrayValue($report, 'command') === $commands[$packageType];
 	}
 
 	private static function isPreviewCommand($command)
@@ -135,6 +160,21 @@ class BadpoolGuardReport
 			),
 			'purpose' => 'preview audit comparison only; not payout authorization',
 		);
+	}
+
+	public static function approvalChecksum($report)
+	{
+		$checksum = self::checksum($report);
+		$checksum['purpose'] = self::APPROVAL_CHECKSUM_PURPOSE;
+		return $checksum;
+	}
+
+	public static function markApprovalChecksum($checksum)
+	{
+		if (!is_array($checksum) || !array_key_exists('value', $checksum)) return $checksum;
+		if (!isset($checksum['algorithm'])) $checksum['algorithm'] = self::CHECKSUM_ALGORITHM;
+		$checksum['purpose'] = self::APPROVAL_CHECKSUM_PURPOSE;
+		return $checksum;
 	}
 
 	private static function ensurePayoutAudit($report)
