@@ -2807,10 +2807,14 @@ class BadpoolGuardCommand extends CConsoleCommand
 	private function guardedApplyFail($report,$reason,$msg){ $report['status']='refused'; $report['abort_reason']=$reason; $report['errors'][]=$msg; return BadpoolGuardReport::finalize($report); }
 	private function guardedApplyBeforeState(){ $coinId=intval(arraySafeVal($this->guard->getScope(),'coin_id')); return array('earnings_status_counts'=>$this->groupSummary('earnings','status',array('sql'=>'coinid=:coin_id','params'=>array(':coin_id'=>$coinId))),'block_category_counts'=>$this->groupSummary('blocks','category',array('sql'=>'coin_id=:coin_id','params'=>array(':coin_id'=>$coinId)))); }
 	private function paymentDelayThreshold(){ return YAAMP_ALLOW_EXCHANGE ? time() - (int)YAAMP_PAYMENTS_FREQ : time() - (YAAMP_PAYMENTS_FREQ / 2); }
-	private function stableApprovalChecksum($report,$keys){ $in=array(); foreach($keys as $k) $in[$k]=arraySafeVal($report,$k); return BadpoolGuardReport::checksum($in); }
+	private function stableApprovalChecksum($report,$keys){ $in=array(); foreach($keys as $k) $in[$k]=arraySafeVal($report,$k); return BadpoolGuardReport::approvalChecksum($in); }
 	private function standardizeApprovalPackageContract(&$report, $packageType, $checksumFields)
 	{
-		$report['schema'] = 'badpool.approval_package.v1';
+		$report['schema'] = BadpoolGuardReport::APPROVAL_PACKAGE_SCHEMA;
+		$report['mode'] = BadpoolGuardReport::APPROVAL_PACKAGE_MODE;
+		$report['read_only'] = true;
+		$report['db_mutations'] = false;
+		$report['wallet_rpc_send_performed'] = false;
 		$report['package_type'] = $packageType;
 		$report['coin_id'] = intval(arraySafeVal(arraySafeVal($report, 'scope', array()), 'coin_id', arraySafeVal($this->guard->getScope(), 'coin_id')));
 		if (!isset($report['apply_command_args'])) $report['apply_command_args'] = arraySafeVal($report, 'apply_command_shape', arraySafeVal($report, 'intended_apply_command_shape', array()));
@@ -2822,7 +2826,10 @@ class BadpoolGuardCommand extends CConsoleCommand
 		$checksums = array();
 		foreach ($checksumFields as $field) {
 			$value = arraySafeVal($report, $field);
-			if (is_array($value) && array_key_exists('value', $value)) $value = $value['value'];
+			if (is_array($value) && array_key_exists('value', $value)) {
+				$report[$field] = BadpoolGuardReport::markApprovalChecksum($value);
+				$value = $value['value'];
+			}
 			if ($value !== null && $value !== '') $checksums[$field] = $value;
 		}
 		$report['checksums'] = $checksums;
