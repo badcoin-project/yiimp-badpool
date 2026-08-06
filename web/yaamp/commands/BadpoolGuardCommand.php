@@ -242,7 +242,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 			"       php yaamp/yiic.php badpoolguard forward-catchup-stage1-apply-approval-package --coin-id=<id> [--limit=<n>] [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard forward-catchup-stage1-drain-plan --coin-id=<id> --selection-limit=<n> [--internal-batch-size=25] --format=json\n".
 			"       php yaamp/yiic.php badpoolguard forward-catchup-stage1-drain-approval-package --coin-id=<id> --selection-limit=<n> [--internal-batch-size=25] --format=json\n".
-			"       php yaamp/yiic.php badpoolguard forward-catchup-stage1-drain-apply --coin-id=<id> --manifest-file=<absolute-json-path> --progress-file=<absolute-json-path> --package-checksum=<sha256> --operator-confirms-stage1-drain=<exact-manifest-confirmation> --format=json\n".
+			"       ".implode(' ', BadpoolStage1Manifest::applyCommandShape())."\n".
 			"       php yaamp/yiic.php badpoolguard forward-catchup-stage1-apply --coin-id=<id> --limit=<approved_n> --selected-count=<approved_n> --approval-package-checksum=<sha256> --batch-scope-checksum=<sha256> --projected-mutation-checksum=<sha256> --projected-earnings-checksum=<sha256> --operator-confirms-attribution-model=block_userid_single_recipient --format=json\n".
 			"       php yaamp/yiic.php badpoolguard earnings-maturity-transition-dryrun --coin-id=<id> [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard earnings-maturity-transition-approval-package --coin-id=<id> [--format=json|text]\n".
@@ -254,6 +254,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 			"       php yaamp/yiic.php badpoolguard guard-context --coin-id=<id> [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard status-runner [--coin-id=<id>] [--algo=<algo>] --format=json\n".
 			"       php yaamp/yiic.php badpoolguard overview --all-coins-preview [--format=json|text]\n\n".
+			"Stage1 generation options (--coin-id, --selection-limit, --internal-batch-size, --format=json) create the approval package. Apply uses the canonical shape above: coin ID, checksum, and exact confirmation are manifest-authority bindings; manifest/progress paths are runtime-supplied and are not package authority.\n".
 			"The Stage1 drain manifest package performs chain/DB reads only and no wallet reads. Guarded apply commands mutate only their exact approved stage; service actions, backend loops, share deletion, and unapproved later stages remain unavailable.\n";
 	}
 
@@ -2329,6 +2330,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 		$report['failure_phase'] = null;
 		$report['retry_safe'] = true;
 		$report['same_manifest_confirmation_required'] = true;
+		$report['apply_classification'] = BadpoolStage1Manifest::classifyApplyResult(null, $report['batches_attempted'], $report['committed_batches']);
 		return BadpoolGuardReport::finalize($report);
 	}
 
@@ -2341,7 +2343,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 
 	private function forwardCatchupStage1DrainOptions($args, $apply)
 	{
-		$allowed = $apply ? array('coin-id','format','manifest-file','progress-file','package-checksum','operator-confirms-stage1-drain') : array('coin-id','format','selection-limit','internal-batch-size');
+		$allowed = $apply ? array_keys(BadpoolStage1Manifest::applyOptionContract()) : array('coin-id','format','selection-limit','internal-batch-size');
 		$options = array('internal-batch-size' => BadpoolStage1Manifest::DEFAULT_BATCH_SIZE);
 		$seen = array();
 		foreach ($args as $arg) {
@@ -2365,7 +2367,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 			if (!preg_match('/^[0-9]+$/', (string)arraySafeVal($options, 'internal-batch-size')) || intval($options['internal-batch-size']) <= 0 || intval($options['internal-batch-size']) > self::FORWARD_CATCHUP_STAGE1_MANIFEST_MAX_BATCH_SIZE) return $this->forwardCatchupStage1DrainFail($report, 'invalid_internal_batch_size', '--internal-batch-size must be between 1 and '.self::FORWARD_CATCHUP_STAGE1_MANIFEST_MAX_BATCH_SIZE.'.');
 			return true;
 		}
-		foreach (array('manifest-file','progress-file','package-checksum','operator-confirms-stage1-drain') as $name) if (!isset($options[$name]) || $options[$name] === '') return $this->forwardCatchupStage1DrainFail($report, 'missing_required_option', 'Missing required --'.$name.'.');
+		foreach (BadpoolStage1Manifest::applyOptionContract() as $name => $definition) if ($definition['required'] && (!isset($options[$name]) || $options[$name] === '')) return $this->forwardCatchupStage1DrainFail($report, 'missing_required_option', 'Missing required --'.$name.'.');
 		if (!preg_match('/^[a-f0-9]{64}$/i', (string)$options['package-checksum'])) return $this->forwardCatchupStage1DrainFail($report, 'invalid_package_checksum', '--package-checksum must be a SHA-256 hex value.');
 		if ($options['manifest-file'] === $options['progress-file']) return $this->forwardCatchupStage1DrainFail($report, 'artifact_path_collision', 'Manifest and progress files must be different paths.');
 		return true;
@@ -2704,6 +2706,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 		$report['manual_reconciliation_required'] = false;
 		$report['retry_safe'] = true;
 		$report['same_manifest_confirmation_required'] = true;
+		$report['apply_classification'] = BadpoolStage1Manifest::classifyApplyResult($reason, arraySafeVal($report, 'batches_attempted', 0), arraySafeVal($report, 'committed_batches', 0), arraySafeVal($report, 'failing_transaction_rolled_back', false), $verifiedPrior);
 		if ($hasCommittedCohortProgress) {
 			if ($committedThisRun) $report['apply_commands_executed'] = true;
 			$report['operator_warning'] = 'One or more verified Stage1 batches committed before this stop. Retry is safe only with the identical manifest, package checksum, progress path, and exact manifest confirmation.';

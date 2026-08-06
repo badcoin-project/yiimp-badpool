@@ -38,7 +38,10 @@ drain_expect(strpos($manifest, "'progress_checksum'")!==false && strpos($manifes
 drain_expect(strpos($manifest, 'MAX_BATCH_SIZE = 50')!==false && strpos($manifest, 'internal_batch_size must be between 1 and')!==false, 'manifest validation must enforce the bounded transaction ceiling',$failures);
 drain_expect(strpos($apply, 'additional_operator_confirmation')===false, 'apply loop must not request per-batch confirmation',$failures);
 drain_expect(strpos($command, "array('coin-id','format','selection-limit','internal-batch-size')")!==false, 'generation must accept selection-limit',$failures);
-drain_expect(strpos($command, "array('coin-id','format','manifest-file','progress-file','package-checksum','operator-confirms-stage1-drain')")!==false, 'apply allowlist must exclude selection-limit',$failures);
+drain_expect(strpos($command, 'array_keys(BadpoolStage1Manifest::applyOptionContract())')!==false, 'apply parser must consume the shared option contract',$failures);
+drain_expect(strpos($command, "implode(' ', BadpoolStage1Manifest::applyCommandShape())")!==false, 'help must consume the shared command shape',$failures);
+foreach(array('apply_command','apply_command_args','apply_command_shape','field_ref','runtime') as $field) drain_expect(strpos($manifest,$field)!==false,'machine-usable apply contract missing '.$field,$failures);
+drain_expect(strpos($manifest,"'manifest' =>")===false && strpos($manifest,"'confirmation' =>")===false,'guessed aliases must remain absent',$failures);
 drain_expect(strpos($command, 'Duplicate option refused: --')!==false, 'duplicate selection-limit must be refused',$failures);
 drain_expect(strpos($command, 'Missing required --selection-limit.')!==false && strpos($command, 'invalid_selection_limit')!==false, 'missing and invalid selection limits must be refused',$failures);
 drain_expect(strpos($manifest, 'MAX_SELECTION_LIMIT = 1000000')!==false && strpos($manifest, "'/^[1-9][0-9]*$/'")!==false, 'selection limit parser must be canonical and bounded',$failures);

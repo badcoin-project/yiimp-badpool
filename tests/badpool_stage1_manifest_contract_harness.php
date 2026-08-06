@@ -49,6 +49,20 @@ manifest_expect($validation['status'] === 'pass', '30-entry manifest must valida
 manifest_expect($moreThanOneBatch['selected_count'] === 30, 'manifest must expose all entries beyond the first batch', $failures);
 manifest_expect(count($moreThanOneBatch['selected_block_ids']) === 30, 'selected_block_ids must contain the complete cohort', $failures);
 manifest_expect($moreThanOneBatch['projected_batch_count'] === 2, '30 entries at size 25 must project two batches', $failures);
+$optionContract = BadpoolStage1Manifest::applyOptionContract();
+$canonicalOptions = array('coin-id','manifest-file','progress-file','package-checksum','operator-confirms-stage1-drain','format');
+manifest_expect(array_keys($optionContract) === $canonicalOptions, 'apply contract must expose every canonical option in order', $failures);
+manifest_expect(!isset($optionContract['manifest']) && !isset($optionContract['confirmation']), 'guessed aliases must not enter the apply contract', $failures);
+manifest_expect($optionContract['coin-id']['field_ref'] === '/coin_id' && $optionContract['package-checksum']['field_ref'] === '/package_checksum/value' && $optionContract['operator-confirms-stage1-drain']['field_ref'] === '/exact_operator_confirmation', 'authority-bearing arguments must reference canonical manifest fields', $failures);
+manifest_expect($optionContract['manifest-file']['source'] === 'runtime' && $optionContract['progress-file']['source'] === 'runtime', 'artifact paths must be runtime supplied', $failures);
+manifest_expect($moreThanOneBatch['apply_command'] === BadpoolStage1Manifest::APPLY_COMMAND && $moreThanOneBatch['apply_command_args'] === $optionContract && $moreThanOneBatch['apply_command_shape'] === BadpoolStage1Manifest::applyCommandShape(), 'manifest must emit the shared machine-usable apply contract', $failures);
+$sameAuthoritativeInput = manifest_fixture(30);
+manifest_expect($sameAuthoritativeInput['apply_command_args'] === $moreThanOneBatch['apply_command_args'] && $sameAuthoritativeInput['apply_command_shape'] === $moreThanOneBatch['apply_command_shape'] && $sameAuthoritativeInput['package_checksum'] === $moreThanOneBatch['package_checksum'], 'identical authoritative input must produce deterministic apply instructions and identity', $failures);
+manifest_expect(BadpoolStage1Manifest::classifyApplyResult('coin_id_required', 0, 0) === 'invocation_refusal', 'missing coin ID must classify as invocation refusal', $failures);
+manifest_expect(BadpoolStage1Manifest::classifyApplyResult('operator_confirmation_required', 0, 0) === 'authorization_refusal', 'invalid confirmation must classify as authorization refusal', $failures);
+manifest_expect(BadpoolStage1Manifest::classifyApplyResult('mutation_failed_rolled_back', 1, 0, true) === 'transactional_failure', 'rolled-back first batch must classify as transactional failure', $failures);
+manifest_expect(BadpoolStage1Manifest::classifyApplyResult('projection_mismatch', 2, 1) === 'partial_committed_failure', 'failure after a commit must classify as partial committed failure', $failures);
+manifest_expect(BadpoolStage1Manifest::classifyApplyResult(null, 2, 2) === 'successful_apply', 'complete two-batch apply must classify as successful', $failures);
 
 // Exercise the same producer/finalizer boundary used by the approval-package
 // command. The generic safety finalizer must preserve the dedicated manifest
@@ -142,6 +156,7 @@ $case = manifest_clone($large); $case['selection_checksum']['value'] = str_repea
 $case = manifest_clone($large); $case['intended_mutation_checksum']['value'] = str_repeat('1',64); $tamperCases['mutation checksum'] = $case;
 $case = manifest_clone($large); $case['package_checksum']['value'] = str_repeat('2',64); $tamperCases['package checksum'] = $case;
 $case = manifest_clone($large); $case['exact_operator_confirmation'] = 'tampered'; $tamperCases['operator confirmation'] = $case;
+$case = manifest_clone($large); $case['apply_command_args']['manifest-file']['source'] = 'manifest'; $tamperCases['apply contract'] = $case;
 $case = manifest_clone($large); $case['selected_block_ids'][] = 10050; $tamperCases['unselected candidate injection'] = $case;
 $case = manifest_clone($large); $case['selected_block_ids'][] = 999999; $tamperCases['post-snapshot candidate injection'] = $case;
 foreach ($tamperCases as $name => $tampered) manifest_expect(BadpoolStage1Manifest::validate($tampered)['status'] === 'fail', 'tampering must be refused: '.$name, $failures);

@@ -29,6 +29,16 @@ The operator reviews the full JSON and preserves it unchanged. Important authori
 * `internal_batch_size` and `projected_batch_count`; and
 * `exact_operator_confirmation`.
 
+The v2 manifest also contains the additive, read-only `apply_command`,
+`apply_command_args`, and `apply_command_shape` fields. They are generated from
+the same option definitions used by the apply parser and command help. The
+`coin-id`, `package-checksum`, and confirmation entries reference their
+canonical manifest fields; the manifest and progress file entries are marked
+as runtime absolute JSON paths. Thus a helper can render argv without guessing
+option names or treating an environment-specific path as package authority.
+These additive instructions do not change the v2 checksum identity or its
+authority-bearing package inputs, so the manifest remains schema v2.
+
 The complete eligibility snapshot is fixed before daemon classification begins. Only its first `selection_limit` candidates are classified and projected. The snapshot records both the maximum selected order key and maximum eligible order key, so intentionally unselected snapshot candidates are not mislabeled as newer. A block arriving after the eligibility query is separately reported as newer/excluded and cannot join the manifest.
 
 ## Apply the approved manifest
@@ -45,6 +55,21 @@ php yaamp/yiic.php badpoolguard forward-catchup-stage1-drain-apply \
   --operator-confirms-stage1-drain=<exact-operator-confirmation-from-manifest> \
   --format=json
 ```
+
+All six apply options are required. In particular, `--manifest` and
+`--confirmation` are not aliases and are refused as invalid options. The
+`--manifest-file` path must name this exact preserved manifest,
+`--progress-file` is a separately supplied resumable-state path, and
+`--operator-confirms-stage1-drain` must equal `exact_operator_confirmation`
+byte for byte.
+
+Apply reports a stable `apply_classification`: `invocation_refusal` for parser
+or coin-scope stops, `authorization_refusal` for pre-transaction package
+validation stops, `transactional_failure` when the first attempted transaction
+rolls back, `partial_committed_failure` when an earlier batch is already
+committed, and `successful_apply` only after complete reconciliation. Shell
+syntax errors occur outside this application and therefore produce no apply
+report.
 
 The consumer independently recomputes the selection, intended-mutation, and package checksums. It refuses a different coin, altered file, wrong checksum, wrong confirmation, invalid ordering, duplicate ID, changed attribution, changed amount, changed projection, or incompatible progress file before mutation.
 

@@ -11,6 +11,42 @@ class BadpoolStage1Manifest
 	const MAX_SELECTION_LIMIT = 1000000;
 	const AMOUNT_SCALE = 12;
 	const CONFIRMATION_SUFFIX = 'stage1_only_no_later_accounting_no_wallet';
+	const APPLY_COMMAND = 'forward-catchup-stage1-drain-apply';
+
+	/** The single authoritative apply option contract used by generation, parsing and help. */
+	public static function applyOptionContract()
+	{
+		return array(
+			'coin-id' => array('required'=>true, 'source'=>'manifest', 'field_ref'=>'/coin_id'),
+			'manifest-file' => array('required'=>true, 'source'=>'runtime', 'value_type'=>'absolute_json_path', 'purpose'=>'path_to_this_exact_manifest'),
+			'progress-file' => array('required'=>true, 'source'=>'runtime', 'value_type'=>'absolute_json_path', 'purpose'=>'resumable_progress_path'),
+			'package-checksum' => array('required'=>true, 'source'=>'manifest', 'field_ref'=>'/package_checksum/value'),
+			'operator-confirms-stage1-drain' => array('required'=>true, 'source'=>'manifest', 'field_ref'=>'/exact_operator_confirmation'),
+			'format' => array('required'=>true, 'source'=>'literal', 'value'=>'json'),
+		);
+	}
+
+	public static function applyCommandShape()
+	{
+		$shape = array('php', 'yaamp/yiic.php', 'badpoolguard', self::APPLY_COMMAND);
+		foreach (self::applyOptionContract() as $name => $definition) {
+			if ($definition['source'] === 'runtime') $value = '<runtime:'.$definition['purpose'].'>';
+			elseif ($definition['source'] === 'manifest') $value = '<manifest:'.$definition['field_ref'].'>';
+			else $value = $definition['value'];
+			$shape[] = '--'.$name.'='.$value;
+		}
+		return $shape;
+	}
+
+	public static function classifyApplyResult($reason, $batchesAttempted, $committedBatches, $rolledBack=false, $verifiedPrior=false)
+	{
+		if ($reason === null) return 'successful_apply';
+		$invocation = array('invalid_option','coin_id_required','coin_scope_mismatch','json_format_required','missing_required_option','invalid_package_checksum','artifact_path_collision');
+		if (in_array($reason, $invocation, true)) return 'invocation_refusal';
+		if (intval($committedBatches) > 0 || $verifiedPrior) return 'partial_committed_failure';
+		if (intval($batchesAttempted) > 0 && $rolledBack) return 'transactional_failure';
+		return 'authorization_refusal';
+	}
 
 	public static function build($coinId, $algo, $snapshot, $selectionLimit, $eligibleCandidateCount, $excludedBySelectionLimitCount, $excludedNewerCount, $selectedRecords, $projectedMutations, $projectedEarnings, $internalBatchSize=self::DEFAULT_BATCH_SIZE)
 	{
@@ -74,7 +110,7 @@ class BadpoolStage1Manifest
 		);
 		$packageChecksum = self::checksum($packageInput, 'operator authorization boundary for one exact bounded Stage1 drain manifest');
 
-		return array(
+		$manifest = array(
 			'schema' => self::SCHEMA,
 			'package_type' => self::PACKAGE_TYPE,
 			'command' => self::COMMAND,
@@ -120,6 +156,10 @@ class BadpoolStage1Manifest
 				'share_deletion' => false,
 			),
 		);
+		$manifest['apply_command'] = self::APPLY_COMMAND;
+		$manifest['apply_command_args'] = self::applyOptionContract();
+		$manifest['apply_command_shape'] = self::applyCommandShape();
+		return $manifest;
 	}
 
 	public static function validate($manifest)
@@ -129,6 +169,9 @@ class BadpoolStage1Manifest
 		if (self::value($manifest, 'schema') !== self::SCHEMA) $errors[] = 'Unexpected manifest schema.';
 		if (self::value($manifest, 'package_type') !== self::PACKAGE_TYPE) $errors[] = 'Unexpected manifest package_type.';
 		if (self::value($manifest, 'command') !== self::COMMAND) $errors[] = 'Unexpected manifest command.';
+		if (self::value($manifest, 'apply_command') !== self::APPLY_COMMAND) $errors[] = 'Unexpected apply_command.';
+		if (self::canonicalJson(self::value($manifest, 'apply_command_args', array())) !== self::canonicalJson(self::applyOptionContract())) $errors[] = 'apply_command_args differs from the canonical apply option contract.';
+		if (self::canonicalJson(self::value($manifest, 'apply_command_shape', array())) !== self::canonicalJson(self::applyCommandShape())) $errors[] = 'apply_command_shape differs from the canonical apply option contract.';
 		$ids = self::value($manifest, 'selected_block_ids', array());
 		$records = self::value($manifest, 'selected_records', array());
 		$mutations = self::value($manifest, 'projected_block_mutations', array());
