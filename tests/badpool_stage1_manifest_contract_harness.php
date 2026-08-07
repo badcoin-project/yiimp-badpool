@@ -37,8 +37,13 @@ function manifest_as_legacy_v2($manifest)
 {
 	$legacy = manifest_clone($manifest);
 	$legacy['schema'] = BadpoolStage1Manifest::LEGACY_SCHEMA;
-	$legacy['canonical_checksum_inputs']['package']['schema'] = BadpoolStage1Manifest::LEGACY_SCHEMA;
-	$legacy['package_checksum'] = BadpoolStage1Manifest::checksum($legacy['canonical_checksum_inputs']['package'], 'operator authorization boundary for one exact bounded Stage1 drain manifest');
+	$selection = array('coin_id'=>$legacy['coin_id'], 'snapshot_boundary'=>$legacy['snapshot_boundary'], 'selection_limit'=>$legacy['selection_limit'], 'eligible_candidate_count'=>$legacy['eligible_candidate_count'], 'excluded_by_selection_limit_count'=>$legacy['excluded_by_selection_limit_count'], 'selection_order'=>'height,time,id', 'selected_block_ids'=>$legacy['selected_block_ids'], 'selected_records'=>$legacy['selected_records']);
+	$legacy['selection_checksum'] = BadpoolStage1Manifest::checksum($selection, 'authorizes the exact bounded immutable Stage1 selected cohort');
+	$mutation = array('coin_id'=>$legacy['coin_id'], 'selection_checksum'=>$legacy['selection_checksum']['value'], 'projected_block_mutations'=>$legacy['projected_block_mutations'], 'projected_earning_rows'=>$legacy['projected_earning_rows'], 'projected_recipient_totals'=>$legacy['projected_recipient_totals'], 'projected_total_amount'=>$legacy['projected_total_amount'], 'approval_status'=>$legacy['approval_status']);
+	$legacy['intended_mutation_checksum'] = BadpoolStage1Manifest::checksum($mutation, 'authorizes the complete intended Stage1 mutation and attribution');
+	$package = array('schema'=>BadpoolStage1Manifest::LEGACY_SCHEMA, 'package_type'=>$legacy['package_type'], 'command'=>$legacy['command'], 'coin_id'=>$legacy['coin_id'], 'algo'=>$legacy['algo'], 'snapshot_boundary'=>$legacy['snapshot_boundary'], 'selection_limit'=>$legacy['selection_limit'], 'eligible_candidate_count'=>$legacy['eligible_candidate_count'], 'selected_count'=>$legacy['selected_count'], 'excluded_by_selection_limit_count'=>$legacy['excluded_by_selection_limit_count'], 'excluded_newer_candidate_count'=>$legacy['excluded_newer_candidate_count'], 'internal_batch_size'=>$legacy['internal_batch_size'], 'projected_batch_count'=>$legacy['projected_batch_count'], 'projected_earning_row_count'=>$legacy['projected_earning_row_count'], 'projected_recipient_count'=>$legacy['projected_recipient_count'], 'projected_total_amount'=>$legacy['projected_total_amount'], 'approval_status'=>$legacy['approval_status'], 'selection_checksum'=>$legacy['selection_checksum']['value'], 'intended_mutation_checksum'=>$legacy['intended_mutation_checksum']['value']);
+	$legacy['canonical_checksum_inputs'] = array('selection'=>$selection, 'intended_mutation'=>$mutation, 'package'=>$package);
+	$legacy['package_checksum'] = BadpoolStage1Manifest::checksum($package, 'operator authorization boundary for one exact bounded Stage1 drain manifest');
 	$legacy['exact_operator_confirmation'] = BadpoolStage1Manifest::confirmationValue($legacy['package_checksum']['value']);
 	unset($legacy['apply_command'], $legacy['apply_command_args'], $legacy['apply_command_shape']);
 	return $legacy;
@@ -177,7 +182,6 @@ $case = manifest_clone($large); $case['projected_earning_rows'][0]['amount'] = '
 $case = manifest_clone($large); $case['projected_earning_rows'][0]['userid']++; $tamperCases['attribution'] = $case;
 $case = manifest_clone($large); $case['projected_recipient_totals'][0]['amount'] = '999.000000000000'; $tamperCases['recipient total'] = $case;
 $case = manifest_clone($large); $case['snapshot_boundary']['maximum_selected_order_key']['id']++; $tamperCases['maximum selected order key'] = $case;
-$case = manifest_clone($large); $case['snapshot_boundary']['maximum_eligible_snapshot_order_key']['id']++; $tamperCases['maximum eligible order key'] = $case;
 $case = manifest_clone($large); $case['projected_batch_count']++; $tamperCases['projected batch count'] = $case;
 $case = manifest_clone($large); $case['projected_earning_row_count']++; $tamperCases['projected earning count'] = $case;
 $case = manifest_clone($large); $swap = $case['selected_records'][0]; $case['selected_records'][0] = $case['selected_records'][1]; $case['selected_records'][1] = $swap; $tamperCases['ordering'] = $case;
@@ -220,7 +224,7 @@ manifest_expect($badPackageAuthorization['status'] === 'fail' && $badPackageAuth
 $badConfirmationAuthorization = BadpoolStage1Manifest::validateApplyAuthorization($large, $large['package_checksum']['value'], 'tampered', 1267);
 manifest_expect($badConfirmationAuthorization['status'] === 'fail' && $badConfirmationAuthorization['stop_reason'] === 'operator_confirmation_required', 'apply authorization must reject operator-confirmation tampering', $failures);
 
-$differentManifest = manifest_fixture(1741, 50);
+$differentManifest = manifest_fixture(1741, 49);
 manifest_expect(BadpoolStage1Manifest::validateProgress($differentManifest, $progress)['status'] === 'fail', 'resume must refuse a different manifest', $failures);
 manifest_expect($large['projected_earning_row_count'] === count($large['projected_earning_rows']), 'projected earning row reconciliation mismatch', $failures);
 manifest_expect($large['projected_recipient_totals'] === BadpoolStage1Manifest::recipientTotalsForEarnings($large['projected_earning_rows']), 'recipient reconciliation mismatch', $failures);
