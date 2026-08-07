@@ -109,6 +109,120 @@ class BadpoolStage1Manifest
 		return 'authorization_refusal';
 	}
 
+	private static function pipelineBoundary()
+	{
+		return array(
+			'stage1_only' => true,
+			'maturity_transition' => false,
+			'account_credit' => false,
+			'payout_row_creation' => false,
+			'wallet_reads' => false,
+			'wallet_sends' => false,
+			'backend_loops' => false,
+			'service_actions' => false,
+			'share_deletion' => false,
+		);
+	}
+
+	private static function selectedCohortIdentityRecords($records)
+	{
+		$identity = array();
+		foreach ($records as $record) {
+			$identity[] = array(
+				'block_id' => intval(self::value($record, 'block_id')),
+				'height' => intval(self::value($record, 'height')),
+				'time' => intval(self::value($record, 'time')),
+				'blockhash' => (string)self::value($record, 'blockhash'),
+				'userid' => intval(self::value($record, 'userid')),
+				'workerid' => intval(self::value($record, 'workerid')),
+				'current_category' => (string)self::value($record, 'current_category'),
+			);
+		}
+		return $identity;
+	}
+
+	private static function selectionChecksumInput($schema, $coinId, $snapshot, $selectionLimit, $eligibleCandidateCount, $excludedBySelectionLimitCount, $selectedIds, $records)
+	{
+		if ($schema === self::LEGACY_SCHEMA) {
+			return array(
+				'coin_id' => intval($coinId),
+				'snapshot_boundary' => $snapshot,
+				'selection_limit' => intval($selectionLimit),
+				'eligible_candidate_count' => intval($eligibleCandidateCount),
+				'excluded_by_selection_limit_count' => intval($excludedBySelectionLimitCount),
+				'selection_order' => 'height,time,id',
+				'selected_block_ids' => array_values($selectedIds),
+				'selected_records' => array_values($records),
+			);
+		}
+
+		return array(
+			'coin_id' => intval($coinId),
+			'selection_order' => 'height,time,id',
+			'selected_block_ids' => array_values($selectedIds),
+			'selected_cohort_identity_records' => self::selectedCohortIdentityRecords($records),
+		);
+	}
+
+	private static function intendedMutationChecksumInput($coinId, $selectionChecksum, $mutations, $earnings, $recipientTotals, $projectedTotal, $approvalStatus)
+	{
+		return array(
+			'coin_id' => intval($coinId),
+			'selection_checksum' => (string)$selectionChecksum,
+			'projected_block_mutations' => array_values($mutations),
+			'projected_earning_rows' => array_values($earnings),
+			'projected_recipient_totals' => array_values($recipientTotals),
+			'projected_total_amount' => (string)$projectedTotal,
+			'approval_status' => $approvalStatus,
+		);
+	}
+
+	private static function packageChecksumInput($schema, $coinId, $algo, $snapshot, $selectionLimit, $eligibleCandidateCount, $selectedCount, $excludedBySelectionLimitCount, $excludedNewerCount, $internalBatchSize, $projectedBatchCount, $projectedEarningRowCount, $projectedRecipientCount, $projectedTotal, $approvalStatus, $selectionChecksum, $mutationChecksum, $packageType=null, $command=null, $applyCommand=null, $applyCommandArgs=null, $applyCommandShape=null, $pipelineBoundary=null)
+	{
+		if ($packageType === null) $packageType = self::PACKAGE_TYPE;
+		if ($command === null) $command = self::COMMAND;
+		$input = array(
+			'schema' => $schema,
+			'package_type' => $packageType,
+			'command' => $command,
+			'coin_id' => intval($coinId),
+			'algo' => (string)$algo,
+		);
+		if ($schema === self::LEGACY_SCHEMA) {
+			$input['snapshot_boundary'] = $snapshot;
+			$input['selection_limit'] = intval($selectionLimit);
+			$input['eligible_candidate_count'] = intval($eligibleCandidateCount);
+			$input['selected_count'] = intval($selectedCount);
+			$input['excluded_by_selection_limit_count'] = intval($excludedBySelectionLimitCount);
+			$input['excluded_newer_candidate_count'] = intval($excludedNewerCount);
+			$input['internal_batch_size'] = intval($internalBatchSize);
+			$input['projected_batch_count'] = intval($projectedBatchCount);
+			$input['projected_earning_row_count'] = intval($projectedEarningRowCount);
+			$input['projected_recipient_count'] = intval($projectedRecipientCount);
+			$input['projected_total_amount'] = (string)$projectedTotal;
+			$input['approval_status'] = $approvalStatus;
+			$input['selection_checksum'] = (string)$selectionChecksum;
+			$input['intended_mutation_checksum'] = (string)$mutationChecksum;
+			return $input;
+		}
+
+		$input['selection_limit'] = intval($selectionLimit);
+		$input['selected_count'] = intval($selectedCount);
+		$input['internal_batch_size'] = intval($internalBatchSize);
+		$input['projected_batch_count'] = intval($projectedBatchCount);
+		$input['projected_earning_row_count'] = intval($projectedEarningRowCount);
+		$input['projected_recipient_count'] = intval($projectedRecipientCount);
+		$input['projected_total_amount'] = (string)$projectedTotal;
+		$input['approval_status'] = $approvalStatus;
+		$input['selection_checksum'] = (string)$selectionChecksum;
+		$input['intended_mutation_checksum'] = (string)$mutationChecksum;
+		$input['apply_command'] = $applyCommand === null ? self::APPLY_COMMAND : $applyCommand;
+		$input['apply_command_args'] = $applyCommandArgs === null ? self::applyOptionContract() : $applyCommandArgs;
+		$input['apply_command_shape'] = $applyCommandShape === null ? self::applyCommandShape() : $applyCommandShape;
+		$input['pipeline_boundary'] = $pipelineBoundary === null ? self::pipelineBoundary() : $pipelineBoundary;
+		return $input;
+	}
+
 	public static function build($coinId, $algo, $snapshot, $selectionLimit, $eligibleCandidateCount, $excludedBySelectionLimitCount, $excludedNewerCount, $selectedRecords, $projectedMutations, $projectedEarnings, $internalBatchSize=self::DEFAULT_BATCH_SIZE)
 	{
 		$selectionLimit = self::parseSelectionLimit($selectionLimit);
@@ -127,48 +241,11 @@ class BadpoolStage1Manifest
 		foreach ($mutations as $mutation) if (!in_array(self::value($mutation, 'classification'), array('stage1_import_generate','stage1_import_immature','stage1_import_reward','stage1_mark_orphan_no_earnings'), true)) $approvalStatus = 'blocked';
 		if (count($selectedIds) === 0 || count($mutations) !== count($selectedIds)) $approvalStatus = 'blocked';
 
-		$selectionInput = array(
-			'coin_id' => intval($coinId),
-			'snapshot_boundary' => $snapshot,
-			'selection_limit' => $selectionLimit,
-			'eligible_candidate_count' => intval($eligibleCandidateCount),
-			'excluded_by_selection_limit_count' => intval($excludedBySelectionLimitCount),
-			'selection_order' => 'height,time,id',
-			'selected_block_ids' => $selectedIds,
-			'selected_records' => $records,
-		);
+		$selectionInput = self::selectionChecksumInput(self::SCHEMA, $coinId, $snapshot, $selectionLimit, $eligibleCandidateCount, $excludedBySelectionLimitCount, $selectedIds, $records);
 		$selectionChecksum = self::checksum($selectionInput, 'authorizes the exact bounded immutable Stage1 selected cohort');
-		$mutationInput = array(
-			'coin_id' => intval($coinId),
-			'selection_checksum' => $selectionChecksum['value'],
-			'projected_block_mutations' => $mutations,
-			'projected_earning_rows' => $earnings,
-			'projected_recipient_totals' => $recipientTotals,
-			'projected_total_amount' => $projectedTotal,
-			'approval_status' => $approvalStatus,
-		);
+		$mutationInput = self::intendedMutationChecksumInput($coinId, $selectionChecksum['value'], $mutations, $earnings, $recipientTotals, $projectedTotal, $approvalStatus);
 		$mutationChecksum = self::checksum($mutationInput, 'authorizes the complete intended Stage1 mutation and attribution');
-		$packageInput = array(
-			'schema' => self::SCHEMA,
-			'package_type' => self::PACKAGE_TYPE,
-			'command' => self::COMMAND,
-			'coin_id' => intval($coinId),
-			'algo' => (string)$algo,
-			'snapshot_boundary' => $snapshot,
-			'selection_limit' => $selectionLimit,
-			'eligible_candidate_count' => intval($eligibleCandidateCount),
-			'selected_count' => count($selectedIds),
-			'excluded_by_selection_limit_count' => intval($excludedBySelectionLimitCount),
-			'excluded_newer_candidate_count' => intval($excludedNewerCount),
-			'internal_batch_size' => $internalBatchSize,
-			'projected_batch_count' => $projectedBatchCount,
-			'projected_earning_row_count' => count($earnings),
-			'projected_recipient_count' => count($recipientTotals),
-			'projected_total_amount' => $projectedTotal,
-			'approval_status' => $approvalStatus,
-			'selection_checksum' => $selectionChecksum['value'],
-			'intended_mutation_checksum' => $mutationChecksum['value'],
-		);
+		$packageInput = self::packageChecksumInput(self::SCHEMA, $coinId, $algo, $snapshot, $selectionLimit, $eligibleCandidateCount, count($selectedIds), $excludedBySelectionLimitCount, $excludedNewerCount, $internalBatchSize, $projectedBatchCount, count($earnings), count($recipientTotals), $projectedTotal, $approvalStatus, $selectionChecksum['value'], $mutationChecksum['value']);
 		$packageChecksum = self::checksum($packageInput, 'operator authorization boundary for one exact bounded Stage1 drain manifest');
 
 		$manifest = array(
@@ -205,17 +282,7 @@ class BadpoolStage1Manifest
 			'package_checksum' => $packageChecksum,
 			'exact_operator_confirmation' => self::confirmationValue($packageChecksum['value']),
 			'authorization_boundary' => 'One exact confirmation authorizes this bounded immutable Stage1 cohort. Internal batches require no additional confirmation.',
-			'pipeline_boundary' => array(
-				'stage1_only' => true,
-				'maturity_transition' => false,
-				'account_credit' => false,
-				'payout_row_creation' => false,
-				'wallet_reads' => false,
-				'wallet_sends' => false,
-				'backend_loops' => false,
-				'service_actions' => false,
-				'share_deletion' => false,
-			),
+			'pipeline_boundary' => self::pipelineBoundary(),
 		);
 		$manifest['apply_command'] = self::APPLY_COMMAND;
 		$manifest['apply_command_args'] = self::applyOptionContract();
@@ -351,11 +418,11 @@ class BadpoolStage1Manifest
 		foreach (array('maturity_transition','account_credit','payout_row_creation','wallet_reads','wallet_sends','backend_loops','service_actions','share_deletion') as $field) if (self::value($boundary, $field) !== false) $errors[] = 'Forbidden pipeline boundary enabled: '.$field.'.';
 
 		$inputs = self::value($manifest, 'canonical_checksum_inputs', array());
-		$selectionInput = array('coin_id'=>intval(self::value($manifest,'coin_id')), 'snapshot_boundary'=>self::value($manifest,'snapshot_boundary'), 'selection_limit'=>$selectionLimit, 'eligible_candidate_count'=>$eligibleCandidateCount, 'excluded_by_selection_limit_count'=>$excludedBySelectionLimitCount, 'selection_order'=>'height,time,id', 'selected_block_ids'=>$normalizedIds, 'selected_records'=>$records);
+		$selectionInput = self::selectionChecksumInput($schema, self::value($manifest,'coin_id'), $snapshot, $selectionLimit, $eligibleCandidateCount, $excludedBySelectionLimitCount, $normalizedIds, $records);
 		$selectionChecksum = self::checksum($selectionInput, 'authorizes the exact bounded immutable Stage1 selected cohort');
-		$mutationInput = array('coin_id'=>intval(self::value($manifest,'coin_id')), 'selection_checksum'=>$selectionChecksum['value'], 'projected_block_mutations'=>$mutations, 'projected_earning_rows'=>$earnings, 'projected_recipient_totals'=>$recipientTotals, 'projected_total_amount'=>$projectedTotal, 'approval_status'=>self::value($manifest,'approval_status'));
+		$mutationInput = self::intendedMutationChecksumInput(self::value($manifest,'coin_id'), $selectionChecksum['value'], $mutations, $earnings, $recipientTotals, $projectedTotal, self::value($manifest,'approval_status'));
 		$mutationChecksum = self::checksum($mutationInput, 'authorizes the complete intended Stage1 mutation and attribution');
-		$packageInput = array('schema'=>self::value($manifest,'schema'), 'package_type'=>self::value($manifest,'package_type'), 'command'=>self::value($manifest,'command'), 'coin_id'=>intval(self::value($manifest,'coin_id')), 'algo'=>(string)self::value($manifest,'algo'), 'snapshot_boundary'=>self::value($manifest,'snapshot_boundary'), 'selection_limit'=>$selectionLimit, 'eligible_candidate_count'=>$eligibleCandidateCount, 'selected_count'=>$selectedCount, 'excluded_by_selection_limit_count'=>$excludedBySelectionLimitCount, 'excluded_newer_candidate_count'=>intval(self::value($manifest,'excluded_newer_candidate_count')), 'internal_batch_size'=>$batchSize, 'projected_batch_count'=>intval(self::value($manifest,'projected_batch_count')), 'projected_earning_row_count'=>intval(self::value($manifest,'projected_earning_row_count')), 'projected_recipient_count'=>intval(self::value($manifest,'projected_recipient_count')), 'projected_total_amount'=>$projectedTotal, 'approval_status'=>self::value($manifest,'approval_status'), 'selection_checksum'=>$selectionChecksum['value'], 'intended_mutation_checksum'=>$mutationChecksum['value']);
+		$packageInput = self::packageChecksumInput($schema, self::value($manifest,'coin_id'), self::value($manifest,'algo'), $snapshot, $selectionLimit, $eligibleCandidateCount, $selectedCount, $excludedBySelectionLimitCount, self::value($manifest,'excluded_newer_candidate_count'), $batchSize, self::value($manifest,'projected_batch_count'), self::value($manifest,'projected_earning_row_count'), self::value($manifest,'projected_recipient_count'), $projectedTotal, self::value($manifest,'approval_status'), $selectionChecksum['value'], $mutationChecksum['value'], self::value($manifest,'package_type'), self::value($manifest,'command'), self::value($manifest,'apply_command'), self::value($manifest,'apply_command_args'), self::value($manifest,'apply_command_shape'), self::value($manifest,'pipeline_boundary'));
 		if (self::canonicalJson(self::value($inputs, 'selection', array())) !== self::canonicalJson($selectionInput)) $errors[] = 'Canonical selection input differs from visible manifest fields.';
 		if (self::canonicalJson(self::value($inputs, 'intended_mutation', array())) !== self::canonicalJson($mutationInput)) $errors[] = 'Canonical intended mutation input differs from visible manifest fields.';
 		if (self::canonicalJson(self::value($inputs, 'package', array())) !== self::canonicalJson($packageInput)) $errors[] = 'Canonical package input differs from visible manifest fields.';
