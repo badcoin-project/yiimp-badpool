@@ -33,6 +33,17 @@ function manifest_clone($value)
 	return unserialize(serialize($value));
 }
 
+function manifest_as_legacy_v2($manifest)
+{
+	$legacy = manifest_clone($manifest);
+	$legacy['schema'] = BadpoolStage1Manifest::LEGACY_SCHEMA;
+	$legacy['canonical_checksum_inputs']['package']['schema'] = BadpoolStage1Manifest::LEGACY_SCHEMA;
+	$legacy['package_checksum'] = BadpoolStage1Manifest::checksum($legacy['canonical_checksum_inputs']['package'], 'operator authorization boundary for one exact bounded Stage1 drain manifest');
+	$legacy['exact_operator_confirmation'] = BadpoolStage1Manifest::confirmationValue($legacy['package_checksum']['value']);
+	unset($legacy['apply_command'], $legacy['apply_command_args'], $legacy['apply_command_shape']);
+	return $legacy;
+}
+
 function manifest_reseal_progress($progress)
 {
 	unset($progress['progress_checksum']);
@@ -49,6 +60,38 @@ manifest_expect($validation['status'] === 'pass', '30-entry manifest must valida
 manifest_expect($moreThanOneBatch['selected_count'] === 30, 'manifest must expose all entries beyond the first batch', $failures);
 manifest_expect(count($moreThanOneBatch['selected_block_ids']) === 30, 'selected_block_ids must contain the complete cohort', $failures);
 manifest_expect($moreThanOneBatch['projected_batch_count'] === 2, '30 entries at size 25 must project two batches', $failures);
+$optionContract = BadpoolStage1Manifest::applyOptionContract();
+$canonicalOptions = array('coin-id','manifest-file','progress-file','package-checksum','operator-confirms-stage1-drain','format');
+manifest_expect(array_keys($optionContract) === $canonicalOptions, 'apply contract must expose every canonical option in order', $failures);
+manifest_expect(!isset($optionContract['manifest']) && !isset($optionContract['confirmation']), 'guessed aliases must not enter the apply contract', $failures);
+manifest_expect($optionContract['coin-id']['field_ref'] === '/coin_id' && $optionContract['package-checksum']['field_ref'] === '/package_checksum/value' && $optionContract['operator-confirms-stage1-drain']['field_ref'] === '/exact_operator_confirmation', 'authority-bearing arguments must reference canonical manifest fields', $failures);
+manifest_expect($optionContract['manifest-file']['source'] === 'runtime' && $optionContract['progress-file']['source'] === 'runtime', 'artifact paths must be runtime supplied', $failures);
+manifest_expect($moreThanOneBatch['apply_command'] === BadpoolStage1Manifest::APPLY_COMMAND && $moreThanOneBatch['apply_command_args'] === $optionContract && $moreThanOneBatch['apply_command_shape'] === BadpoolStage1Manifest::applyCommandShape(), 'manifest must emit the shared machine-usable apply contract', $failures);
+$sameAuthoritativeInput = manifest_fixture(30);
+manifest_expect($sameAuthoritativeInput['apply_command_args'] === $moreThanOneBatch['apply_command_args'] && $sameAuthoritativeInput['apply_command_shape'] === $moreThanOneBatch['apply_command_shape'] && $sameAuthoritativeInput['package_checksum'] === $moreThanOneBatch['package_checksum'], 'identical authoritative input must produce deterministic apply instructions and identity', $failures);
+
+$legacyV2 = manifest_as_legacy_v2($moreThanOneBatch);
+$legacyValidation = BadpoolStage1Manifest::validate($legacyV2);
+manifest_expect($legacyV2['schema'] === BadpoolStage1Manifest::LEGACY_SCHEMA && $legacyValidation['status'] === 'pass', 'authentic legacy v2 manifest must remain valid under its deployed contract: '.implode(' | ', $legacyValidation['errors']), $failures);
+foreach (array('apply_command','apply_command_args','apply_command_shape') as $field) manifest_expect(!array_key_exists($field, $legacyV2), 'legacy v2 must not require '.$field, $failures);
+$legacyAuthorization = BadpoolStage1Manifest::validateApplyAuthorization($legacyV2, $legacyV2['package_checksum']['value'], $legacyV2['exact_operator_confirmation'], 1267);
+manifest_expect($legacyAuthorization['status'] === 'pass', 'authentic legacy v2 authority must not be silently reinterpreted or rejected', $failures);
+$legacyHybrid = manifest_clone($legacyV2); $legacyHybrid['apply_command'] = BadpoolStage1Manifest::APPLY_COMMAND;
+manifest_expect(BadpoolStage1Manifest::validate($legacyHybrid)['status'] === 'fail', 'v2 with one v3 structured field must be rejected as a hybrid', $failures);
+$legacyFullHybrid = manifest_clone($legacyV2); $legacyFullHybrid['apply_command'] = BadpoolStage1Manifest::APPLY_COMMAND; $legacyFullHybrid['apply_command_args'] = $optionContract; $legacyFullHybrid['apply_command_shape'] = BadpoolStage1Manifest::applyCommandShape();
+manifest_expect(BadpoolStage1Manifest::validate($legacyFullHybrid)['status'] === 'fail', 'v2 containing the full v3 contract must be rejected rather than reinterpreted', $failures);
+foreach (array('apply_command','apply_command_args','apply_command_shape') as $field) { $missing = manifest_clone($moreThanOneBatch); unset($missing[$field]); manifest_expect(BadpoolStage1Manifest::validate($missing)['status'] === 'fail', 'v3 missing '.$field.' must be rejected', $failures); }
+$relabelledV2 = manifest_clone($legacyV2); $relabelledV2['schema'] = BadpoolStage1Manifest::SCHEMA;
+manifest_expect(BadpoolStage1Manifest::validate($relabelledV2)['status'] === 'fail', 'changing only the v2 schema label must not create a valid v3 manifest', $failures);
+$relabelledV3 = manifest_clone($moreThanOneBatch); $relabelledV3['schema'] = BadpoolStage1Manifest::LEGACY_SCHEMA;
+manifest_expect(BadpoolStage1Manifest::validate($relabelledV3)['status'] === 'fail', 'changing only the v3 schema label must not create a valid v2 manifest', $failures);
+
+manifest_expect(BadpoolStage1Manifest::classifyApplyResult('coin_id_required', 0, 0) === 'invocation_refusal', 'missing coin ID must classify as invocation refusal', $failures);
+manifest_expect(BadpoolStage1Manifest::classifyApplyResult('operator_confirmation_required', 0, 0) === 'authorization_refusal', 'invalid confirmation must classify as authorization refusal', $failures);
+manifest_expect(BadpoolStage1Manifest::classifyApplyResult('package_checksum_required', 0, 0) === 'authorization_refusal', 'missing package checksum must classify as authorization refusal', $failures);
+manifest_expect(BadpoolStage1Manifest::classifyApplyResult('mutation_failed_rolled_back', 1, 0, true, true) === 'transactional_failure', 'rolled-back first batch must classify as transactional failure', $failures);
+manifest_expect(BadpoolStage1Manifest::classifyApplyResult('projection_mismatch', 2, 1) === 'partial_committed_failure', 'failure after a commit must classify as partial committed failure', $failures);
+manifest_expect(BadpoolStage1Manifest::classifyApplyResult(null, 2, 2, true, false, false, true) === 'successful_apply', 'complete reconciled two-batch apply must classify as successful', $failures);
 
 // Exercise the same producer/finalizer boundary used by the approval-package
 // command. The generic safety finalizer must preserve the dedicated manifest
@@ -142,6 +185,13 @@ $case = manifest_clone($large); $case['selection_checksum']['value'] = str_repea
 $case = manifest_clone($large); $case['intended_mutation_checksum']['value'] = str_repeat('1',64); $tamperCases['mutation checksum'] = $case;
 $case = manifest_clone($large); $case['package_checksum']['value'] = str_repeat('2',64); $tamperCases['package checksum'] = $case;
 $case = manifest_clone($large); $case['exact_operator_confirmation'] = 'tampered'; $tamperCases['operator confirmation'] = $case;
+$case = manifest_clone($large); $case['apply_command'] = 'forward-catchup-stage1-apply'; $tamperCases['apply command'] = $case;
+$case = manifest_clone($large); $case['apply_command_args']['manifest-file']['source'] = 'manifest'; $tamperCases['changed apply command args'] = $case;
+$case = manifest_clone($large); array_pop($case['apply_command_shape']); $tamperCases['changed apply command shape'] = $case;
+$case = manifest_clone($large); unset($case['apply_command_args']['progress-file']); $tamperCases['removed option definition'] = $case;
+$case = manifest_clone($large); $case['apply_command_args']['manifest'] = array('required'=>true, 'source'=>'runtime'); $tamperCases['added option definition'] = $case;
+$case = manifest_clone($large); $reordered = array('manifest-file'=>$case['apply_command_args']['manifest-file'], 'coin-id'=>$case['apply_command_args']['coin-id']); foreach ($case['apply_command_args'] as $name=>$definition) if (!isset($reordered[$name])) $reordered[$name]=$definition; $case['apply_command_args']=$reordered; $tamperCases['reordered option definitions'] = $case;
+$case = manifest_clone($large); $case['apply_command_args']['coin-id'] = $case['apply_command_args']['manifest-file']; $tamperCases['replaced option definition'] = $case;
 $case = manifest_clone($large); $case['selected_block_ids'][] = 10050; $tamperCases['unselected candidate injection'] = $case;
 $case = manifest_clone($large); $case['selected_block_ids'][] = 999999; $tamperCases['post-snapshot candidate injection'] = $case;
 foreach ($tamperCases as $name => $tampered) manifest_expect(BadpoolStage1Manifest::validate($tampered)['status'] === 'fail', 'tampering must be refused: '.$name, $failures);

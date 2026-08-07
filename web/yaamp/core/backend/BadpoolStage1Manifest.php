@@ -2,7 +2,8 @@
 
 class BadpoolStage1Manifest
 {
-	const SCHEMA = 'badpool.stage1_drain_manifest.v2';
+	const SCHEMA = 'badpool.stage1_drain_manifest.v3';
+	const LEGACY_SCHEMA = 'badpool.stage1_drain_manifest.v2';
 	const PACKAGE_TYPE = 'forward-catchup-stage1-drain';
 	const COMMAND = 'forward-catchup-stage1-drain-approval-package';
 	const PROGRESS_SCHEMA = 'badpool.stage1_drain_progress.v1';
@@ -11,6 +12,102 @@ class BadpoolStage1Manifest
 	const MAX_SELECTION_LIMIT = 1000000;
 	const AMOUNT_SCALE = 12;
 	const CONFIRMATION_SUFFIX = 'stage1_only_no_later_accounting_no_wallet';
+	const APPLY_COMMAND = 'forward-catchup-stage1-drain-apply';
+
+	/** The single authoritative apply option contract used by generation, parsing and help. */
+	public static function applyOptionContract()
+	{
+		return array(
+			'coin-id' => array('required'=>true, 'source'=>'manifest', 'field_ref'=>'/coin_id'),
+			'manifest-file' => array('required'=>true, 'source'=>'runtime', 'value_type'=>'absolute_json_path', 'purpose'=>'path_to_this_exact_manifest'),
+			'progress-file' => array('required'=>true, 'source'=>'runtime', 'value_type'=>'absolute_json_path', 'purpose'=>'resumable_progress_path'),
+			'package-checksum' => array('required'=>true, 'source'=>'manifest', 'field_ref'=>'/package_checksum/value'),
+			'operator-confirms-stage1-drain' => array('required'=>true, 'source'=>'manifest', 'field_ref'=>'/exact_operator_confirmation'),
+			'format' => array('required'=>true, 'source'=>'literal', 'value'=>'json'),
+		);
+	}
+
+	public static function applyCommandShape()
+	{
+		$shape = array('php', 'yaamp/yiic.php', 'badpoolguard', self::APPLY_COMMAND);
+		foreach (self::applyOptionContract() as $name => $definition) {
+			if ($definition['source'] === 'runtime') $value = '<runtime:'.$definition['purpose'].'>';
+			elseif ($definition['source'] === 'manifest') $value = '<manifest:'.$definition['field_ref'].'>';
+			else $value = $definition['value'];
+			$shape[] = '--'.$name.'='.$value;
+		}
+		return $shape;
+	}
+
+	public static function renderApplyArgv($manifest, $runtimeValues)
+	{
+		$validation = self::validate($manifest);
+		if (self::value($validation, 'status') !== 'pass') throw new InvalidArgumentException('Cannot render argv from an invalid Stage1 manifest.');
+		if (self::value($manifest, 'schema') !== self::SCHEMA) throw new InvalidArgumentException('Legacy v2 manifests do not contain a structured apply contract.');
+		$argv = array('php', 'yaamp/yiic.php', 'badpoolguard', self::value($manifest, 'apply_command'));
+		foreach (self::value($manifest, 'apply_command_args', array()) as $name => $definition) {
+			if (self::value($definition, 'source') === 'runtime') {
+				if (!array_key_exists($name, $runtimeValues)) throw new InvalidArgumentException('Missing runtime value for --'.$name.'.');
+				$value = $runtimeValues[$name];
+			} elseif (self::value($definition, 'source') === 'manifest') {
+				$value = self::jsonPointerValue($manifest, self::value($definition, 'field_ref'));
+			} else {
+				$value = self::value($definition, 'value');
+			}
+			$argv[] = '--'.$name.'='.$value;
+		}
+		return $argv;
+	}
+
+	public static function parseApplyOptions($args)
+	{
+		$options = array();
+		$allowed = array_keys(self::applyOptionContract());
+		foreach ($args as $arg) {
+			if (!preg_match('/^--([^=]+)=(.*)$/', $arg, $matches)) {
+				$options['__parse_error'] = 'Option requires an explicit value: '.$arg;
+				continue;
+			}
+			$name = strtolower($matches[1]);
+			if (!in_array($name, $allowed, true)) $options['__parse_error'] = 'Unknown option refused: --'.$matches[1];
+			elseif (array_key_exists($name, $options)) $options['__parse_error'] = 'Duplicate option refused: --'.$matches[1];
+			else $options[$name] = $matches[2];
+		}
+		return $options;
+	}
+
+	public static function validateApplyOptions($options)
+	{
+		if (isset($options['__parse_error'])) return array('status'=>'fail', 'reason'=>'invalid_option', 'message'=>$options['__parse_error']);
+		$missingReasons = array(
+			'coin-id'=>'coin_id_required',
+			'manifest-file'=>'manifest_file_required',
+			'progress-file'=>'progress_file_required',
+			'package-checksum'=>'package_checksum_required',
+			'operator-confirms-stage1-drain'=>'operator_confirmation_required',
+			'format'=>'json_format_required',
+		);
+		foreach (self::applyOptionContract() as $name => $definition) {
+			if (self::value($definition, 'required') && (!isset($options[$name]) || $options[$name] === '')) return array('status'=>'fail', 'reason'=>$missingReasons[$name], 'message'=>'Missing required --'.$name.'.');
+		}
+		if (!preg_match('/^[0-9]+$/', (string)$options['coin-id']) || intval($options['coin-id']) <= 0) return array('status'=>'fail', 'reason'=>'invalid_coin_scope', 'message'=>'--coin-id must be a positive integer.');
+		if ((string)$options['format'] !== 'json') return array('status'=>'fail', 'reason'=>'json_format_required', 'message'=>'Stage1 drain apply supports --format=json only.');
+		if (!self::isAbsoluteJsonPath($options['manifest-file'])) return array('status'=>'fail', 'reason'=>'invalid_manifest_file', 'message'=>'--manifest-file must be an absolute JSON path.');
+		if (!self::isAbsoluteJsonPath($options['progress-file'])) return array('status'=>'fail', 'reason'=>'invalid_progress_file', 'message'=>'--progress-file must be an absolute JSON path.');
+		if ($options['manifest-file'] === $options['progress-file']) return array('status'=>'fail', 'reason'=>'artifact_path_collision', 'message'=>'Manifest and progress files must be different paths.');
+		if (!preg_match('/^[a-f0-9]{64}$/i', (string)$options['package-checksum'])) return array('status'=>'fail', 'reason'=>'invalid_package_checksum', 'message'=>'--package-checksum must be a SHA-256 hex value.');
+		return array('status'=>'pass', 'reason'=>null, 'message'=>null);
+	}
+
+	public static function classifyApplyResult($reason, $batchesAttempted, $committedBatches, $transactionStarted=false, $rolledBack=false, $verifiedPrior=false, $fullyReconciled=false)
+	{
+		if ($reason === null && $fullyReconciled) return 'successful_apply';
+		if (intval($committedBatches) > 0 || $verifiedPrior) return 'partial_committed_failure';
+		if ($transactionStarted) return 'transactional_failure';
+		$invocation = array('invalid_option','coin_id_required','invalid_coin_scope','json_format_required','manifest_file_required','progress_file_required','invalid_manifest_file','invalid_progress_file','artifact_path_collision');
+		if (in_array($reason, $invocation, true)) return 'invocation_refusal';
+		return 'authorization_refusal';
+	}
 
 	public static function build($coinId, $algo, $snapshot, $selectionLimit, $eligibleCandidateCount, $excludedBySelectionLimitCount, $excludedNewerCount, $selectedRecords, $projectedMutations, $projectedEarnings, $internalBatchSize=self::DEFAULT_BATCH_SIZE)
 	{
@@ -74,7 +171,7 @@ class BadpoolStage1Manifest
 		);
 		$packageChecksum = self::checksum($packageInput, 'operator authorization boundary for one exact bounded Stage1 drain manifest');
 
-		return array(
+		$manifest = array(
 			'schema' => self::SCHEMA,
 			'package_type' => self::PACKAGE_TYPE,
 			'command' => self::COMMAND,
@@ -120,15 +217,30 @@ class BadpoolStage1Manifest
 				'share_deletion' => false,
 			),
 		);
+		$manifest['apply_command'] = self::APPLY_COMMAND;
+		$manifest['apply_command_args'] = self::applyOptionContract();
+		$manifest['apply_command_shape'] = self::applyCommandShape();
+		return $manifest;
 	}
 
 	public static function validate($manifest)
 	{
 		$errors = array();
 		if (!is_array($manifest)) return array('status'=>'fail', 'errors'=>array('Manifest must be a JSON object.'));
-		if (self::value($manifest, 'schema') !== self::SCHEMA) $errors[] = 'Unexpected manifest schema.';
+		$schema = self::value($manifest, 'schema');
+		if (!in_array($schema, array(self::LEGACY_SCHEMA, self::SCHEMA), true)) $errors[] = 'Unexpected manifest schema.';
 		if (self::value($manifest, 'package_type') !== self::PACKAGE_TYPE) $errors[] = 'Unexpected manifest package_type.';
 		if (self::value($manifest, 'command') !== self::COMMAND) $errors[] = 'Unexpected manifest command.';
+		$structuredFields = array('apply_command','apply_command_args','apply_command_shape');
+		$presentStructuredFields = array();
+		foreach ($structuredFields as $field) if (array_key_exists($field, $manifest)) $presentStructuredFields[] = $field;
+		if ($schema === self::LEGACY_SCHEMA && !empty($presentStructuredFields)) $errors[] = 'Legacy v2 manifests must not contain v3 structured apply fields.';
+		if ($schema === self::SCHEMA) {
+			foreach ($structuredFields as $field) if (!array_key_exists($field, $manifest)) $errors[] = 'Missing required v3 structured field: '.$field.'.';
+			if (self::value($manifest, 'apply_command') !== self::APPLY_COMMAND) $errors[] = 'Unexpected apply_command.';
+			if (self::value($manifest, 'apply_command_args', array()) !== self::applyOptionContract()) $errors[] = 'apply_command_args differs from the canonical apply option contract.';
+			if (self::value($manifest, 'apply_command_shape', array()) !== self::applyCommandShape()) $errors[] = 'apply_command_shape differs from the canonical apply option contract.';
+		}
 		$ids = self::value($manifest, 'selected_block_ids', array());
 		$records = self::value($manifest, 'selected_records', array());
 		$mutations = self::value($manifest, 'projected_block_mutations', array());
@@ -581,6 +693,24 @@ class BadpoolStage1Manifest
 		$index = 0;
 		foreach (array_keys($value) as $key) if ($key !== $index++) return false;
 		return true;
+	}
+
+	private static function isAbsoluteJsonPath($value)
+	{
+		return is_string($value) && preg_match('#^/[^\x00]*\.json$#', $value) === 1;
+	}
+
+	private static function jsonPointerValue($document, $pointer)
+	{
+		if (!is_string($pointer) || substr($pointer, 0, 1) !== '/') throw new InvalidArgumentException('Invalid manifest field_ref.');
+		$value = $document;
+		foreach (explode('/', substr($pointer, 1)) as $segment) {
+			$segment = str_replace(array('~1','~0'), array('/','~'), $segment);
+			if (!is_array($value) || !array_key_exists($segment, $value)) throw new InvalidArgumentException('Manifest field_ref does not resolve: '.$pointer.'.');
+			$value = $value[$segment];
+		}
+		if (is_array($value) || is_object($value)) throw new InvalidArgumentException('Manifest field_ref must resolve to a scalar value.');
+		return $value;
 	}
 
 	private static function value($array, $key, $default=null)

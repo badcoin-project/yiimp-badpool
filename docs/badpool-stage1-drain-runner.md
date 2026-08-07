@@ -29,6 +29,32 @@ The operator reviews the full JSON and preserves it unchanged. Important authori
 * `internal_batch_size` and `projected_batch_count`; and
 * `exact_operator_confirmation`.
 
+The generator now emits `badpool.stage1_drain_manifest.v3`. Version 3 requires
+`apply_command`, `apply_command_args`, and `apply_command_shape`. They are
+generated from the same option definitions used by the apply parser and command
+help. The `coin-id`, `package-checksum`, and confirmation entries reference
+their canonical manifest fields; the manifest and progress file entries are
+runtime-supplied absolute JSON paths. A helper can therefore render argv
+without guessing option names or treating an environment-specific path as
+package authority.
+
+Authentic legacy v2 (`badpool.stage1_drain_manifest.v2`) packages remain valid under the
+exact deployed v2 contract and do not require the three structured apply
+fields. A v2 package containing any of those v3 fields is rejected as a hybrid,
+and a v3 package missing or changing any structured field is rejected. Merely
+changing a schema label cannot convert a package: schema identity remains bound
+by the package checksum and the visible canonical checksum input. Old v2
+packages are never silently reinterpreted as v3.
+
+The structured instruction fields are not added to the existing
+authority-bearing selection, intended-mutation, or package checksum inputs.
+Instead, v3 validation requires exact equality with the canonical command,
+ordered option definitions, and command shape before authorization and before
+any transaction. This preserves the established checksum meanings while still
+rejecting structured-field tampering. A newly generated v3 manifest has a new
+schema-bound package checksum and exact confirmation; it therefore requires
+separately generated operator authorization.
+
 The complete eligibility snapshot is fixed before daemon classification begins. Only its first `selection_limit` candidates are classified and projected. The snapshot records both the maximum selected order key and maximum eligible order key, so intentionally unselected snapshot candidates are not mislabeled as newer. A block arriving after the eligibility query is separately reported as newer/excluded and cannot join the manifest.
 
 ## Apply the approved manifest
@@ -45,6 +71,25 @@ php yaamp/yiic.php badpoolguard forward-catchup-stage1-drain-apply \
   --operator-confirms-stage1-drain=<exact-operator-confirmation-from-manifest> \
   --format=json
 ```
+
+All six canonical apply options are required. In particular, `--manifest` and
+`--confirmation` are not aliases and are refused as invalid options. The
+`--manifest-file` path must name this exact preserved manifest,
+`--progress-file` is a separately supplied resumable-state path, and
+`--operator-confirms-stage1-drain` must equal `exact_operator_confirmation`
+byte for byte.
+
+Apply reports a stable `apply_classification`. Unknown or malformed options,
+missing or invalid coin scope, missing runtime manifest/progress paths, and
+invalid output-format invocation are `invocation_refusal`. Missing or invalid
+package checksum, missing or incorrect confirmation, and manifest schema or
+authority validation failures before a transaction are
+`authorization_refusal`. A begun first-batch transaction that rolls back with
+no commit is `transactional_failure`; a later failure after any committed or
+verified earlier batch is `partial_committed_failure`; and only fully verified,
+fully reconciled completion is `successful_apply`. Every pre-transaction
+refusal reports zero attempted/committed batches and no database mutation.
+Shell syntax or paste errors outside the application produce no apply report.
 
 The consumer independently recomputes the selection, intended-mutation, and package checksums. It refuses a different coin, altered file, wrong checksum, wrong confirmation, invalid ordering, duplicate ID, changed attribution, changed amount, changed projection, or incompatible progress file before mutation.
 
