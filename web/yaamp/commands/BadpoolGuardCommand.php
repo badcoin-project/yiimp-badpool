@@ -91,6 +91,15 @@ class BadpoolGuardCommand extends CConsoleCommand
 		}
 		$this->guard = BadpoolGuardContext::fromArgs($action, $actionArgs);
 		if (!$this->guard->isValid()) {
+			if ($action === 'forward-catchup-stage1-drain-apply') {
+				$options = BadpoolStage1Manifest::parseApplyOptions($args);
+				$optionValidation = BadpoolStage1Manifest::validateApplyOptions($options);
+				$reason = arraySafeVal($optionValidation, 'status') === 'fail' ? arraySafeVal($optionValidation, 'reason') : 'invalid_coin_scope';
+				$message = arraySafeVal($optionValidation, 'status') === 'fail' ? arraySafeVal($optionValidation, 'message') : 'Stage1 drain apply coin scope could not be resolved.';
+				$report = $this->forwardCatchupStage1DrainBaseReport($action, false, $options);
+				$this->emitFinalReport($this->forwardCatchupStage1DrainFail($report, $reason, $message));
+				return 2;
+			}
 			$this->emitFinalReport($this->guard->refusalReport());
 			return 2;
 		}
@@ -254,7 +263,8 @@ class BadpoolGuardCommand extends CConsoleCommand
 			"       php yaamp/yiic.php badpoolguard guard-context --coin-id=<id> [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard status-runner [--coin-id=<id>] [--algo=<algo>] --format=json\n".
 			"       php yaamp/yiic.php badpoolguard overview --all-coins-preview [--format=json|text]\n\n".
-			"Stage1 generation options (--coin-id, --selection-limit, --internal-batch-size, --format=json) create the approval package. Apply uses the canonical shape above: coin ID, checksum, and exact confirmation are manifest-authority bindings; manifest/progress paths are runtime-supplied and are not package authority.\n".
+			"Stage1 generation emits badpool.stage1_drain_manifest.v3 with the canonical structured apply contract above. Authentic legacy v2 manifests remain valid without v3 fields; v2/v3 hybrids, relabeling, structured drift, --manifest, and --confirmation are refused. Manifest/progress paths are runtime-supplied; schema and authority remain checksum-bound, while exact structured validation occurs before authorization and any transaction. New manifests require separately generated authorization.\n".
+			"Apply classifications: invocation_refusal for parser/scope/format/runtime-path failures; authorization_refusal for checksum, confirmation, manifest, schema, or authority failures before a transaction; transactional_failure for a begun and rolled-back transaction with no commit; partial_committed_failure after an earlier committed/verified batch; successful_apply only after final reconciliation.\n".
 			"The Stage1 drain manifest package performs chain/DB reads only and no wallet reads. Guarded apply commands mutate only their exact approved stage; service actions, backend loops, share deletion, and unapproved later stages remain unavailable.\n";
 	}
 
@@ -2279,6 +2289,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 
 				$tx = app()->db->beginTransaction();
 				if (!$tx) return $this->forwardCatchupStage1DrainFail($report, 'transaction_unavailable', 'Database transaction mechanism is unavailable.');
+				$report['transactions_started']++;
 				$report['failure_phase'] = 'mutation_execution';
 				$report['failing_transaction_rolled_back'] = false;
 				try {
@@ -2330,7 +2341,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 		$report['failure_phase'] = null;
 		$report['retry_safe'] = true;
 		$report['same_manifest_confirmation_required'] = true;
-		$report['apply_classification'] = BadpoolStage1Manifest::classifyApplyResult(null, $report['batches_attempted'], $report['committed_batches']);
+		$report['apply_classification'] = BadpoolStage1Manifest::classifyApplyResult(null, $report['batches_attempted'], $report['committed_batches'], intval($report['transactions_started']) > 0, false, false, true);
 		return BadpoolGuardReport::finalize($report);
 	}
 
@@ -2343,7 +2354,8 @@ class BadpoolGuardCommand extends CConsoleCommand
 
 	private function forwardCatchupStage1DrainOptions($args, $apply)
 	{
-		$allowed = $apply ? array_keys(BadpoolStage1Manifest::applyOptionContract()) : array('coin-id','format','selection-limit','internal-batch-size');
+		if ($apply) return BadpoolStage1Manifest::parseApplyOptions($args);
+		$allowed = array('coin-id','format','selection-limit','internal-batch-size');
 		$options = array('internal-batch-size' => BadpoolStage1Manifest::DEFAULT_BATCH_SIZE);
 		$seen = array();
 		foreach ($args as $arg) {
@@ -2367,9 +2379,8 @@ class BadpoolGuardCommand extends CConsoleCommand
 			if (!preg_match('/^[0-9]+$/', (string)arraySafeVal($options, 'internal-batch-size')) || intval($options['internal-batch-size']) <= 0 || intval($options['internal-batch-size']) > self::FORWARD_CATCHUP_STAGE1_MANIFEST_MAX_BATCH_SIZE) return $this->forwardCatchupStage1DrainFail($report, 'invalid_internal_batch_size', '--internal-batch-size must be between 1 and '.self::FORWARD_CATCHUP_STAGE1_MANIFEST_MAX_BATCH_SIZE.'.');
 			return true;
 		}
-		foreach (BadpoolStage1Manifest::applyOptionContract() as $name => $definition) if ($definition['required'] && (!isset($options[$name]) || $options[$name] === '')) return $this->forwardCatchupStage1DrainFail($report, 'missing_required_option', 'Missing required --'.$name.'.');
-		if (!preg_match('/^[a-f0-9]{64}$/i', (string)$options['package-checksum'])) return $this->forwardCatchupStage1DrainFail($report, 'invalid_package_checksum', '--package-checksum must be a SHA-256 hex value.');
-		if ($options['manifest-file'] === $options['progress-file']) return $this->forwardCatchupStage1DrainFail($report, 'artifact_path_collision', 'Manifest and progress files must be different paths.');
+		$optionValidation = BadpoolStage1Manifest::validateApplyOptions($options);
+		if (arraySafeVal($optionValidation, 'status') !== 'pass') return $this->forwardCatchupStage1DrainFail($report, arraySafeVal($optionValidation, 'reason'), arraySafeVal($optionValidation, 'message'));
 		return true;
 	}
 
@@ -2393,6 +2404,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 		$report['failed_batch_index'] = null;
 		$report['failure_phase'] = null;
 		$report['failing_transaction_rolled_back'] = false;
+		$report['transactions_started'] = 0;
 		$report['any_prior_transaction_committed'] = false;
 		$report['prior_commit_state'] = 'none';
 		$report['manual_verification_required'] = false;
@@ -2706,7 +2718,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 		$report['manual_reconciliation_required'] = false;
 		$report['retry_safe'] = true;
 		$report['same_manifest_confirmation_required'] = true;
-		$report['apply_classification'] = BadpoolStage1Manifest::classifyApplyResult($reason, arraySafeVal($report, 'batches_attempted', 0), arraySafeVal($report, 'committed_batches', 0), arraySafeVal($report, 'failing_transaction_rolled_back', false), $verifiedPrior);
+		$report['apply_classification'] = BadpoolStage1Manifest::classifyApplyResult($reason, arraySafeVal($report, 'batches_attempted', 0), arraySafeVal($report, 'committed_batches', 0), intval(arraySafeVal($report, 'transactions_started', 0)) > 0, arraySafeVal($report, 'failing_transaction_rolled_back', false), $verifiedPrior, false);
 		if ($hasCommittedCohortProgress) {
 			if ($committedThisRun) $report['apply_commands_executed'] = true;
 			$report['operator_warning'] = 'One or more verified Stage1 batches committed before this stop. Retry is safe only with the identical manifest, package checksum, progress path, and exact manifest confirmation.';

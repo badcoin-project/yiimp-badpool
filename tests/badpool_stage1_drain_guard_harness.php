@@ -38,9 +38,11 @@ drain_expect(strpos($manifest, "'progress_checksum'")!==false && strpos($manifes
 drain_expect(strpos($manifest, 'MAX_BATCH_SIZE = 50')!==false && strpos($manifest, 'internal_batch_size must be between 1 and')!==false, 'manifest validation must enforce the bounded transaction ceiling',$failures);
 drain_expect(strpos($apply, 'additional_operator_confirmation')===false, 'apply loop must not request per-batch confirmation',$failures);
 drain_expect(strpos($command, "array('coin-id','format','selection-limit','internal-batch-size')")!==false, 'generation must accept selection-limit',$failures);
-drain_expect(strpos($command, 'array_keys(BadpoolStage1Manifest::applyOptionContract())')!==false, 'apply parser must consume the shared option contract',$failures);
+drain_expect(strpos($command, 'return BadpoolStage1Manifest::parseApplyOptions($args)')!==false, 'apply parser must consume the shared executable option contract',$failures);
+drain_expect(strpos($command, 'BadpoolStage1Manifest::validateApplyOptions($options)')!==false, 'apply required-option validation must consume the shared executable contract',$failures);
 drain_expect(strpos($command, "implode(' ', BadpoolStage1Manifest::applyCommandShape())")!==false, 'help must consume the shared command shape',$failures);
 foreach(array('apply_command','apply_command_args','apply_command_shape','field_ref','runtime') as $field) drain_expect(strpos($manifest,$field)!==false,'machine-usable apply contract missing '.$field,$failures);
+drain_expect(strpos($manifest, "const SCHEMA = 'badpool.stage1_drain_manifest.v3'")!==false && strpos($manifest, "const LEGACY_SCHEMA = 'badpool.stage1_drain_manifest.v2'")!==false, 'manifest must separate v3 generation from authentic legacy v2 validation',$failures);
 drain_expect(strpos($manifest,"'manifest' =>")===false && strpos($manifest,"'confirmation' =>")===false,'guessed aliases must remain absent',$failures);
 drain_expect(strpos($command, 'Duplicate option refused: --')!==false, 'duplicate selection-limit must be refused',$failures);
 drain_expect(strpos($command, 'Missing required --selection-limit.')!==false && strpos($command, 'invalid_selection_limit')!==false, 'missing and invalid selection limits must be refused',$failures);
@@ -48,7 +50,7 @@ drain_expect(strpos($manifest, 'MAX_SELECTION_LIMIT = 1000000')!==false && strpo
 drain_expect(strpos($apply, 'forwardCatchupStage1DrainNewerCandidateCount($manifest)')!==false, 'apply must report newer excluded candidates',$failures);
 drain_expect(strpos($apply, 'forwardCatchupStage1DrainFinalReconciliation')!==false, 'apply must perform selected-cohort final reconciliation',$failures);
 drain_expect(strpos($command, '$this->guard->addError($message);')!==false, 'refusals and holds must produce a nonzero command result with preserved errors',$failures);
-drain_expect(strpos($command, "'artifact_path_collision'")!==false, 'manifest/progress path collision must remain rejected',$failures);
+drain_expect(strpos($command.$manifest, "'artifact_path_collision'")!==false, 'manifest/progress path collision must remain rejected',$failures);
 drain_expect(strpos($inspect, "'status'=>'pending'")!==false && strpos($inspect, "'status'=>'completed'")!==false && strpos($inspect, "'status'=>'mismatch'")!==false, 'resume inspection must distinguish pending, completed, and mismatch states',$failures);
 drain_expect(strpos($inspect, "arraySafeVal(\$row, 'category') === 'new' && count(\$linked) === 0")!==false, 'pending state must require no already-linked earnings',$failures);
 drain_expect(strpos($inspect, 'mixed pending/completed state and fails closed')!==false, 'partially completed or newly ineligible batch must fail closed',$failures);
@@ -58,6 +60,7 @@ foreach(array('BackendPayments','BackendCoinPayments','PayoutCommand','badpoolGu
 drain_expect(strpos($command, 'gettransaction($txid)')===false || strpos(drain_section($command,'private function forwardCatchupStage1DryrunClassify','private function forwardCatchupStage1DryrunPlan'),'gettransaction(')===false, 'Stage1 classification must not use wallet gettransaction',$failures);
 drain_expect(strpos($command, 'getrawtransaction($txid, 1)')!==false, 'Stage1 must use chain transaction reads',$failures);
 foreach(array('no maturity transition','no account credit','no payout-row creation','no wallet read','no wallet send','no backend loop','no service action','no share deletion') as $boundary) drain_expect(stripos($doc,$boundary)!==false,'documentation missing boundary: '.$boundary,$failures);
+foreach(array('badpool.stage1_drain_manifest.v3','legacy v2','never silently reinterpreted','separately generated operator authorization','authorization_refusal','transactional_failure','partial_committed_failure','successful_apply') as $contract) drain_expect(stripos($doc,$contract)!==false,'documentation missing compatibility/classification contract: '.$contract,$failures);
 
 if($failures){ echo "Badpool Stage1 drain guard harness FAILED\n"; foreach($failures as $f) echo " - $f\n"; exit(1); }
 echo "Badpool Stage1 drain guard harness passed\n";
