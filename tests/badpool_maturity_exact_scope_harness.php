@@ -10,7 +10,7 @@ function app(){global $exactApp;return $exactApp;}
 require_once dirname(__DIR__).'/web/yaamp/commands/BadpoolGuardCommand.php';
 
 class ExactScopeGuard {
- public $errors=array(); public $command; public $unknown=array(); public $wrong=array(); public $extraEarning=false; public $drift=array(); public $fixtureRows=null;
+ public $errors=array(); public $command; public $unknown=array(); public $wrong=array(); public $extraEarning=false; public $drift=array(); public $fixtureRows=null; public $selects=0;
  public function __construct($command){$this->command=$command;}
  public function isAllCoinsPreview(){return false;} public function isValid(){return !$this->errors;} public function addError($m){$this->errors[]=$m;} public function getFormat(){return 'json';}
  public function getScope(){return array('coin_id'=>1267,'all_coins_preview'=>false,'coin'=>array('id'=>1267,'symbol'=>'BAD','algo'=>'scrypt'));}
@@ -18,6 +18,7 @@ class ExactScopeGuard {
  public function refusalReport(){return $this->baseReport('refused');} public function finalizeReport($r){$r['errors']=$this->errors;return BadpoolGuardReport::finalize($r);}
  public function tableExists($t){return false;} public function missingTable($t){return array('missing'=>$t);} public function columnExists($t,$c){return false;}
  public function selectAll($sql,$params=array()){
+  $this->selects++;
   if(strpos($sql,'SELECT id,coin_id FROM blocks')!==false){$out=array();foreach($params as $k=>$id)if(strpos($k,':requested_block_')===0&&!in_array($id,$this->unknown,true))$out[]=array('id'=>$id,'coin_id'=>in_array($id,$this->wrong,true)?999:1267);return $out;}
   if(strpos($sql,'FROM earnings E INNER JOIN blocks B')!==false){$out=array();if($this->fixtureRows!==null)return $this->fixtureRows;for($id=20381,$n=1;$id<=20430;$id++,$n++){if($id===20393||$id===20399)continue;if(strpos($sql,'B.id IN')!==false&&!in_array($id,array_values($params),true))continue;$row=array('earning_id'=>30000+$n,'userid'=>7,'coinid'=>1267,'blockid'=>$id,'amount'=>$id===20430?'103848.497537160000':'1.000000000000','status'=>0,'mature_time'=>0,'block_id'=>$id,'block_height'=>500000+$n,'block_coin_id'=>1267,'block_category'=>'immature','confirmations'=>120,'mature_blocks'=>100);foreach($this->drift as $key=>$value)$row[$key]=$value;$out[]=$row;}
    if($this->extraEarning&&strpos($sql,'B.id IN')===false)$out[]=array('earning_id'=>99999,'userid'=>8,'coinid'=>1267,'blockid'=>9999,'amount'=>'9.000000000000','status'=>0,'mature_time'=>0,'block_id'=>9999,'block_height'=>9999,'block_coin_id'=>1267,'block_category'=>'immature','confirmations'=>120,'mature_blocks'=>100);return $out;} return array();
@@ -53,4 +54,35 @@ $ids=$package['selected_earning_ids'];$added=$ids;$added[]=99999;list($x,$b)=run
 $missingMode=packageArgs($package);foreach($missingMode as $k=>$v)if(strpos($v,'--selection-mode=')===0)unset($missingMode[$k]);list($x,$b)=runApplyCase($package,array_values($missingMode));expectExact($x['abort_reason']==='missing_selection_mode'&&$b===0,'block scope without mode accepted');$missingBlocks=packageArgs($package);foreach($missingBlocks as $k=>$v)if(strpos($v,'--selected-block-ids=')===0)unset($missingBlocks[$k]);list($x,$b)=runApplyCase($package,array_values($missingBlocks));expectExact($x['abort_reason']==='invalid_block_scope'&&$b===0,'mode without block scope accepted');
 foreach(array('block_id'=>9999,'amount'=>'999.000000000000','block_category'=>'new') as $field=>$value){list($x,$b)=runApplyCase($package,packageArgs($package),function($g)use($field,$value){$g->drift=array($field=>$value);});expectExact(in_array($x['abort_reason'],array('authorized_earning_scope_mismatch','checksum_mismatch'),true)&&$b===0,$field.' drift not refused before transaction');}
 list($x,$b)=runApplyCase($package,packageArgs($package),function($g){$g->extraEarning=true;});expectExact($x['abort_reason']==='transaction_unavailable'&&$b===1,'coin-wide new earning altered bounded authorization');
+
+function retainedPackage($fixture,$args=array()){$path=tempnam(sys_get_temp_dir(),'badpool-retained-');file_put_contents($path,json_encode($fixture,JSON_PRETTY_PRINT|JSON_UNESCAPED_SLASHES));$c=exactCommand('earnings-maturity-transition-approval-package',$g);$call=array_merge(array('--retained-dryrun-report='.$path),$args);$p=exactMethod('earningsMaturityTransitionApprovalPackageReport')->invoke($c,$call);unlink($path);return array($p,$g,$c);}
+function resealDryrun($r){unset($r['dryrun_report_checksum']);$r['dryrun_report_checksum']=BadpoolGuardReport::checksum($r);return $r;}
+list($retained,$retainedGuard,$retainedCommand)=retainedPackage($r,array('--coin-id=1267'));
+expectExact($retainedGuard->selects===0,'retained report regenerated or queried live selection');
+expectExact($retained['schema']===BadpoolGuardReport::BOUNDED_MATURITY_APPROVAL_PACKAGE_SCHEMA&&$retained['approval_package_version']===2,'retained report did not produce bounded v2 package');
+expectExact($retained['requested_block_ids']===range(20381,20430)&&$retained['requested_block_count']===50&&$retained['selected_earning_count']===48&&$retained['selected_linked_block_count']===48&&$retained['requested_blocks_without_selected_earnings']===array(20393,20399)&&$retained['summary']['total_amount']==='103895.497537160000','retained 50-block production contract changed');
+foreach(array('scope_checksum','selected_scope_checksum','projected_block_mutation_checksum','projected_earnings_mutation_checksum','dryrun_report_checksum') as $binding)expectExact($retained[$binding]['value']===$r[$binding]['value'],'retained binding changed: '.$binding);
+$recomputed=exactMethod('stableApprovalChecksum')->invoke($retainedCommand,$retained,exactMethod('maturityApprovalChecksumKeys')->invoke($retainedCommand));expectExact($recomputed['value']===$retained['approval_package_checksum']['value'],'retained package approval checksum does not recompute');
+list($again)=retainedPackage($r);expectExact($again['approval_package_checksum']['value']===$retained['approval_package_checksum']['value'],'identical retained bytes are not deterministic');
+$compactPath=tempnam(sys_get_temp_dir(),'badpool-retained-');file_put_contents($compactPath,json_encode($r,JSON_UNESCAPED_SLASHES));$cc=exactCommand('earnings-maturity-transition-approval-package',$cg);$compact=exactMethod('earningsMaturityTransitionApprovalPackageReport')->invoke($cc,array('--retained-dryrun-report='.$compactPath));unlink($compactPath);expectExact($compact['approval_package_checksum']['value']===$retained['approval_package_checksum']['value'],'equivalent JSON formatting changed semantic package');
+expectExact(strpos(implode(' ',$retained['apply_command_shape']),'operator-confirms-')===false,'package embedded operator confirmation');
+
+$tamperCases=array(
+ 'requested scope'=>function(&$x){$x['requested_block_ids'][0]=1;}, 'selected earning inventory'=>function(&$x){$x['selected_earning_ids'][0]++;},
+ 'linked block inventory'=>function(&$x){$x['selected_linked_block_ids'][0]++;}, 'missing inventory'=>function(&$x){$x['requested_blocks_without_selected_earnings']=array();},
+ 'projected total'=>function(&$x){$x['summary']['total_amount']='1.000000000000';}, 'per-user reconciliation'=>function(&$x){$x['summary']['totals_by_user'][0]['amount_total']='1.000000000000';},
+ 'per-block reconciliation'=>function(&$x){$x['items']['linked_blocks'][0]['total_amount']='2.000000000000';}, 'scope checksum'=>function(&$x){$x['scope_checksum']['value']=str_repeat('0',64);},
+ 'selected scope checksum'=>function(&$x){$x['selected_scope_checksum']['value']=str_repeat('0',64);}, 'block mutation checksum'=>function(&$x){$x['projected_block_mutation_checksum']['value']=str_repeat('0',64);},
+ 'earnings mutation checksum'=>function(&$x){$x['projected_earnings_mutation_checksum']['value']=str_repeat('0',64);}, 'coin id'=>function(&$x){$x['scope']['coin_id']=999;},
+ 'selection mode'=>function(&$x){$x['selection_mode']='coin-wide';}, 'schema'=>function(&$x){$x['schema']='unsupported';}, 'type'=>function(&$x){$x['command']='other';},
+ 'version/mode'=>function(&$x){$x['mode']='unsupported';}, 'success status'=>function(&$x){$x['status']='pass';}
+	, 'bounded apply arguments'=>function(&$x){$x['apply_command_args']=array('--selected-block-ids=1');}
+);
+foreach($tamperCases as $label=>$mutate){$bad=$r;$mutate($bad);$bad=resealDryrun($bad);list($refused,$badGuard)=retainedPackage($bad);expectExact($refused['status']==='refused'&&!$badGuard->isValid(),'retained tampering accepted: '.$label);}
+$badChecksum=$r;$badChecksum['dryrun_report_checksum']['value']=str_repeat('0',64);list($refused,$badGuard)=retainedPackage($badChecksum);expectExact($refused['status']==='refused'&&!$badGuard->isValid(),'dry-run semantic checksum tampering accepted');
+foreach(array(array('--selected-block-ids=20381'),array('--selection-mode=exact-blocks'),array('--coin-id=999')) as $incompatible){list($refused,$badGuard)=retainedPackage($r,$incompatible);expectExact($refused['status']==='refused'&&!$badGuard->isValid(),'incompatible retained option accepted: '.implode(' ',$incompatible));}
+$loader=exactMethod('loadRetainedMaturityDryrun');$lc=exactCommand('earnings-maturity-transition-approval-package',$lg);
+$inputCases=array('missing'=>'/definitely/not/a/report','directory'=>sys_get_temp_dir());
+$empty=tempnam(sys_get_temp_dir(),'badpool-empty-');$inputCases['empty']=$empty;$malformed=tempnam(sys_get_temp_dir(),'badpool-malformed-');file_put_contents($malformed,'{');$inputCases['malformed']=$malformed;$scalar=tempnam(sys_get_temp_dir(),'badpool-scalar-');file_put_contents($scalar,'[]');$inputCases['non-object']=$scalar;$oversized=tempnam(sys_get_temp_dir(),'badpool-large-');$fh=fopen($oversized,'c');ftruncate($fh,67108865);fclose($fh);$inputCases['oversized']=$oversized;
+foreach($inputCases as $label=>$path){$loaded=$loader->invoke($lc,array('--retained-dryrun-report='.$path));expectExact($loaded['status']==='fail','invalid retained input accepted: '.$label);}foreach(array($empty,$malformed,$scalar,$oversized) as $path)unlink($path);
 if($failures){echo "Badpool exact maturity scope harness FAILED\n";foreach($failures as $failure)echo " - $failure\n";exit(1);}echo "Badpool exact maturity scope harness passed\n";

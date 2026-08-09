@@ -53,6 +53,14 @@ class BadpoolGuardContext
 		return $context;
 	}
 
+	public static function fromRetainedReportArgs($command, $args, $scope)
+	{
+		$context = new self($command);
+		$context->preloadFormat($args);
+		$context->scope = is_array($scope) ? $scope : $context->scope;
+		return $context;
+	}
+
 	public function __construct($command)
 	{
 		$this->command = $command;
