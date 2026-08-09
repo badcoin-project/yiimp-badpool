@@ -8,6 +8,7 @@ class BadpoolGuardReport
 	const APPLY_SCHEMA = 'badpool.guardrail.apply.v1';
 	const APPLY_MODE = 'guarded-apply';
 	const APPROVAL_PACKAGE_SCHEMA = 'badpool.approval_package.v1';
+	const BOUNDED_MATURITY_APPROVAL_PACKAGE_SCHEMA = 'badpool.approval_package.v2';
 	const APPROVAL_PACKAGE_MODE = 'read-only-approval-package';
 	const APPROVAL_CHECKSUM_PURPOSE = 'immutable approval binding; authorization requires fresh recomputation and exact match';
 	const PREVIEW_SCHEMA = 'badpool.guardrail.preview.v1';
@@ -54,7 +55,7 @@ class BadpoolGuardReport
 
 		if ($isPreview) {
 			if (self::isCanonicalApprovalPackage($report)) {
-				$report['schema'] = self::APPROVAL_PACKAGE_SCHEMA;
+				if (self::arrayValue($report, 'schema') !== self::BOUNDED_MATURITY_APPROVAL_PACKAGE_SCHEMA) $report['schema'] = self::APPROVAL_PACKAGE_SCHEMA;
 				$report['mode'] = self::APPROVAL_PACKAGE_MODE;
 			}
 			else {
@@ -89,7 +90,7 @@ class BadpoolGuardReport
 
 	private static function isCanonicalApprovalPackage($report)
 	{
-		if (self::arrayValue($report, 'schema') !== self::APPROVAL_PACKAGE_SCHEMA) return false;
+		if (!in_array(self::arrayValue($report, 'schema'), array(self::APPROVAL_PACKAGE_SCHEMA, self::BOUNDED_MATURITY_APPROVAL_PACKAGE_SCHEMA), true)) return false;
 		$packageType = (string)self::arrayValue($report, 'package_type', '');
 		if ($packageType === '' || self::arrayValue($report, 'approval_package_type') !== $packageType) return false;
 		if (self::arrayValue($report, 'approval_required') !== true) return false;
