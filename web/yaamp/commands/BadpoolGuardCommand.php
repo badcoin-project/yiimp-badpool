@@ -86,6 +86,9 @@ class BadpoolGuardCommand extends CConsoleCommand
 		if ($action === 'wallet-send-apply') {
 			$actionArgs = $this->walletSendApplyContextArgs($args);
 		}
+		elseif ($action === 'earnings-maturity-transition-dryrun' || $action === 'earnings-maturity-transition-approval-package') {
+			$actionArgs = $this->maturitySelectionContextArgs($args);
+		}
 		elseif ($action === 'earnings-maturity-transition-apply' || $action === 'account-credit-clear-apply' || $action === 'payout-row-apply') {
 			$actionArgs = $this->guardedApplyContextArgs($args);
 		}
@@ -187,10 +190,10 @@ class BadpoolGuardCommand extends CConsoleCommand
 				$report = $this->forwardCatchupStage1DrainApplyReport($args);
 				break;
 			case 'earnings-maturity-transition-dryrun':
-				$report = $this->earningsMaturityTransitionDryrunReport();
+				$report = $this->earningsMaturityTransitionDryrunReport($args);
 				break;
 			case 'earnings-maturity-transition-approval-package':
-				$report = $this->earningsMaturityTransitionApprovalPackageReport();
+				$report = $this->earningsMaturityTransitionApprovalPackageReport($args);
 				break;
 			case 'earnings-maturity-transition-apply':
 				$report = $this->earningsMaturityTransitionApplyReport($args);
@@ -253,9 +256,9 @@ class BadpoolGuardCommand extends CConsoleCommand
 			"       php yaamp/yiic.php badpoolguard forward-catchup-stage1-drain-approval-package --coin-id=<id> --selection-limit=<n> [--internal-batch-size=25] --format=json\n".
 			"       ".implode(' ', BadpoolStage1Manifest::applyCommandShape())."\n".
 			"       php yaamp/yiic.php badpoolguard forward-catchup-stage1-apply --coin-id=<id> --limit=<approved_n> --selected-count=<approved_n> --approval-package-checksum=<sha256> --batch-scope-checksum=<sha256> --projected-mutation-checksum=<sha256> --projected-earnings-checksum=<sha256> --operator-confirms-attribution-model=block_userid_single_recipient --format=json\n".
-			"       php yaamp/yiic.php badpoolguard earnings-maturity-transition-dryrun --coin-id=<id> [--format=json|text]\n".
-			"       php yaamp/yiic.php badpoolguard earnings-maturity-transition-approval-package --coin-id=<id> [--format=json|text]\n".
-			"       php yaamp/yiic.php badpoolguard earnings-maturity-transition-apply --coin-id=<id> --selected-earning-ids=<csv> --approval-package-checksum=<sha256> --selected-scope-checksum=<sha256> --projected-block-mutation-checksum=<sha256> --projected-earnings-mutation-checksum=<sha256> --operator-confirms-maturity-transition=scrypt_status0_to_status1 --format=json\n".
+			"       php yaamp/yiic.php badpoolguard earnings-maturity-transition-dryrun --coin-id=<id> [--selected-block-ids=<csv>] [--format=json|text]\n".
+			"       php yaamp/yiic.php badpoolguard earnings-maturity-transition-approval-package --coin-id=<id> [--selected-block-ids=<csv>] [--format=json|text]\n".
+			"       php yaamp/yiic.php badpoolguard earnings-maturity-transition-apply --coin-id=<id> --selected-earning-ids=<csv> [--selection-mode=exact-blocks --selected-block-ids=<csv>] --approval-package-checksum=<sha256> --selected-scope-checksum=<sha256> --projected-block-mutation-checksum=<sha256> --projected-earnings-mutation-checksum=<sha256> --operator-confirms-maturity-transition=scrypt_status0_to_status1 --format=json\n".
 			"       php yaamp/yiic.php badpoolguard account-credit-clear-dryrun --coin-id=<id> [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard account-credit-clear-approval-package --coin-id=<id> [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard account-credit-clear-apply --coin-id=<id> --selected-earning-ids=<csv> --approval-package-checksum=<sha256> --selected-earnings-scope-checksum=<sha256> --projected-earnings-mutation-checksum=<sha256> --projected-account-credit-checksum=<sha256> --operator-confirms-account-credit=scrypt_status1_to_status2_balance_increment --format=json\n".
@@ -2728,15 +2731,26 @@ class BadpoolGuardCommand extends CConsoleCommand
 		return BadpoolGuardReport::finalize($report);
 	}
 
-	private function earningsMaturityTransitionDryrunReport()
+	private function earningsMaturityTransitionDryrunReport($args=array())
 	{
 		if ($this->guard->isAllCoinsPreview()) {
 			$this->guard->addError('earnings-maturity-transition-dryrun requires --coin-id and refuses all-coin scope.');
 			return $this->guard->refusalReport();
 		}
 		$coinId = intval(arraySafeVal($this->guard->getScope(), 'coin_id'));
-		$rows = $this->guard->selectAll("SELECT E.id AS earning_id,E.userid,E.coinid,E.blockid,E.amount,E.status,E.mature_time,B.id AS block_id,B.height AS block_height,B.coin_id AS block_coin_id,B.category AS block_category,B.confirmations AS confirmations,C.mature_blocks AS mature_blocks FROM earnings E INNER JOIN blocks B ON B.id=E.blockid INNER JOIN coins C ON C.id=B.coin_id WHERE E.status=0 AND B.coin_id=:coin_id AND E.coinid=:coin_id AND B.category='immature' ORDER BY B.height,E.id", array(':coin_id'=>$coinId));
-		$items = array(); $blocks = array(); $totalsByUser = array(); $total = 0.0; $heights = array(); $excluded = array();
+		$selection = $this->parseMaturitySelection($args);
+		if ($selection['status'] === 'fail') { $this->guard->addError($selection['message']); return $this->guard->refusalReport(); }
+		$requestedIds=$selection['requested_block_ids']; $params=array(':coin_id'=>$coinId); $boundedSql='';
+		if($selection['mode']==='exact-blocks'){
+			$holders=array(); $requestParams=array(); foreach($requestedIds as $n=>$id){$key=':requested_block_'.$n;$holders[]=$key;$params[$key]=$id;$requestParams[$key]=$id;}
+			$requestedRows=$this->guard->selectAll('SELECT id,coin_id FROM blocks WHERE id IN ('.implode(',',$holders).') ORDER BY id ASC',$requestParams);
+			$found=array();$wrong=array();foreach($requestedRows as $row){$id=intval($row['id']);$found[$id]=true;if(intval($row['coin_id'])!==$coinId)$wrong[]=$id;}
+			$missing=array();foreach($requestedIds as $id)if(!isset($found[$id]))$missing[]=$id;
+			if($wrong||$missing){$this->guard->addError('Exact block scope refused; wrong-coin block IDs: '.implode(',',$wrong).'; unknown block IDs: '.implode(',',$missing).'.');return $this->guard->refusalReport();}
+			$boundedSql=' AND B.id IN ('.implode(',',$holders).')';
+		}
+		$rows = $this->guard->selectAll("SELECT E.id AS earning_id,E.userid,E.coinid,E.blockid,E.amount,E.status,E.mature_time,B.id AS block_id,B.height AS block_height,B.coin_id AS block_coin_id,B.category AS block_category,B.confirmations AS confirmations,C.mature_blocks AS mature_blocks FROM earnings E INNER JOIN blocks B ON B.id=E.blockid INNER JOIN coins C ON C.id=B.coin_id WHERE E.status=0 AND B.coin_id=:coin_id AND E.coinid=:coin_id AND B.category='immature'".$boundedSql." ORDER BY B.id,E.id", $params);
+		$items = array(); $blocks = array(); $totalsByUser = array(); $total = BadpoolStage1Manifest::normalizeAmount('0'); $heights = array(); $excluded = array();
 		foreach ($rows as $r) {
 			$proof = $this->maturityProof($r);
 			if ($proof['status'] !== 'pass') {
@@ -2751,26 +2765,30 @@ class BadpoolGuardCommand extends CConsoleCommand
 			$blocks[$blockId]['linked_earning_ids'][] = intval($r['earning_id']);
 			$blocks[$blockId]['total_amount'] = $this->decimalAdd($blocks[$blockId]['total_amount'], $r['amount']);
 			$u=(string)$r['userid']; if(!isset($totalsByUser[$u])) $totalsByUser[$u]=array('userid'=>intval($r['userid']),'earning_count'=>0,'amount_total'=>'0'); $totalsByUser[$u]['earning_count']++; $totalsByUser[$u]['amount_total']=$this->decimalAdd($totalsByUser[$u]['amount_total'],$r['amount']);
-			$total += floatval($r['amount']); $heights[] = intval($r['block_height']);
+			$total = BadpoolStage1Manifest::addAmounts($total, $r['amount']); $heights[] = intval($r['block_height']);
 		}
 		if (empty($items) && count($rows) > 0 && empty($excluded['conservative_maturity_proof_unavailable'])) $excluded['conservative_maturity_proof_unavailable'] = 0;
 		$blocks = array_values($blocks); usort($blocks, array($this,'sortByBlockId'));
 		$report = $this->guard->baseReport();
+		$linkedIds=array();foreach($blocks as $b)$linkedIds[]=intval($b['block_id']);$without=array_values(array_diff($requestedIds,$linkedIds));
+		$report['selection_mode']=$selection['mode'];$report['requested_block_ids']=$requestedIds;$report['requested_block_count']=count($requestedIds);$report['selected_earning_ids']=array_map(function($i){return intval($i['earning_id']);},$items);$report['selected_earning_count']=count($items);$report['selected_linked_block_ids']=$linkedIds;$report['selected_linked_block_count']=count($linkedIds);$report['requested_blocks_without_selected_earnings']=$without;
 		$report['summary']['selection_criteria'] = array("earnings.status=0", "earnings.blockid=blocks.id", "blocks.coin_id=--coin-id", "blocks.category='immature'", "DB maturity proof confirmations >= mature_blocks");
 		$report['summary']['excluded_by_reason'] = $excluded;
-		$report['summary']['selected_row_count'] = count($items); $report['summary']['linked_block_count'] = count($blocks); $report['summary']['total_amount'] = sprintf('%.12F',$total); $report['summary']['block_height_range'] = empty($heights)?null:array('min'=>min($heights),'max'=>max($heights)); $report['summary']['totals_by_user'] = array_values($totalsByUser);
+		$report['summary']['selected_row_count'] = count($items); $report['summary']['linked_block_count'] = count($blocks); $report['summary']['total_amount'] = $total; $report['summary']['block_height_range'] = empty($heights)?null:array('min'=>min($heights),'max'=>max($heights)); $report['summary']['totals_by_user'] = array_values($totalsByUser);
 		$report['items']['selected_earnings'] = $items; $report['items']['linked_blocks'] = $blocks;
-		$report['selected_scope_checksum'] = BadpoolGuardReport::checksum(array('coin_id'=>$coinId,'earnings'=>$items,'blocks'=>$blocks));
+		$report['scope_checksum'] = BadpoolGuardReport::checksum(array('coin_id'=>$coinId,'selection_mode'=>$selection['mode'],'requested_block_ids'=>$requestedIds));
+		$report['selected_scope_checksum'] = BadpoolGuardReport::checksum(array('coin_id'=>$coinId,'selection_mode'=>$selection['mode'],'requested_block_ids'=>$requestedIds,'earnings'=>$items,'blocks'=>$blocks,'without_selected_earnings'=>$without));
 		$report['projected_block_mutation_checksum'] = BadpoolGuardReport::checksum($blocks);
 		$report['projected_earnings_mutation_checksum'] = BadpoolGuardReport::checksum(array_map(function($i){return array('earning_id'=>$i['earning_id'],'from_status'=>0,'to_status'=>1,'mature_time'=>'current_unix_timestamp_at_apply');}, $items));
 		$report = $this->guard->finalizeReport($report); $report['dryrun_report_checksum'] = BadpoolGuardReport::checksum($report); return $report;
 	}
 
-	private function earningsMaturityTransitionApprovalPackageReport()
+	private function earningsMaturityTransitionApprovalPackageReport($args=array())
 	{
-		$dryrun = $this->earningsMaturityTransitionDryrunReport(); if (!$this->guard->isValid()) return $dryrun;
+		$dryrun = $this->earningsMaturityTransitionDryrunReport($args); if (!$this->guard->isValid()) return $dryrun;
 		$cmd = array('cd', self::OPERATOR_WEB_CWD, '&&', 'php', 'yaamp/yiic.php', 'badpoolguard', 'earnings-maturity-transition-apply','--coin-id='.arraySafeVal($this->guard->getScope(),'coin_id'),'--selected-earning-ids='.$this->csvIds(arraySafeVal(arraySafeVal($dryrun,'items',array()),'selected_earnings',array()), 'earning_id'),'--approval-package-checksum=<approval_package_checksum>','--selected-scope-checksum='.arraySafeVal(arraySafeVal($dryrun,'selected_scope_checksum',array()),'value'),'--projected-block-mutation-checksum='.arraySafeVal(arraySafeVal($dryrun,'projected_block_mutation_checksum',array()),'value'),'--projected-earnings-mutation-checksum='.arraySafeVal(arraySafeVal($dryrun,'projected_earnings_mutation_checksum',array()),'value'),'--operator-confirms-maturity-transition=scrypt_status0_to_status1','--format=json');
-		$dryrun['approval_package_type']='earnings-maturity-transition'; $dryrun['approval_required']=true; $dryrun['apply_command_shape']=$cmd; $dryrun['apply_scope_binding']='Apply does not accept --limit; exact selected earning and block rows are bound by stable checksums.'; $dryrun['warnings'][]='No account balance mutation; no payout rows; no wallet sends; no backend loops.'; $this->standardizeApprovalPackageContract($dryrun, 'earnings-maturity-transition', array('approval_package_checksum','selected_scope_checksum','projected_block_mutation_checksum','projected_earnings_mutation_checksum')); unset($dryrun['report_checksum']); $dryrun['approval_package_checksum']=$this->stableApprovalChecksum($dryrun, array('approval_package_type','scope','selected_scope_checksum','projected_block_mutation_checksum','projected_earnings_mutation_checksum','items','apply_command_shape','apply_scope_binding','selected_records','checksums','apply_command_args')); $this->standardizeApprovalPackageContract($dryrun, 'earnings-maturity-transition', array('approval_package_checksum','selected_scope_checksum','projected_block_mutation_checksum','projected_earnings_mutation_checksum')); $dryrun['report_checksum']=BadpoolGuardReport::checksum($dryrun); return $dryrun;
+		if($dryrun['selection_mode']==='exact-blocks') array_splice($cmd,8,0,array('--selection-mode=exact-blocks','--selected-block-ids='.implode(',',$dryrun['requested_block_ids'])));
+		$dryrun['approval_package_type']='earnings-maturity-transition'; $dryrun['approval_package_version']=$dryrun['selection_mode']==='exact-blocks'?2:1; $dryrun['approval_required']=true; $dryrun['apply_command_shape']=$cmd; $dryrun['apply_scope_binding']='Apply does not accept --limit; exact selected earning and block rows are bound by stable checksums.'; $dryrun['warnings'][]='No account balance mutation; no payout rows; no wallet sends; no backend loops.'; $this->standardizeApprovalPackageContract($dryrun, 'earnings-maturity-transition', array('approval_package_checksum','selected_scope_checksum','projected_block_mutation_checksum','projected_earnings_mutation_checksum')); unset($dryrun['report_checksum']); $dryrun['approval_package_checksum']=$this->stableApprovalChecksum($dryrun, $this->maturityApprovalChecksumKeys()); $this->standardizeApprovalPackageContract($dryrun, 'earnings-maturity-transition', array('approval_package_checksum','selected_scope_checksum','projected_block_mutation_checksum','projected_earnings_mutation_checksum')); $dryrun['report_checksum']=BadpoolGuardReport::checksum($dryrun); return $dryrun;
 	}
 
 	private function accountCreditClearDryrunReport()
@@ -2805,9 +2823,12 @@ class BadpoolGuardCommand extends CConsoleCommand
 		unset($report['selected_amount']);
 	}
 
-	private function earningsMaturityTransitionApprovalForIds($ids)
+	private function earningsMaturityTransitionApprovalForIds($ids, $requestedBlockIds=array())
 	{
-		$report = $this->earningsMaturityTransitionApprovalPackageReport();
+		$bounded = !empty($requestedBlockIds);
+		$args = $bounded ? array('--selected-block-ids='.implode(',', $requestedBlockIds)) : array();
+		$report = $this->earningsMaturityTransitionApprovalPackageReport($args);
+		if ($bounded) return $report;
 		$this->clearFinalizedApprovalPackageContractFields($report);
 		$items = $this->filterRowsByIds(arraySafeVal(arraySafeVal($report,'items',array()),'selected_earnings',array()), 'earning_id', $ids);
 		$blockIds = array(); foreach($items as $i) $blockIds[intval($i['linked_block_id'])]=true;
@@ -2817,7 +2838,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 		$report['selected_scope_checksum']=BadpoolGuardReport::checksum(array('coin_id'=>arraySafeVal($this->guard->getScope(),'coin_id'),'earnings'=>$items,'blocks'=>$blocks));
 		$report['projected_block_mutation_checksum']=BadpoolGuardReport::checksum($blocks);
 		$report['projected_earnings_mutation_checksum']=BadpoolGuardReport::checksum(array_map(function($i){return array('earning_id'=>$i['earning_id'],'from_status'=>0,'to_status'=>1,'mature_time'=>'current_unix_timestamp_at_apply');}, $items));
-		$this->standardizeApprovalPackageContract($report, 'earnings-maturity-transition', array('approval_package_checksum','selected_scope_checksum','projected_block_mutation_checksum','projected_earnings_mutation_checksum')); unset($report['report_checksum']); $report['approval_package_checksum']=$this->stableApprovalChecksum($report, array('approval_package_type','scope','selected_scope_checksum','projected_block_mutation_checksum','projected_earnings_mutation_checksum','items','apply_command_shape','apply_scope_binding','selected_records','checksums','apply_command_args')); $this->standardizeApprovalPackageContract($report, 'earnings-maturity-transition', array('approval_package_checksum','selected_scope_checksum','projected_block_mutation_checksum','projected_earnings_mutation_checksum')); $report['report_checksum']=BadpoolGuardReport::checksum($report); return $report;
+		$this->standardizeApprovalPackageContract($report, 'earnings-maturity-transition', array('approval_package_checksum','selected_scope_checksum','projected_block_mutation_checksum','projected_earnings_mutation_checksum')); unset($report['report_checksum']); $report['approval_package_checksum']=$this->stableApprovalChecksum($report, $this->maturityApprovalChecksumKeys()); $this->standardizeApprovalPackageContract($report, 'earnings-maturity-transition', array('approval_package_checksum','selected_scope_checksum','projected_block_mutation_checksum','projected_earnings_mutation_checksum')); $report['report_checksum']=BadpoolGuardReport::checksum($report); return $report;
 	}
 
 	private function accountCreditClearApprovalForIds($ids)
@@ -2844,7 +2865,10 @@ class BadpoolGuardCommand extends CConsoleCommand
 		$required = $type==='earnings-maturity-transition' ? array('selected-earning-ids','approval-package-checksum','selected-scope-checksum','projected-block-mutation-checksum','projected-earnings-mutation-checksum') : array('selected-earning-ids','approval-package-checksum','selected-earnings-scope-checksum','projected-earnings-mutation-checksum','projected-account-credit-checksum');
 		if(isset($opts['__parse_error'])) return $this->guardedApplyFail($report,'invalid_option',$opts['__parse_error']); if($this->guard->isAllCoinsPreview()) return $this->guardedApplyFail($report,'coin_id_required',$type.' requires --coin-id and refuses all-coin scope.'); if($this->guard->getFormat()!=='json') return $this->guardedApplyFail($report,'json_format_required',$type.' apply supports --format=json only.'); foreach($required as $r) if(!isset($opts[$r])||$opts[$r]==='') return $this->guardedApplyFail($report,'missing_required_checksum','Missing required --'.$r.'.');
 		$confirm = $type==='earnings-maturity-transition' ? 'operator-confirms-maturity-transition' : 'operator-confirms-account-credit'; $confirmVal = $type==='earnings-maturity-transition' ? 'scrypt_status0_to_status1' : 'scrypt_status1_to_status2_balance_increment'; if(arraySafeVal($opts,$confirm)!==$confirmVal) return $this->guardedApplyFail($report,'operator_confirmation_required','Missing exact --'.$confirm.'='.$confirmVal.'.');
-		$ids=$this->parseCsvIds(arraySafeVal($opts,'selected-earning-ids','')); if(empty($ids)) return $this->guardedApplyFail($report,'selected_row_ids_required','Apply scope must be exact selected row IDs.'); $approval = $type==='earnings-maturity-transition' ? $this->earningsMaturityTransitionApprovalForIds($ids) : $this->accountCreditClearApprovalForIds($ids); if(!$this->guard->isValid()) return $this->guardedApplyFail($report,'approval_package_recompute_failed','Fresh approval package recompute failed.');
+		$ids=$this->parseCsvIds(arraySafeVal($opts,'selected-earning-ids','')); if(empty($ids)||count($ids)!==count(array_unique($ids))) return $this->guardedApplyFail($report,'selected_row_ids_required','Apply scope must be exact selected row IDs.');
+		$requested=array(); if($type==='earnings-maturity-transition' && isset($opts['selection-mode'])){if($opts['selection-mode']!=='exact-blocks')return $this->guardedApplyFail($report,'invalid_selection_mode','Bounded maturity apply requires --selection-mode=exact-blocks.');$parsed=$this->parseMaturitySelection(array('--selected-block-ids='.arraySafeVal($opts,'selected-block-ids','')));if($parsed['status']==='fail')return $this->guardedApplyFail($report,'invalid_block_scope',$parsed['message']);$requested=$parsed['requested_block_ids'];}elseif(isset($opts['selected-block-ids']))return $this->guardedApplyFail($report,'missing_selection_mode','--selected-block-ids requires --selection-mode=exact-blocks.');
+		$approval = $type==='earnings-maturity-transition' ? $this->earningsMaturityTransitionApprovalForIds($ids,$requested) : $this->accountCreditClearApprovalForIds($ids); if(!$this->guard->isValid()) return $this->guardedApplyFail($report,'approval_package_recompute_failed','Fresh approval package recompute failed.');
+		if($type==='earnings-maturity-transition'){$authorized=arraySafeVal($approval,'selected_earning_ids',array());sort($authorized,SORT_NUMERIC);$given=$ids;sort($given,SORT_NUMERIC);if($authorized!==$given)return $this->guardedApplyFail($report,'authorized_earning_scope_mismatch','Selected earning IDs do not exactly match the authorized block cohort.');}
 		$checks = $type==='earnings-maturity-transition' ? array('approval-package-checksum'=>'approval_package_checksum','selected-scope-checksum'=>'selected_scope_checksum','projected-block-mutation-checksum'=>'projected_block_mutation_checksum','projected-earnings-mutation-checksum'=>'projected_earnings_mutation_checksum') : array('approval-package-checksum'=>'approval_package_checksum','selected-earnings-scope-checksum'=>'selected_earnings_scope_checksum','projected-earnings-mutation-checksum'=>'projected_earnings_mutation_checksum','projected-account-credit-checksum'=>'projected_account_credit_checksum');
 		foreach($checks as $opt=>$field){ if((string)arraySafeVal($opts,$opt)!==(string)arraySafeVal(arraySafeVal($approval,$field,array()),'value')) return $this->guardedApplyFail($report,'checksum_mismatch','Expected checksum does not match freshly generated approval package state: --'.$opt.'.'); }
 		$before=$this->guardedApplyBeforeState(); $tx=app()->db->beginTransaction(); if(!$tx) return $this->guardedApplyFail($report,'transaction_unavailable','Database transaction mechanism unavailable.');
@@ -2859,16 +2883,20 @@ class BadpoolGuardCommand extends CConsoleCommand
 
 	private function walletSendApplyContextArgs($args){ $out=array(); foreach($args as $arg){ if(preg_match('/^--(coin-id|format|selected-payout-ids)(=.*)?$/i',$arg)) $out[]=$arg; } return $out; }
 	private function guardedApplyContextArgs($args){ $out=array(); foreach($args as $arg){ if(preg_match('/^--(coin-id|format)(=.*)?$/i',$arg)) $out[]=$arg; } return $out; }
-	private function parseGuardedApplyOptions($args){ $allowed=array('coin-id','format','selected-earning-ids','approval-package-checksum','selected-scope-checksum','projected-block-mutation-checksum','projected-earnings-mutation-checksum','operator-confirms-maturity-transition','selected-earnings-scope-checksum','projected-account-credit-checksum','operator-confirms-account-credit'); $o=array(); foreach($args as $arg){ if(!preg_match('/^--([^=]+)=(.*)$/',$arg,$m)){ $o['__parse_error']='Unknown argument refused: '.$arg; continue; } $n=strtolower($m[1]); if(!in_array($n,$allowed,true)) $o['__parse_error']='Unknown option refused: --'.$m[1]; elseif(isset($o[$n])) $o['__parse_error']='Duplicate option refused: --'.$m[1]; else $o[$n]=$m[2]; } return $o; }
+	private function maturitySelectionContextArgs($args){$out=array();foreach($args as $arg)if(preg_match('/^--(coin-id|format)(=.*)?$/i',$arg))$out[]=$arg;return $out;}
+	private function parseMaturitySelection($args){$seen=false;$raw=null;foreach($args as $arg){if(strpos($arg,'--selected-block-ids=')===0){if($seen)return array('status'=>'fail','message'=>'Duplicate --selected-block-ids is refused.');$seen=true;$raw=substr($arg,21);}elseif(strpos($arg,'--selected-block-ids')===0)return array('status'=>'fail','message'=>'Exact block selection requires --selected-block-ids=<csv>.');}if(!$seen)return array('status'=>'pass','mode'=>'coin-wide','requested_block_ids'=>array());if($raw===''||!preg_match('/^[1-9][0-9]*(,[1-9][0-9]*)*$/',$raw))return array('status'=>'fail','message'=>'--selected-block-ids must be a non-empty comma-separated list of canonical positive integers.');$ids=array_map('intval',explode(',',$raw));if(count($ids)!==count(array_unique($ids)))return array('status'=>'fail','message'=>'Duplicate block IDs are refused.');sort($ids,SORT_NUMERIC);return array('status'=>'pass','mode'=>'exact-blocks','requested_block_ids'=>$ids);}
+	private function parseGuardedApplyOptions($args){ $allowed=array('coin-id','format','selected-earning-ids','selected-block-ids','selection-mode','approval-package-checksum','selected-scope-checksum','projected-block-mutation-checksum','projected-earnings-mutation-checksum','operator-confirms-maturity-transition','selected-earnings-scope-checksum','projected-account-credit-checksum','operator-confirms-account-credit'); $o=array(); foreach($args as $arg){ if(!preg_match('/^--([^=]+)=(.*)$/',$arg,$m)){ $o['__parse_error']='Unknown argument refused: '.$arg; continue; } $n=strtolower($m[1]); if(!in_array($n,$allowed,true)) $o['__parse_error']='Unknown option refused: --'.$m[1]; elseif(isset($o[$n])) $o['__parse_error']='Duplicate option refused: --'.$m[1]; else $o[$n]=$m[2]; } return $o; }
 	private function applyBaseReport($command,$status='refused'){ $r=$this->guard->baseReport($status); $r['schema']=self::APPLY_SCHEMA; $r['mode']=self::APPLY_MODE; $r['command']=$command; $r['read_only']=false; $r['blocked_actions']=array('unapproved_scope','checksum_mismatch','missing_operator_confirmation','backend_loops','service_or_cron_changes','share_deletion','payout_retry_delete'); return $r; }
 	private function guardedApplyBaseReport($type,$opts){ $r=$this->applyBaseReport($type.'-apply', 'refused'); $r['db_mutations']=false; $r['db_mutation_status']='guarded_transaction_only'; $r['wallet_reads']=false; $r['wallet_sends']=false; $r['payout_rows_created']=false; $r['withdraw_rows_created']=false; $r['backend_loops_run']=false; $r['shares_deleted']=false; return $r; }
 	private function guardedApplyFail($report,$reason,$msg){ $report['status']='refused'; $report['abort_reason']=$reason; $report['errors'][]=$msg; return BadpoolGuardReport::finalize($report); }
 	private function guardedApplyBeforeState(){ $coinId=intval(arraySafeVal($this->guard->getScope(),'coin_id')); return array('earnings_status_counts'=>$this->groupSummary('earnings','status',array('sql'=>'coinid=:coin_id','params'=>array(':coin_id'=>$coinId))),'block_category_counts'=>$this->groupSummary('blocks','category',array('sql'=>'coin_id=:coin_id','params'=>array(':coin_id'=>$coinId)))); }
 	private function paymentDelayThreshold(){ return YAAMP_ALLOW_EXCHANGE ? time() - (int)YAAMP_PAYMENTS_FREQ : time() - (YAAMP_PAYMENTS_FREQ / 2); }
 	private function stableApprovalChecksum($report,$keys){ $in=array(); foreach($keys as $k) $in[$k]=arraySafeVal($report,$k); return BadpoolGuardReport::approvalChecksum($in); }
+	private function maturityApprovalChecksumKeys(){ return array('schema','approval_package_type','approval_package_version','scope','selection_mode','requested_block_ids','requested_block_count','selected_earning_ids','selected_earning_count','selected_linked_block_ids','selected_linked_block_count','requested_blocks_without_selected_earnings','scope_checksum','selected_scope_checksum','projected_block_mutation_checksum','projected_earnings_mutation_checksum','items','summary','apply_command_shape','apply_scope_binding','selected_records','checksums','apply_command_args'); }
 	private function standardizeApprovalPackageContract(&$report, $packageType, $checksumFields)
 	{
 		$report['schema'] = BadpoolGuardReport::APPROVAL_PACKAGE_SCHEMA;
+		if ($packageType === 'earnings-maturity-transition' && arraySafeVal($report, 'selection_mode') === 'exact-blocks') $report['schema'] = BadpoolGuardReport::BOUNDED_MATURITY_APPROVAL_PACKAGE_SCHEMA;
 		$report['mode'] = BadpoolGuardReport::APPROVAL_PACKAGE_MODE;
 		$report['read_only'] = true;
 		$report['db_mutations'] = false;

@@ -1,0 +1,7 @@
+# Exact block binding for maturity authorization
+
+`earnings-maturity-transition-dryrun` and `earnings-maturity-transition-approval-package` accept an optional `--selected-block-ids=<comma-separated IDs>`. The value is strict: it must be a non-empty list of unique, canonical positive decimal integers. The command sorts the IDs numerically, verifies every block exists and belongs to `--coin-id`, and selects eligible earnings only through those blocks. Missing, wrong-coin, malformed, empty, or duplicate scope is refused; it never falls back to coin-wide selection.
+
+Bounded reports distinguish `requested_block_ids`, `selected_linked_block_ids`, and `requested_blocks_without_selected_earnings`. They bind the coin, `exact-blocks` selection mode, canonical requested scope, selected earnings, linked blocks, mutation previews, and total through semantic checksums. Reordering an equivalent request does not change those checksums.
+
+Bounded approval packages use `badpool.approval_package.v2`; existing unbounded packages remain `badpool.approval_package.v1` and retain their existing behavior. Version 1 is never reinterpreted as bounded. A v2 apply command carries both `--selection-mode=exact-blocks` and the canonical `--selected-block-ids`. Apply freshly rebuilds that bounded cohort and requires the supplied earning IDs and every checksum to match exactly before opening a transaction. Newly eligible coin-wide rows are not added.
