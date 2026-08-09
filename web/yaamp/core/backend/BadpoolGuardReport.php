@@ -91,6 +91,7 @@ class BadpoolGuardReport
 	private static function isCanonicalApprovalPackage($report)
 	{
 		if (!in_array(self::arrayValue($report, 'schema'), array(self::APPROVAL_PACKAGE_SCHEMA, self::BOUNDED_MATURITY_APPROVAL_PACKAGE_SCHEMA), true)) return false;
+		if (self::arrayValue($report, 'schema') === self::BOUNDED_MATURITY_APPROVAL_PACKAGE_SCHEMA && !self::isCompleteBoundedMaturityPackage($report)) return false;
 		$packageType = (string)self::arrayValue($report, 'package_type', '');
 		if ($packageType === '' || self::arrayValue($report, 'approval_package_type') !== $packageType) return false;
 		if (self::arrayValue($report, 'approval_required') !== true) return false;
@@ -102,6 +103,47 @@ class BadpoolGuardReport
 			'wallet-send' => 'wallet-send-approval-package',
 		);
 		return isset($commands[$packageType]) && self::arrayValue($report, 'command') === $commands[$packageType];
+	}
+
+	public static function isCompleteBoundedMaturityPackage($report)
+	{
+		if (!is_array($report) || self::arrayValue($report, 'schema') !== self::BOUNDED_MATURITY_APPROVAL_PACKAGE_SCHEMA) return false;
+		if (self::arrayValue($report, 'package_type') !== 'earnings-maturity-transition' || self::arrayValue($report, 'approval_package_type') !== 'earnings-maturity-transition') return false;
+		if (intval(self::arrayValue($report, 'approval_package_version')) !== 2 || self::arrayValue($report, 'selection_mode') !== 'exact-blocks') return false;
+		$requested = self::arrayValue($report, 'requested_block_ids');
+		$earnings = self::arrayValue($report, 'selected_earning_ids');
+		$linked = self::arrayValue($report, 'selected_linked_block_ids');
+		$without = self::arrayValue($report, 'requested_blocks_without_selected_earnings');
+		if (!self::canonicalPositiveIds($requested, false) || !self::uniquePositiveIds($earnings, true) || !self::canonicalPositiveIds($linked, true) || !self::canonicalPositiveIds($without, true)) return false;
+		if (intval(self::arrayValue($report, 'requested_block_count', -1)) !== count($requested) || intval(self::arrayValue($report, 'selected_earning_count', -1)) !== count($earnings) || intval(self::arrayValue($report, 'selected_linked_block_count', -1)) !== count($linked)) return false;
+		if (array_values(array_intersect($linked, $without)) || array_values(array_diff(array_merge($linked, $without), $requested))) return false;
+		foreach (array('scope_checksum','selected_scope_checksum','projected_block_mutation_checksum','projected_earnings_mutation_checksum','approval_package_checksum') as $field) {
+			$value = self::arrayValue($report, $field);
+			if (!is_array($value) || !preg_match('/^[a-f0-9]{64}$/', (string)self::arrayValue($value, 'value'))) return false;
+		}
+		return true;
+	}
+
+	private static function canonicalPositiveIds($ids, $emptyAllowed)
+	{
+		if (!is_array($ids) || (!$emptyAllowed && !$ids)) return false;
+		$previous = 0;
+		foreach ($ids as $id) {
+			if (!is_int($id) || $id <= $previous) return false;
+			$previous = $id;
+		}
+		return true;
+	}
+
+	private static function uniquePositiveIds($ids, $emptyAllowed)
+	{
+		if (!is_array($ids) || (!$emptyAllowed && !$ids)) return false;
+		$seen = array();
+		foreach ($ids as $id) {
+			if (!is_int($id) || $id <= 0 || isset($seen[$id])) return false;
+			$seen[$id] = true;
+		}
+		return true;
 	}
 
 	private static function isPreviewCommand($command)

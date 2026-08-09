@@ -150,7 +150,7 @@ $cases = array(
 		'apply'=>'earnings-maturity-transition-apply',
 		'id_field'=>'earning_id', 'id'=>20,
 		'checksum_fields'=>array('approval_package_checksum','selected_scope_checksum','projected_block_mutation_checksum','projected_earnings_mutation_checksum'),
-		'stable_keys'=>array('approval_package_type','scope','selected_scope_checksum','projected_block_mutation_checksum','projected_earnings_mutation_checksum','items','apply_command_shape','apply_scope_binding','selected_records','checksums','apply_command_args'),
+		'stable_keys'=>array('schema','approval_package_type','approval_package_version','scope','selection_mode','requested_block_ids','requested_block_count','selected_earning_ids','selected_earning_count','selected_linked_block_ids','selected_linked_block_count','requested_blocks_without_selected_earnings','scope_checksum','selected_scope_checksum','projected_block_mutation_checksum','projected_earnings_mutation_checksum','items','summary','apply_command_shape','apply_scope_binding','selected_records','checksums','apply_command_args'),
 	),
 	'account'=>array(
 		'method'=>'accountCreditClearApprovalPackageReport',
