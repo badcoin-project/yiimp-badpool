@@ -191,6 +191,104 @@ class BadpoolGuardReport
 		return in_array(strtolower(trim($value)), array('true', '1', 'yes', 'performed', 'sent'), true);
 	}
 
+	public static function classifyMaturityApplyResult($commandRc, $report, $authorization)
+	{
+		$failed = array();
+		if (self::canonicalCount($commandRc) !== '0') $failed[] = 'command_rc';
+		if (!is_array($report)) $failed[] = 'report';
+		if (!is_array($authorization)) $failed[] = 'authorization';
+
+		if (is_array($report)) {
+			$exact = array(
+				'schema'=>self::APPLY_SCHEMA,
+				'mode'=>self::APPLY_MODE,
+				'command'=>'earnings-maturity-transition-apply',
+				'status'=>'pass',
+				'db_mutation_status'=>'guarded_transaction_committed',
+			);
+			foreach ($exact as $field=>$expected) if (self::arrayValue($report, $field) !== $expected) $failed[] = $field;
+			$flags = array(
+				'read_only'=>false,
+				'db_mutations'=>true,
+				'no_account_credit'=>true,
+				'no_payout_rows'=>true,
+				'payout_rows_created'=>false,
+				'wallet_sends'=>false,
+				'wallet_rpc_send_performed'=>false,
+				'backend_loops_run'=>false,
+				'shares_deleted'=>false,
+			);
+			foreach ($flags as $field=>$expected) {
+				if (!array_key_exists($field, $report) || $report[$field] !== $expected) $failed[] = $field;
+			}
+			if (!array_key_exists('errors', $report) || !is_array($report['errors']) || count($report['errors']) !== 0) $failed[] = 'errors';
+		}
+
+		$countBindings = array(
+			'selected_count'=>'selected_count',
+			'applied_block_count'=>'block_count',
+			'applied_earning_count'=>'earning_count',
+		);
+		if (is_array($report) && is_array($authorization)) {
+			foreach ($countBindings as $reportField=>$authorizationField) {
+				$actual = self::canonicalCount(self::arrayValue($report, $reportField));
+				$expected = self::canonicalCount(self::arrayValue($authorization, $authorizationField));
+				if ($actual === null || $expected === null || $actual !== $expected) $failed[] = $reportField;
+			}
+		}
+
+		$projected = is_array($report) ? self::coinAmountAtPrecision(self::arrayValue($report, 'projected_amount_total')) : null;
+		$applied = is_array($report) ? self::coinAmountAtPrecision(self::arrayValue($report, 'applied_amount_total')) : null;
+		$authorized = is_array($authorization) ? self::coinAmountAtPrecision(self::arrayValue($authorization, 'amount_total')) : null;
+		if ($projected === null || $applied === null || $projected !== $applied) $failed[] = 'projected_amount_total';
+		if ($authorized === null || $applied === null || $authorized !== $applied) $failed[] = 'authorized_amount_total';
+
+		$failed = array_values(array_unique($failed));
+		return array(
+			'classification'=>empty($failed) ? 'pass' : 'hold',
+			'reason'=>empty($failed) ? null : 'apply_result_contract_failed',
+			'failed_checks'=>$failed,
+			'coin_precision'=>8,
+			'authorized_amount_at_coin_precision'=>$authorized,
+			'projected_amount_at_coin_precision'=>$projected,
+			'applied_amount_at_coin_precision'=>$applied,
+		);
+	}
+
+	private static function canonicalCount($value)
+	{
+		if (is_int($value)) return $value >= 0 ? (string)$value : null;
+		if (!is_string($value) || !preg_match('/^(0|[1-9][0-9]*)$/', $value)) return null;
+		return $value;
+	}
+
+	private static function coinAmountAtPrecision($value)
+	{
+		$value = is_int($value) ? (string)$value : (is_string($value) ? trim($value) : null);
+		if ($value === null || !preg_match('/^(-?)([0-9]+)(?:\.([0-9]+))?$/', $value, $matches)) return null;
+		$negative = $matches[1] === '-';
+		$whole = ltrim($matches[2], '0');
+		if ($whole === '') $whole = '0';
+		$fraction = isset($matches[3]) ? $matches[3] : '';
+		$scale = 8;
+		$kept = substr(str_pad($fraction, $scale, '0'), 0, $scale);
+		if (strlen($fraction) > $scale && intval($fraction[$scale]) >= 5) {
+			$digits = $whole.$kept;
+			$carry = 1;
+			for ($i = strlen($digits) - 1; $i >= 0 && $carry; $i--) {
+				$digit = intval($digits[$i]) + $carry;
+				$digits[$i] = (string)($digit % 10);
+				$carry = $digit >= 10 ? 1 : 0;
+			}
+			if ($carry) $digits = '1'.$digits;
+			$digits = str_pad($digits, $scale + 1, '0', STR_PAD_LEFT);
+			$whole = substr($digits, 0, -$scale);
+			$kept = substr($digits, -$scale);
+		}
+		$isZero = $whole === '0' && trim($kept, '0') === '';
+		return ($negative && !$isZero ? '-' : '').$whole.'.'.$kept;
+	}
+
 	public static function checksum($report)
 	{
 		$canonical = self::canonicalizeForChecksum($report);
