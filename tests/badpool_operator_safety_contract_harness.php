@@ -35,6 +35,66 @@ contract_expect($applyReport['db_mutations'] === true, 'committed apply db_mutat
 contract_expect($applyReport['db_mutation_status'] === 'guarded_transaction_committed', 'apply mutation detail was not preserved', $failures);
 contract_expect($applyReport['wallet_rpc_send_performed'] === false, 'apply wallet RPC flag is not boolean false', $failures);
 
+$maturityAuthorization = array('selected_count'=>50, 'block_count'=>50, 'earning_count'=>50, 'amount_total'=>'107970.307768920000');
+$maturityReport = BadpoolGuardReport::finalize(array(
+	'command'=>'earnings-maturity-transition-apply',
+	'status'=>'pass',
+	'db_mutations'=>true,
+	'db_mutation_status'=>'guarded_transaction_committed',
+	'selected_count'=>50,
+	'applied_block_count'=>50,
+	'applied_earning_count'=>50,
+	'projected_amount_total'=>'107970.307768919971',
+	'applied_amount_total'=>'107970.307768919971',
+	'no_account_credit'=>true,
+	'no_payout_rows'=>true,
+	'payout_rows_created'=>false,
+	'wallet_sends'=>false,
+	'wallet_rpc_send_performed'=>false,
+	'backend_loops_run'=>false,
+	'shares_deleted'=>false,
+	'errors'=>array(),
+));
+$maturityPass = BadpoolGuardReport::classifyMaturityApplyResult(0, $maturityReport, $maturityAuthorization);
+contract_expect($maturityPass['classification'] === 'pass', 'successful guarded maturity apply must classify as pass', $failures);
+contract_expect($maturityPass['authorized_amount_at_coin_precision'] === '107970.30776892', 'authorized total was not normalized to coin precision', $failures);
+contract_expect($maturityPass['applied_amount_at_coin_precision'] === '107970.30776892', 'observed applied total was not normalized to coin precision', $failures);
+
+$amountMismatch = $maturityAuthorization;
+$amountMismatch['amount_total'] = '107970.30776893';
+$maturityHold = BadpoolGuardReport::classifyMaturityApplyResult(0, $maturityReport, $amountMismatch);
+contract_expect($maturityHold['classification'] === 'hold' && in_array('authorized_amount_total', $maturityHold['failed_checks'], true), 'real maturity total mismatch must hold', $failures);
+$projectedMismatch = $maturityReport;
+$projectedMismatch['projected_amount_total'] = '107970.30776893';
+$projectedMismatchResult = BadpoolGuardReport::classifyMaturityApplyResult(0, $projectedMismatch, $maturityAuthorization);
+contract_expect($projectedMismatchResult['classification'] === 'hold' && in_array('projected_amount_total', $projectedMismatchResult['failed_checks'], true), 'real projected/applied mismatch must hold', $failures);
+$countMismatch = $maturityAuthorization;
+$countMismatch['block_count'] = 49;
+$countMismatchResult = BadpoolGuardReport::classifyMaturityApplyResult(0, $maturityReport, $countMismatch);
+contract_expect($countMismatchResult['classification'] === 'hold' && in_array('applied_block_count', $countMismatchResult['failed_checks'], true), 'real maturity count mismatch must hold', $failures);
+$commandFailure = BadpoolGuardReport::classifyMaturityApplyResult(1, $maturityReport, $maturityAuthorization);
+contract_expect($commandFailure['classification'] === 'hold' && in_array('command_rc', $commandFailure['failed_checks'], true), 'nonzero maturity command result must hold', $failures);
+
+foreach (array(
+	'db_mutations'=>false,
+	'no_account_credit'=>false,
+	'no_payout_rows'=>false,
+	'payout_rows_created'=>true,
+	'wallet_sends'=>true,
+	'wallet_rpc_send_performed'=>true,
+	'backend_loops_run'=>true,
+	'shares_deleted'=>true,
+) as $field=>$unsafe) {
+	$unsafeReport = $maturityReport;
+	$unsafeReport[$field] = $unsafe;
+	$classification = BadpoolGuardReport::classifyMaturityApplyResult(0, $unsafeReport, $maturityAuthorization);
+	contract_expect($classification['classification'] === 'hold' && in_array($field, $classification['failed_checks'], true), "unsafe maturity flag $field must hold", $failures);
+}
+$missingFlag = $maturityReport;
+unset($missingFlag['no_account_credit']);
+$missingFlagResult = BadpoolGuardReport::classifyMaturityApplyResult(0, $missingFlag, $maturityAuthorization);
+contract_expect($missingFlagResult['classification'] === 'hold' && in_array('no_account_credit', $missingFlagResult['failed_checks'], true), 'missing maturity safety flag must hold', $failures);
+
 $walletHold = BadpoolGuardReport::finalize(array('command'=>'wallet-send-apply','db_mutations'=>'failed_or_partial_rolled_back','wallet_rpc_send_performed'=>true));
 contract_expect($walletHold['db_mutations'] === false, 'rolled-back wallet DB failure must normalize to boolean false', $failures);
 contract_expect($walletHold['db_mutation_status'] === 'failed_or_partial_rolled_back', 'wallet DB failure detail was not preserved', $failures);
