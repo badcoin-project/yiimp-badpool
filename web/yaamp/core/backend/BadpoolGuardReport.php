@@ -13,6 +13,7 @@ class BadpoolGuardReport
 	const APPROVAL_CHECKSUM_PURPOSE = 'immutable approval binding; authorization requires fresh recomputation and exact match';
 	const PREVIEW_SCHEMA = 'badpool.guardrail.preview.v1';
 	const PREVIEW_MODE = 'read-only-preview';
+	const BACKWARD_MATURITY_DRYRUN_SCHEMA = 'badpool.backward_maturity_dryrun.v1';
 
 	public static function render($report, $format)
 	{
@@ -59,7 +60,7 @@ class BadpoolGuardReport
 				$report['mode'] = self::APPROVAL_PACKAGE_MODE;
 			}
 			else {
-				if (!self::isCanonicalStage1Manifest($report)) $report['schema'] = self::PREVIEW_SCHEMA;
+				if (!self::isCanonicalStage1Manifest($report) && !self::isBackwardMaturityDryrun($report)) $report['schema'] = self::PREVIEW_SCHEMA;
 				$report['mode'] = self::PREVIEW_MODE;
 			}
 			$report['read_only'] = true;
@@ -86,6 +87,12 @@ class BadpoolGuardReport
 		return self::arrayValue($report, 'schema') === BadpoolStage1Manifest::SCHEMA
 			&& self::arrayValue($report, 'package_type') === BadpoolStage1Manifest::PACKAGE_TYPE
 			&& self::arrayValue($report, 'command') === BadpoolStage1Manifest::COMMAND;
+	}
+
+	private static function isBackwardMaturityDryrun($report)
+	{
+		return self::arrayValue($report, 'schema') === self::BACKWARD_MATURITY_DRYRUN_SCHEMA
+			&& self::arrayValue($report, 'command') === 'backward-maturity-transition-dryrun';
 	}
 
 	private static function isCanonicalApprovalPackage($report)
