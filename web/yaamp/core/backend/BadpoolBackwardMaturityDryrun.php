@@ -92,7 +92,7 @@ class BadpoolBackwardMaturityDryrun
 		$earningIds = array(); $linkedBlockIds = array(); $amount = BadpoolStage1Manifest::normalizeAmount('0');
 		$statusRisk = 0; $missingBlock = 0; $wrongCoin = 0; $generate = 0; $orphan = 0; $nonImmature = 0;
 		$missingAccount = 0; $missingUser = 0; $wrongAccount = 0; $wrongUser = 0; $priorCredit = 0; $duplicateGroups = 0; $multirowBlocks = 0;
-		$heights = array(); $times = array(); $duplicateKeys = array(); $blockCounts = array();
+		$heights = array(); $blockTimes = array(); $createTimes = array(); $duplicateKeys = array(); $blockCounts = array();
 		foreach ((array)$earningRows as $row) {
 			$id = intval(self::value($row, 'earning_id')); $blockId = intval(self::value($row, 'block_id'));
 			$earningIds[] = $id;
@@ -110,14 +110,15 @@ class BadpoolBackwardMaturityDryrun
 			if (intval(self::value($row, 'account_id')) <= 0) $missingAccount++;
 			if (intval(self::value($row, 'userid')) !== self::USER_ID) $wrongUser++;
 			if (intval(self::value($row, 'account_id')) !== self::ACCOUNT_ID) $wrongAccount++;
-			$blockTime = intval(self::value($row, 'block_time'));
+			$createTime = intval(self::value($row, 'create_time'));
 			$lastEarning = self::value($row, 'account_last_earning');
-			if ($lastEarning !== null && $lastEarning !== '' && $blockTime > 0 && $blockTime <= intval($lastEarning)) $priorCredit++;
+			if ($lastEarning !== null && $lastEarning !== '' && $createTime > 0 && $createTime <= intval($lastEarning)) $priorCredit++;
 			$key = $blockId.'|'.intval(self::value($row, 'userid')).'|'.$normalized.'|'.intval(self::value($row, 'status', -1));
 			$duplicateKeys[$key] = isset($duplicateKeys[$key]) ? $duplicateKeys[$key] + 1 : 1;
 			$blockCounts[$blockId] = isset($blockCounts[$blockId]) ? $blockCounts[$blockId] + 1 : 1;
 			if (self::value($row, 'block_height') !== null) $heights[] = intval(self::value($row, 'block_height'));
-			if (self::value($row, 'block_time') !== null) $times[] = intval(self::value($row, 'block_time'));
+			if (self::value($row, 'block_time') !== null) $blockTimes[] = intval(self::value($row, 'block_time'));
+			if (self::value($row, 'create_time') !== null) $createTimes[] = intval(self::value($row, 'create_time'));
 		}
 		foreach ($duplicateKeys as $count) if ($count > 1) $duplicateGroups++;
 		foreach ($blockCounts as $count) if ($count > 1) $multirowBlocks++;
@@ -162,11 +163,11 @@ class BadpoolBackwardMaturityDryrun
 		self::assertion($assertions, 'excluded_earning_gaps_not_selected', count($excludedEarningOverlap) === 0, 0, count($excludedEarningOverlap));
 		self::assertion($assertions, 'excluded_block_gaps_not_selected', count($excludedBlockOverlap) === 0, 0, count($excludedBlockOverlap));
 		self::assertion($assertions, 'height_range_exact', self::rangeSummary($heights) === array('min'=>self::MIN_HEIGHT,'max'=>self::MAX_HEIGHT), array('min'=>self::MIN_HEIGHT,'max'=>self::MAX_HEIGHT), self::rangeSummary($heights));
-		self::assertion($assertions, 'time_range_exact', self::rangeSummary($times) === array('min'=>self::MIN_TIME,'max'=>self::MAX_TIME), array('min'=>self::MIN_TIME,'max'=>self::MAX_TIME), self::rangeSummary($times));
+		self::assertion($assertions, 'time_range_exact', self::rangeSummary($blockTimes) === array('min'=>self::MIN_TIME,'max'=>self::MAX_TIME), array('min'=>self::MIN_TIME,'max'=>self::MAX_TIME), self::rangeSummary($blockTimes));
 		$failed = array(); foreach ($assertions as $name=>$assertion) if ($assertion['status'] !== 'pass') $failed[]=$name;
 		return array(
 			'status'=>empty($failed)?'pass':'hold', 'failed_assertions'=>$failed, 'validation_assertions'=>$assertions,
-			'summary'=>array('row_count'=>count($earningRows),'distinct_block_count'=>count($linkedBlockIds),'amount'=>$amount,'earning_id_groups'=>self::idGroups($earningIds),'block_id_groups'=>self::idGroups($linkedBlockIds),'earning_range'=>self::rangeSummary($earningIds),'block_range'=>self::rangeSummary($linkedBlockIds),'height_range'=>self::rangeSummary($heights),'time_range'=>self::rangeSummary($times),'validation_status'=>empty($failed)?'pass':'hold'),
+			'summary'=>array('row_count'=>count($earningRows),'distinct_block_count'=>count($linkedBlockIds),'amount'=>$amount,'earning_id_groups'=>self::idGroups($earningIds),'block_id_groups'=>self::idGroups($linkedBlockIds),'earning_range'=>self::rangeSummary($earningIds),'block_range'=>self::rangeSummary($linkedBlockIds),'height_range'=>self::rangeSummary($heights),'time_range'=>self::rangeSummary($blockTimes),'block_time_range'=>self::rangeSummary($blockTimes),'create_time_range'=>self::rangeSummary($createTimes),'validation_status'=>empty($failed)?'pass':'hold'),
 			'forward_exact50_exclusion'=>array('former_exact50_earning_range'=>array('min'=>12801,'max'=>12850),'former_exact50_current_status_distribution'=>$exact50Distribution,'overlap_count'=>count($overlap)),
 		);
 	}
