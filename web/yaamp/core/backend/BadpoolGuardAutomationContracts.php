@@ -19,7 +19,7 @@ class BadpoolGuardAutomationContracts
 		'earnings-block-reconciliation-preview','maturity-source-verification-preview','forward-catchup-preview',
 		'forward-catchup-approval-package','forward-catchup-stage1-apply-dryrun','forward-catchup-stage1-apply-approval-package',
 		'forward-catchup-stage1-apply','forward-catchup-stage1-drain-plan','forward-catchup-stage1-drain-apply',
-		'earnings-maturity-transition-dryrun','backward-maturity-transition-dryrun','earnings-maturity-transition-approval-package','earnings-maturity-transition-apply',
+		'earnings-maturity-transition-dryrun','backward-maturity-transition-dryrun','backward-maturity-transition-approval-package','earnings-maturity-transition-approval-package','earnings-maturity-transition-apply',
 		'account-credit-clear-dryrun','account-credit-clear-approval-package','account-credit-clear-apply','safety-scan','guard-context','status-runner'
 	);
 

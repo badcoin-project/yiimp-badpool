@@ -19,6 +19,7 @@ php yaamp/yiic.php badpoolguard earnings-block-reconciliation-preview --coin-id=
 php yaamp/yiic.php badpoolguard maturity-source-verification-preview --coin-id=<coin-id>
 php yaamp/yiic.php badpoolguard forward-catchup-preview --coin-id=<coin-id>
 php yaamp/yiic.php badpoolguard forward-catchup-approval-package --coin-id=<coin-id>
+php yaamp/yiic.php badpoolguard backward-maturity-transition-approval-package --coin-id=1267 --dryrun-report=<path> --dryrun-report-checksum=<sha256> --selected-earning-ids=<csv> --selected-block-ids=<csv> --expected-inventory-checksum=<sha256> --format=json
 php yaamp/yiic.php badpoolguard safety-scan --coin-id=<coin-id>
 php yaamp/yiic.php badpoolguard guard-context --coin-id=<coin-id>
 ```
