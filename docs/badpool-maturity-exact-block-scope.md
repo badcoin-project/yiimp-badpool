@@ -4,6 +4,8 @@
 
 Bounded reports distinguish `requested_block_ids`, `selected_linked_block_ids`, and `requested_blocks_without_selected_earnings`. They bind the coin, `exact-blocks` selection mode, canonical requested scope, selected earnings, linked blocks, mutation previews, and total through semantic checksums. Reordering an equivalent request does not change those checksums.
 
+The backward Scrypt clean-tail review uses a stricter, read-only-only contract documented in [badpool-backward-scrypt-maturity-dryrun.md](badpool-backward-scrypt-maturity-dryrun.md). That inventory has intentional earning and block ID gaps, so it binds both explicit ID lists and does not reuse this command's approval or apply paths.
+
 Bounded approval packages use `badpool.approval_package.v2`; existing unbounded packages remain `badpool.approval_package.v1` and retain their existing behavior. Version 1 is never reinterpreted as bounded. A v2 apply command carries both `--selection-mode=exact-blocks` and the canonical `--selected-block-ids`. Apply freshly rebuilds that bounded cohort and requires the supplied earning IDs and every checksum to match exactly before opening a transaction. Newly eligible coin-wide rows are not added.
 
 ## Apply closeout classification

@@ -2,6 +2,7 @@
 
 require_once(dirname(__FILE__).'/../core/backend/BadpoolGuardContext.php');
 require_once(dirname(__FILE__).'/../core/backend/BadpoolStage1Manifest.php');
+require_once(dirname(__FILE__).'/../core/backend/BadpoolBackwardMaturityDryrun.php');
 require_once(dirname(__FILE__).'/../core/rpc/wallet-rpc.php');
 
 class BadpoolGuardCommand extends CConsoleCommand
@@ -50,6 +51,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 		'forward-catchup-stage1-drain-approval-package',
 		'forward-catchup-stage1-drain-apply',
 		'earnings-maturity-transition-dryrun',
+		'backward-maturity-transition-dryrun',
 		'earnings-maturity-transition-approval-package',
 		'earnings-maturity-transition-apply',
 		'account-credit-clear-dryrun',
@@ -90,6 +92,9 @@ class BadpoolGuardCommand extends CConsoleCommand
 		}
 		elseif ($action === 'earnings-maturity-transition-dryrun' || $action === 'earnings-maturity-transition-approval-package') {
 			$actionArgs = $this->maturitySelectionContextArgs($args);
+		}
+		elseif ($action === 'backward-maturity-transition-dryrun') {
+			$actionArgs = $this->backwardMaturityContextArgs($args);
 		}
 		elseif ($action === 'earnings-maturity-transition-apply' || $action === 'account-credit-clear-apply' || $action === 'payout-row-apply') {
 			$actionArgs = $this->guardedApplyContextArgs($args);
@@ -200,6 +205,9 @@ class BadpoolGuardCommand extends CConsoleCommand
 			case 'earnings-maturity-transition-dryrun':
 				$report = $this->earningsMaturityTransitionDryrunReport($args);
 				break;
+			case 'backward-maturity-transition-dryrun':
+				$report = $this->backwardMaturityTransitionDryrunReport($args);
+				break;
 			case 'earnings-maturity-transition-approval-package':
 				$report = $this->earningsMaturityTransitionApprovalPackageReport($args);
 				break;
@@ -265,6 +273,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 			"       ".implode(' ', BadpoolStage1Manifest::applyCommandShape())."\n".
 			"       php yaamp/yiic.php badpoolguard forward-catchup-stage1-apply --coin-id=<id> --limit=<approved_n> --selected-count=<approved_n> --approval-package-checksum=<sha256> --batch-scope-checksum=<sha256> --projected-mutation-checksum=<sha256> --projected-earnings-checksum=<sha256> --operator-confirms-attribution-model=block_userid_single_recipient --format=json\n".
 			"       php yaamp/yiic.php badpoolguard earnings-maturity-transition-dryrun --coin-id=<id> [--selected-block-ids=<csv>] [--format=json|text]\n".
+			"       php yaamp/yiic.php badpoolguard backward-maturity-transition-dryrun --coin-id=1267 --selected-earning-ids=<explicit-csv> --selected-block-ids=<explicit-csv> --expected-inventory-checksum=<sha256> --format=json\n".
 			"       php yaamp/yiic.php badpoolguard earnings-maturity-transition-approval-package --retained-dryrun-report=<path> [--coin-id=<matching-id>] [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard earnings-maturity-transition-approval-package --coin-id=<id> [--selected-block-ids=<csv>] [--format=json|text]  (fresh generation)\n".
 			"       php yaamp/yiic.php badpoolguard earnings-maturity-transition-apply --coin-id=<id> --selected-earning-ids=<csv> [--selection-mode=exact-blocks --selected-block-ids=<csv>] --approval-package-checksum=<sha256> --selected-scope-checksum=<sha256> --projected-block-mutation-checksum=<sha256> --projected-earnings-mutation-checksum=<sha256> --operator-confirms-maturity-transition=scrypt_status0_to_status1 --format=json\n".
@@ -2793,6 +2802,111 @@ class BadpoolGuardCommand extends CConsoleCommand
 		$report = $this->guard->finalizeReport($report); $report['dryrun_report_checksum'] = BadpoolGuardReport::checksum($report); return $report;
 	}
 
+	private function backwardMaturityTransitionDryrunReport($args=array())
+	{
+		$parsed = BadpoolBackwardMaturityDryrun::parseOptions($args);
+		if (arraySafeVal($parsed, 'status') !== 'pass') {
+			$this->guard->addError(arraySafeVal($parsed, 'message'));
+			$report = $this->guard->refusalReport();
+			$report['schema'] = BadpoolBackwardMaturityDryrun::SCHEMA;
+			$report['command'] = BadpoolBackwardMaturityDryrun::COMMAND;
+			$report['validation_assertions'] = array();
+			return $report;
+		}
+		$scopeAlgo = arraySafeVal(arraySafeVal($this->guard->getScope(), 'coin', array()), 'algo');
+		$scopeSymbol = arraySafeVal(arraySafeVal($this->guard->getScope(), 'coin', array()), 'symbol');
+		if (strtolower((string)$scopeAlgo) !== BadpoolBackwardMaturityDryrun::ALGO || strtoupper((string)$scopeSymbol) !== BadpoolBackwardMaturityDryrun::SYMBOL) {
+			$this->guard->addError('Coin 1267 must resolve exactly to Scrypt BAD for this bounded contract.');
+			$report = $this->guard->refusalReport();
+			$report['schema'] = BadpoolBackwardMaturityDryrun::SCHEMA;
+			$report['command'] = BadpoolBackwardMaturityDryrun::COMMAND;
+			$report['validation_assertions'] = array();
+			return $report;
+		}
+		$earningIds = arraySafeVal($parsed, 'selected_earning_ids', array());
+		$blockIds = arraySafeVal($parsed, 'selected_block_ids', array());
+		$earningParams = array();
+		$earningHolders = $this->backwardMaturityPlaceholders($earningIds, 'earning', $earningParams);
+		$blockParams = array();
+		$blockHolders = $this->backwardMaturityPlaceholders($blockIds, 'block', $blockParams);
+		$earningRows = $this->guard->selectAll(
+			'SELECT E.id AS earning_id,E.userid,E.coinid,E.blockid,CAST(E.amount AS CHAR) AS amount,E.status,E.mature_time,E.create_time AS create_time,'.
+			'B.id AS block_id,B.height AS block_height,B.time AS block_time,B.coin_id AS block_coin_id,B.category AS block_category,'.
+			'A.id AS account_id,A.coinid AS account_coin_id,A.last_earning AS account_last_earning '.
+			'FROM earnings E LEFT JOIN blocks B ON B.id=E.blockid LEFT JOIN accounts A ON A.id=E.userid '.
+			'WHERE E.id IN ('.implode(',', $earningHolders).') ORDER BY E.id ASC',
+			$earningParams
+		);
+		$blockRows = $this->guard->selectAll(
+			'SELECT B.id AS block_id,B.height AS block_height,B.time AS block_time,B.coin_id AS block_coin_id,B.category AS block_category '.
+			'FROM blocks B WHERE B.id IN ('.implode(',', $blockHolders).') ORDER BY B.id ASC',
+			$blockParams
+		);
+		$outsideParams = array(':coin_id'=>BadpoolBackwardMaturityDryrun::COIN_ID);
+		$outsideHolders = $this->backwardMaturityPlaceholders($blockIds, 'outside_block', $outsideParams);
+		$outsideRows = $this->guard->selectAll(
+			'SELECT E.id AS earning_id,E.blockid,E.coinid,E.status FROM earnings E '.
+			'WHERE E.coinid=:coin_id AND E.blockid IN ('.implode(',', $outsideHolders).') ORDER BY E.id ASC',
+			$outsideParams
+		);
+		$exact50Rows = $this->guard->selectAll(
+			'SELECT E.status,COUNT(*) AS row_count FROM earnings E '.
+			'WHERE E.coinid=:coin_id AND E.id BETWEEN 12801 AND 12850 GROUP BY E.status ORDER BY E.status ASC',
+			array(':coin_id'=>BadpoolBackwardMaturityDryrun::COIN_ID)
+		);
+		$validation = BadpoolBackwardMaturityDryrun::validate($earningRows, $blockRows, $outsideRows, $exact50Rows);
+		$report = $this->guard->baseReport(arraySafeVal($validation, 'status') === 'pass' ? 'ok' : 'hold');
+		$report['schema'] = BadpoolBackwardMaturityDryrun::SCHEMA;
+		$report['command'] = BadpoolBackwardMaturityDryrun::COMMAND;
+		$report['mode'] = 'read-only-preview';
+		$report['read_only'] = true;
+		$report['db_mutations'] = false;
+		$report['wallet_reads'] = false;
+		$report['wallet_sends'] = false;
+		$report['service_actions'] = false;
+		$report['backend_loops_run'] = false;
+		$report['shares_deleted'] = false;
+		$report['scope'] = array(
+			'coin_id'=>BadpoolBackwardMaturityDryrun::COIN_ID,
+			'algo'=>BadpoolBackwardMaturityDryrun::ALGO,
+			'symbol'=>BadpoolBackwardMaturityDryrun::SYMBOL,
+			'selected_earning_ids'=>$earningIds,
+			'selected_block_ids'=>$blockIds,
+			'expected_inventory_checksum'=>BadpoolBackwardMaturityDryrun::INVENTORY_CHECKSUM,
+			'expected_inventory_checksum_purpose'=>BadpoolBackwardMaturityDryrun::INVENTORY_CHECKSUM_PURPOSE,
+		);
+		$report['summary'] = arraySafeVal($validation, 'summary', array());
+		$report['validation_assertions'] = arraySafeVal($validation, 'validation_assertions', array());
+		$report['failed_assertions'] = arraySafeVal($validation, 'failed_assertions', array());
+		$report['forward_exact50_exclusion'] = arraySafeVal($validation, 'forward_exact50_exclusion', array());
+		$report['blocked_actions'] = array(
+			'approval_package_generation'=>true,
+			'maturity_apply'=>true,
+			'account_credit_apply'=>true,
+			'payout_row_creation'=>true,
+			'wallet_send'=>true,
+			'database_mutation'=>true,
+			'backend_loop_execution'=>true,
+			'service_changes'=>true,
+			'share_deletion'=>true,
+		);
+		if (arraySafeVal($validation, 'status') !== 'pass') {
+			foreach (arraySafeVal($validation, 'failed_assertions', array()) as $assertion) $this->guard->addError('Backward maturity validation HOLD: '.$assertion.'.');
+		}
+		return $report;
+	}
+
+	private function backwardMaturityPlaceholders($ids, $prefix, &$params)
+	{
+		$holders = array();
+		foreach ($ids as $index=>$id) {
+			$key = ':'.$prefix.'_'.$index;
+			$holders[] = $key;
+			$params[$key] = intval($id);
+		}
+		return $holders;
+	}
+
 	private function hasRetainedMaturityReportOption($args)
 	{
 		foreach ($args as $arg) if (strpos($arg, '--retained-dryrun-report') === 0) return true;
@@ -2984,6 +3098,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 	private function walletSendApplyContextArgs($args){ $out=array(); foreach($args as $arg){ if(preg_match('/^--(coin-id|format|selected-payout-ids)(=.*)?$/i',$arg)) $out[]=$arg; } return $out; }
 	private function guardedApplyContextArgs($args){ $out=array(); foreach($args as $arg){ if(preg_match('/^--(coin-id|format)(=.*)?$/i',$arg)) $out[]=$arg; } return $out; }
 	private function maturitySelectionContextArgs($args){$out=array();foreach($args as $arg)if(preg_match('/^--(coin-id|format)(=.*)?$/i',$arg))$out[]=$arg;return $out;}
+	private function backwardMaturityContextArgs($args){$out=array();foreach($args as $arg)if(preg_match('/^--(coin-id|format)(=.*)?$/i',$arg))$out[]=$arg;return $out;}
 	private function parseMaturitySelection($args){$seen=false;$raw=null;foreach($args as $arg){if(strpos($arg,'--selected-block-ids=')===0){if($seen)return array('status'=>'fail','message'=>'Duplicate --selected-block-ids is refused.');$seen=true;$raw=substr($arg,21);}elseif(strpos($arg,'--selected-block-ids')===0)return array('status'=>'fail','message'=>'Exact block selection requires --selected-block-ids=<csv>.');}if(!$seen)return array('status'=>'pass','mode'=>'coin-wide','requested_block_ids'=>array());if($raw===''||!preg_match('/^[1-9][0-9]*(,[1-9][0-9]*)*$/',$raw))return array('status'=>'fail','message'=>'--selected-block-ids must be a non-empty comma-separated list of canonical positive integers.');$ids=array_map('intval',explode(',',$raw));if(count($ids)!==count(array_unique($ids)))return array('status'=>'fail','message'=>'Duplicate block IDs are refused.');sort($ids,SORT_NUMERIC);return array('status'=>'pass','mode'=>'exact-blocks','requested_block_ids'=>$ids);}
 	private function parseGuardedApplyOptions($args){ $allowed=array('coin-id','format','selected-earning-ids','selected-block-ids','selection-mode','approval-package-checksum','selected-scope-checksum','projected-block-mutation-checksum','projected-earnings-mutation-checksum','retained-dryrun-report','retained-dryrun-report-checksum','operator-confirms-maturity-transition','selected-earnings-scope-checksum','projected-account-credit-checksum','operator-confirms-account-credit'); $o=array(); foreach($args as $arg){ if(!preg_match('/^--([^=]+)=(.*)$/',$arg,$m)){ $o['__parse_error']='Unknown argument refused: '.$arg; continue; } $n=strtolower($m[1]); if(!in_array($n,$allowed,true)) $o['__parse_error']='Unknown option refused: --'.$m[1]; elseif(isset($o[$n])) $o['__parse_error']='Duplicate option refused: --'.$m[1]; else $o[$n]=$m[2]; } return $o; }
 	private function applyBaseReport($command,$status='refused'){ $r=$this->guard->baseReport($status); $r['schema']=self::APPLY_SCHEMA; $r['mode']=self::APPLY_MODE; $r['command']=$command; $r['read_only']=false; $r['blocked_actions']=array('unapproved_scope','checksum_mismatch','missing_operator_confirmation','backend_loops','service_or_cron_changes','share_deletion','payout_retry_delete'); return $r; }
@@ -6773,6 +6888,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 			$report = $this->ensurePayoutPreviewAuditFields($report);
 		}
 		$report['report_checksum'] = BadpoolGuardReport::checksum($report);
+		if (arraySafeVal($report, 'command') === BadpoolBackwardMaturityDryrun::COMMAND) $report['report_checksum']['purpose'] = BadpoolBackwardMaturityDryrun::REPORT_CHECKSUM_PURPOSE;
 		return $report;
 	}
 
