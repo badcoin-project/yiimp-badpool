@@ -4,6 +4,7 @@ require_once(dirname(__FILE__).'/../core/backend/BadpoolGuardContext.php');
 require_once(dirname(__FILE__).'/../core/backend/BadpoolStage1Manifest.php');
 require_once(dirname(__FILE__).'/../core/backend/BadpoolBackwardMaturityDryrun.php');
 require_once(dirname(__FILE__).'/../core/backend/BadpoolBackwardMaturityApprovalPackage.php');
+require_once(dirname(__FILE__).'/../core/backend/BadpoolBackwardMaturityApply.php');
 require_once(dirname(__FILE__).'/../core/rpc/wallet-rpc.php');
 
 class BadpoolGuardCommand extends CConsoleCommand
@@ -54,6 +55,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 		'earnings-maturity-transition-dryrun',
 		'backward-maturity-transition-dryrun',
 		'backward-maturity-transition-approval-package',
+		'backward-maturity-transition-apply',
 		'earnings-maturity-transition-approval-package',
 		'earnings-maturity-transition-apply',
 		'account-credit-clear-dryrun',
@@ -95,7 +97,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 		elseif ($action === 'earnings-maturity-transition-dryrun' || $action === 'earnings-maturity-transition-approval-package') {
 			$actionArgs = $this->maturitySelectionContextArgs($args);
 		}
-		elseif ($action === 'backward-maturity-transition-dryrun' || $action === 'backward-maturity-transition-approval-package') {
+		elseif ($action === 'backward-maturity-transition-dryrun' || $action === 'backward-maturity-transition-approval-package' || $action === 'backward-maturity-transition-apply') {
 			$actionArgs = $this->backwardMaturityContextArgs($args);
 		}
 		elseif ($action === 'earnings-maturity-transition-apply' || $action === 'account-credit-clear-apply' || $action === 'payout-row-apply') {
@@ -213,6 +215,9 @@ class BadpoolGuardCommand extends CConsoleCommand
 			case 'backward-maturity-transition-approval-package':
 				$report = $this->backwardMaturityTransitionApprovalPackageReport($args);
 				break;
+			case 'backward-maturity-transition-apply':
+				$report = $this->backwardMaturityTransitionApplyReport($args);
+				break;
 			case 'earnings-maturity-transition-approval-package':
 				$report = $this->earningsMaturityTransitionApprovalPackageReport($args);
 				break;
@@ -280,6 +285,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 			"       php yaamp/yiic.php badpoolguard earnings-maturity-transition-dryrun --coin-id=<id> [--selected-block-ids=<csv>] [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard backward-maturity-transition-dryrun --coin-id=1267 --selected-earning-ids=<explicit-csv> --selected-block-ids=<explicit-csv> --expected-inventory-checksum=<sha256> --format=json\n".
 			"       php yaamp/yiic.php badpoolguard backward-maturity-transition-approval-package --coin-id=1267 --dryrun-report=<path> --dryrun-report-checksum=<sha256> --selected-earning-ids=<explicit-csv> --selected-block-ids=<explicit-csv> --expected-inventory-checksum=<sha256> --format=json\n".
+			"       php yaamp/yiic.php badpoolguard backward-maturity-transition-apply --coin-id=1267 --approval-package=<path> --approval-package-checksum=<file-sha256> --dryrun-report=<path> --dryrun-report-checksum=<sha256> --selected-earning-ids=<explicit-csv> --selected-block-ids=<explicit-csv> --expected-inventory-checksum=<sha256> --operator-confirms-backward-maturity-transition=<exact-text> --format=json\n".
 			"       php yaamp/yiic.php badpoolguard earnings-maturity-transition-approval-package --retained-dryrun-report=<path> [--coin-id=<matching-id>] [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard earnings-maturity-transition-approval-package --coin-id=<id> [--selected-block-ids=<csv>] [--format=json|text]  (fresh generation)\n".
 			"       php yaamp/yiic.php badpoolguard earnings-maturity-transition-apply --coin-id=<id> --selected-earning-ids=<csv> [--selection-mode=exact-blocks --selected-block-ids=<csv>] --approval-package-checksum=<sha256> --selected-scope-checksum=<sha256> --projected-block-mutation-checksum=<sha256> --projected-earnings-mutation-checksum=<sha256> --operator-confirms-maturity-transition=scrypt_status0_to_status1 --format=json\n".
@@ -2808,7 +2814,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 		$report = $this->guard->finalizeReport($report); $report['dryrun_report_checksum'] = BadpoolGuardReport::checksum($report); return $report;
 	}
 
-	private function backwardMaturityTransitionDryrunReport($args=array())
+	public function backwardMaturityTransitionDryrunReport($args=array())
 	{
 		$parsed = BadpoolBackwardMaturityDryrun::parseOptions($args);
 		if (arraySafeVal($parsed, 'status') !== 'pass') {
@@ -2914,6 +2920,17 @@ class BadpoolGuardCommand extends CConsoleCommand
 		$fresh=$this->backwardMaturityTransitionDryrunReport($parsed['dryrun_args']);
 		return BadpoolBackwardMaturityApprovalPackage::generate($resolved,$raw,$options['dryrun-report-checksum'],$parsed['selected_earning_ids'],$parsed['selected_block_ids'],$options['expected-inventory-checksum'],$retained,$fresh);
 	}
+
+	private function backwardMaturityTransitionApplyReport($args=array())
+	{
+		$dryArgs=array();foreach($args as $arg)if(preg_match('/^--(coin-id|selected-earning-ids|selected-block-ids|expected-inventory-checksum|format)=/',$arg))$dryArgs[]=$arg;
+		$store=new BadpoolBackwardMaturityYiiStore(Yii::app()->db,array($this,'backwardMaturityFreshForApply'));
+		$this->backwardMaturityApplyDryArgs=$dryArgs;
+		return BadpoolBackwardMaturityApply::run($args,$store,array('approval_package_file_sha256'=>BadpoolBackwardMaturityApply::APPROVAL_FILE_SHA256,'dryrun_report_file_sha256'=>BadpoolBackwardMaturityApply::DRYRUN_FILE_SHA256));
+	}
+
+	private $backwardMaturityApplyDryArgs=array();
+	public function backwardMaturityFreshForApply(){return $this->backwardMaturityTransitionDryrunReport($this->backwardMaturityApplyDryArgs);}
 
 	private function backwardMaturityPlaceholders($ids, $prefix, &$params)
 	{
