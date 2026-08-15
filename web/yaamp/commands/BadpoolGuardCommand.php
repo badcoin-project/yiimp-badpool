@@ -2830,7 +2830,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 		$blockParams = array();
 		$blockHolders = $this->backwardMaturityPlaceholders($blockIds, 'block', $blockParams);
 		$earningRows = $this->guard->selectAll(
-			'SELECT E.id AS earning_id,E.userid,E.coinid,E.blockid,CAST(E.amount AS CHAR) AS amount,E.status,E.mature_time,'.
+			'SELECT E.id AS earning_id,E.userid,E.coinid,E.blockid,CAST(E.amount AS CHAR) AS amount,E.status,E.mature_time,E.create_time AS create_time,'.
 			'B.id AS block_id,B.height AS block_height,B.time AS block_time,B.coin_id AS block_coin_id,B.category AS block_category,'.
 			'A.id AS account_id,A.coinid AS account_coin_id,A.last_earning AS account_last_earning '.
 			'FROM earnings E LEFT JOIN blocks B ON B.id=E.blockid LEFT JOIN accounts A ON A.id=E.userid '.
