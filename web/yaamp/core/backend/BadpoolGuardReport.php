@@ -14,6 +14,7 @@ class BadpoolGuardReport
 	const PREVIEW_SCHEMA = 'badpool.guardrail.preview.v1';
 	const PREVIEW_MODE = 'read-only-preview';
 	const BACKWARD_MATURITY_DRYRUN_SCHEMA = 'badpool.backward_maturity_dryrun.v1';
+	const BACKWARD_MATURITY_APPROVAL_PACKAGE_SCHEMA = 'badpool.backward_maturity_approval_package.v1';
 
 	public static function render($report, $format)
 	{
@@ -55,7 +56,10 @@ class BadpoolGuardReport
 		}
 
 		if ($isPreview) {
-			if (self::isCanonicalApprovalPackage($report)) {
+			if (self::isBackwardMaturityApprovalPackage($report)) {
+				$report['mode'] = 'approval-package-preview';
+			}
+			elseif (self::isCanonicalApprovalPackage($report)) {
 				if (self::arrayValue($report, 'schema') !== self::BOUNDED_MATURITY_APPROVAL_PACKAGE_SCHEMA) $report['schema'] = self::APPROVAL_PACKAGE_SCHEMA;
 				$report['mode'] = self::APPROVAL_PACKAGE_MODE;
 			}
@@ -93,6 +97,13 @@ class BadpoolGuardReport
 	{
 		return self::arrayValue($report, 'schema') === self::BACKWARD_MATURITY_DRYRUN_SCHEMA
 			&& self::arrayValue($report, 'command') === 'backward-maturity-transition-dryrun';
+	}
+
+	private static function isBackwardMaturityApprovalPackage($report)
+	{
+		return self::arrayValue($report, 'schema') === self::BACKWARD_MATURITY_APPROVAL_PACKAGE_SCHEMA
+			&& self::arrayValue($report, 'package_type') === 'backward-scrypt-maturity-transition'
+			&& self::arrayValue($report, 'command') === 'backward-maturity-transition-approval-package';
 	}
 
 	private static function isCanonicalApprovalPackage($report)

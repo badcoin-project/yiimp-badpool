@@ -29,7 +29,7 @@ function backwardFixture() {
 		$height = $index === 0 ? 1858981 : ($index === 70 ? 1859322 : 1858981 + $index * 4);
 		$time = $index === 0 ? 1783549939 : ($index === 70 ? 1783590153 : 1783549939 + $index * 500);
 		$amount = $index === 70 ? '153554.877229050000' : '1.000000000000';
-		$earnings[] = array('earning_id'=>$earningId,'userid'=>79,'coinid'=>1267,'blockid'=>$blockId,'amount'=>$amount,'status'=>0,'mature_time'=>0,'block_id'=>$blockId,'block_height'=>$height,'block_time'=>$time,'block_coin_id'=>1267,'block_category'=>'immature','account_id'=>79,'account_coin_id'=>1267,'account_last_earning'=>0);
+		$earnings[] = array('earning_id'=>$earningId,'userid'=>79,'coinid'=>1267,'blockid'=>$blockId,'amount'=>$amount,'status'=>0,'mature_time'=>0,'create_time'=>$time,'block_id'=>$blockId,'block_height'=>$height,'block_time'=>$time,'block_coin_id'=>1267,'block_category'=>'immature','account_id'=>79,'account_coin_id'=>1267,'account_last_earning'=>0);
 		$blocks[] = array('block_id'=>$blockId,'block_height'=>$height,'block_time'=>$time,'block_coin_id'=>1267,'block_category'=>'immature');
 	}
 	return array($earnings, $blocks, $earnings, array(array('status'=>2,'row_count'=>50)));
@@ -125,7 +125,7 @@ backwardExpect(backwardHolds($r, 'no_former_exact50_overlap'), 'former exact-50 
 
 $commandSource = file_get_contents(dirname(__DIR__).'/web/yaamp/commands/BadpoolGuardCommand.php');
 backwardExpect(strpos($commandSource, "'backward-maturity-transition-apply'") === false, 'backward apply action exists');
-backwardExpect(strpos($commandSource, "'backward-maturity-transition-approval-package'") === false, 'backward approval-package action exists');
+backwardExpect(strpos($commandSource, "'backward-maturity-transition-approval-package'") !== false, 'backward approval-package action missing');
 backwardExpect(strpos($commandSource, 'operator-confirms-backward') === false, 'backward command accepts operator confirmation');
 
 if ($failures) {
