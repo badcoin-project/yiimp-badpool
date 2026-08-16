@@ -54,6 +54,7 @@ wallet.dat
 *.wallet
 
 # Loose runtime/debug artifacts observed on VPS.
+/runtime/
 difficulty
 newblock
 price
