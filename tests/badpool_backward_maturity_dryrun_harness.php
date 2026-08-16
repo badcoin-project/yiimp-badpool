@@ -124,9 +124,9 @@ $r = backwardValidation(function(&$f) { $f[0][0]['earning_id']=12801; });
 backwardExpect(backwardHolds($r, 'no_former_exact50_overlap'), 'former exact-50 overlap did not HOLD');
 
 $commandSource = file_get_contents(dirname(__DIR__).'/web/yaamp/commands/BadpoolGuardCommand.php');
-backwardExpect(strpos($commandSource, "'backward-maturity-transition-apply'") === false, 'backward apply action exists');
+backwardExpect(strpos($commandSource, "'backward-maturity-transition-apply'") !== false, 'separately guarded backward apply action missing');
 backwardExpect(strpos($commandSource, "'backward-maturity-transition-approval-package'") !== false, 'backward approval-package action missing');
-backwardExpect(strpos($commandSource, 'operator-confirms-backward') === false, 'backward command accepts operator confirmation');
+backwardExpect(strpos($commandSource, 'operator-confirms-backward') !== false, 'guarded backward apply confirmation missing');
 
 if ($failures) {
 	echo "Badpool backward maturity dry-run harness FAILED\n";

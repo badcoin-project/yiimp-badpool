@@ -24,6 +24,8 @@ php yaamp/yiic.php badpoolguard safety-scan --coin-id=<coin-id>
 php yaamp/yiic.php badpoolguard guard-context --coin-id=<coin-id>
 ```
 
+The separately reviewed, guarded backward maturity apply contract is documented in `docs/badpool-backward-scrypt-maturity-apply.md`. It is not a read-only preview and must not be run as part of preview validation.
+
 On the VPS layout, run these from `/srv/badpool/yiimp-badpool/web`. `yaamp/yiic.php` loads `serverconfig.php` through a relative path, so repository-root invocations with a `web/` prefix are not valid for that layout.
 
 JSON is the default output format. Add `--format=text` for a human-readable report.
