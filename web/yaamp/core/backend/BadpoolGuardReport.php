@@ -15,6 +15,7 @@ class BadpoolGuardReport
 	const PREVIEW_MODE = 'read-only-preview';
 	const BACKWARD_MATURITY_DRYRUN_SCHEMA = 'badpool.backward_maturity_dryrun.v1';
 	const BACKWARD_MATURITY_APPROVAL_PACKAGE_SCHEMA = 'badpool.backward_maturity_approval_package.v1';
+	const BACKWARD_MATURITY_APPLY_SCHEMA = 'badpool.backward_maturity_apply.v1';
 
 	public static function render($report, $format)
 	{
@@ -73,8 +74,10 @@ class BadpoolGuardReport
 			return $report;
 		}
 
-		$report['schema'] = self::APPLY_SCHEMA;
-		$report['mode'] = self::APPLY_MODE;
+		$isBackwardMaturityApply = self::arrayValue($report, 'schema') === self::BACKWARD_MATURITY_APPLY_SCHEMA
+			&& $command === 'backward-maturity-transition-apply';
+		$report['schema'] = $isBackwardMaturityApply ? self::BACKWARD_MATURITY_APPLY_SCHEMA : self::APPLY_SCHEMA;
+		$report['mode'] = $isBackwardMaturityApply ? 'guarded-apply' : self::APPLY_MODE;
 		$report['read_only'] = false;
 		$report['db_mutations'] = self::mutationBoolean($originalDbMutations);
 		$report['wallet_rpc_send_performed'] = self::booleanValue(

@@ -59,6 +59,25 @@ class BadpoolGuardContext
 		return $context;
 	}
 
+	public static function fromBackwardMaturityApplyArgs($command, $args)
+	{
+		$context = new self($command);
+		$context->preloadFormat($args);
+		$parsed = BadpoolBackwardMaturityApply::parseOptions($args);
+		if (!is_array($parsed) || !isset($parsed['status']) || $parsed['status'] !== 'pass') {
+			$message = is_array($parsed) && isset($parsed['message']) ? $parsed['message'] : 'Backward maturity apply options are invalid.';
+			$context->addError($message);
+			return $context;
+		}
+
+		$options = $parsed['options'];
+		$context->parse(array('--coin-id='.$options['coin-id'], '--format='.$options['format']));
+		if ($context->isValid()) {
+			$context->options = $options;
+		}
+		return $context;
+	}
+
 	public static function fromRetainedReportArgs($command, $args, $scope)
 	{
 		$context = new self($command);

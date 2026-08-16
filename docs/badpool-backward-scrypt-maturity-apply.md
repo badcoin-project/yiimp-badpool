@@ -40,3 +40,5 @@ php yaamp/yiic.php badpoolguard backward-maturity-transition-apply \
 ```
 
 Production apply requires a separate operator action after merge, deployment, and readiness validation. This design PR and its fixture harness do not authorize or perform that action.
+
+The command is guarded twice: its complete argument set must first pass the command's outer guard context, and the executor then repeats the strict package, retained-report, confirmation, fresh-state, and transaction validation described above. The outer apply route does not broaden the option allowlist used by any other guarded apply command.
