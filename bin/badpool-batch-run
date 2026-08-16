@@ -1,7 +1,7 @@
 #!/bin/sh
-# Read-only preview only. Wallet approval and every accounting mutation remain separate.
+# Guarded phase 0-6 runner. Wallet approval always remains separate.
 set -eu
 
 repo_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$repo_dir/web"
-exec php yaamp/yiic.php badpoolguard batch-run-preview "$@"
+exec php yaamp/yiic.php badpoolguard batch-run "$@"

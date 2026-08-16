@@ -5,6 +5,7 @@ require_once(dirname(__FILE__).'/../core/backend/BadpoolStage1Manifest.php');
 require_once(dirname(__FILE__).'/../core/backend/BadpoolBackwardMaturityDryrun.php');
 require_once(dirname(__FILE__).'/../core/backend/BadpoolBackwardMaturityApprovalPackage.php');
 require_once(dirname(__FILE__).'/../core/backend/BadpoolBackwardMaturityApply.php');
+require_once(dirname(__FILE__).'/../core/backend/BadpoolPaymentBatchRunner.php');
 require_once(dirname(__FILE__).'/../core/rpc/wallet-rpc.php');
 
 class BadpoolGuardCommand extends CConsoleCommand
@@ -65,6 +66,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 		'guard-context',
 		'status-runner',
 		'batch-run-preview',
+		'batch-run',
 	);
 
 	public function run($args)
@@ -246,6 +248,9 @@ class BadpoolGuardCommand extends CConsoleCommand
 			case 'batch-run-preview':
 				$report = $this->paymentBatchPreviewReport();
 				break;
+			case 'batch-run':
+				$report = $this->paymentBatchRunReport();
+				break;
 			default:
 				$this->guard->addError("Unhandled action: $action");
 				$report = $this->guard->refusalReport();
@@ -339,6 +344,33 @@ class BadpoolGuardCommand extends CConsoleCommand
 			'blocked_actions'=>array('maturity_apply','account_credit_apply','payout_row_creation','wallet_send','wallet_rpc_read','wallet_rpc_send','service_changes','backend_loops','share_deletion'),
 			'warnings'=>array(), 'errors'=>array(), 'read_only'=>true, 'wallet_reads'=>false, 'wallet_sends'=>false, 'db_mutations'=>false,
 		);
+	}
+
+	private function paymentBatchRunReport()
+	{
+		$mode=strtolower((string)$this->guard->getOption('mode','auto'));
+		$scope=strtolower((string)$this->guard->getOption('scope','all-active-payout-coins'));
+		$only=strtolower((string)$this->guard->getOption('only',''));
+		$size=(string)$this->guard->getOption('batch-size','250');
+		$stop=strtolower((string)$this->guard->getOption('stop-before-wallet-send','1'));
+		if(!in_array($mode,array('auto','catchup','normal'),true))$this->guard->addError('Invalid --mode. Use auto, catchup, or normal.');
+		if($scope!=='all-active-payout-coins')$this->guard->addError('Invalid --scope. Use all-active-payout-coins.');
+		if($only!==''&&!in_array($only,array('scrypt','yescrypt','sha256d','skein','groestl'),true))$this->guard->addError('Invalid --only algorithm.');
+		if(!preg_match('/^[1-9][0-9]*$/',$size))$this->guard->addError('Invalid --batch-size. Expected a positive integer.');
+		if(!in_array($stop,array('1','true','yes'),true))$this->guard->addError('--stop-before-wallet-send must be enabled.');
+		$options=array('mode'=>$mode,'scope'=>$scope,'only'=>$only===''?null:$only,'batch_size'=>preg_match('/^[1-9][0-9]*$/',$size)?intval($size):0);
+		if(!$this->guard->isValid()) return array_merge($this->paymentBatchRunRefusal($options),array('errors'=>array('Invalid batch-run options.')));
+		$resume=$this->guard->getOption('resume-batch-id',null); if($resume!==null)$options['resume_batch_id']=(string)$resume;
+		$runner=new BadpoolPaymentBatchRunner(null);
+		$report=$runner->run($options);
+		if($only==='' || $only!=='scrypt') $report['warnings'][]='Implementation support is currently narrowed to Scrypt; yescrypt, sha256d, skein, and groestl are not implemented and cannot be mutated.';
+		$report['warnings'][]='No production mutation adapter is configured in this command build; execution is safely held before mutation.';
+		return $report;
+	}
+
+	private function paymentBatchRunRefusal($o)
+	{
+		return array('schema'=>BadpoolPaymentBatchRunner::SCHEMA,'command'=>'batch-run','status'=>'refused','batch_id'=>null,'batch_state'=>'HOLD','mode'=>$o['mode'],'scope'=>$o['scope'],'only'=>$o['only'],'batch_size'=>$o['batch_size'],'stop_before_wallet_send'=>true,'current_phase'=>0,'phase_results'=>array(),'selected_coin_scope'=>array(),'selected_counts'=>array(),'selected_amounts'=>array(),'created_payout_ids'=>array(),'wallet_boundary'=>'blocked_human_required','run_directory'=>null,'ledger_path'=>null,'next_action'=>'correct_input','suggested_command'=>null,'blocked_actions'=>array('wallet_rpc_send','wallet_send_apply','fund_transfer','payout_rows_marked_completed_by_wallet_send'),'warnings'=>array());
 	}
 
 
@@ -6959,6 +6991,16 @@ class BadpoolGuardCommand extends CConsoleCommand
 			foreach ($report['phases'] as $phase) printf("%-6d %-28s %s\n", $phase['phase_number'], $phase['phase_name'], $phase['status']);
 			echo "\nCLASSIFICATION=".($report['status'] === 'ok' ? 'PASS' : 'HOLD')."\n";
 			echo 'NEXT_ACTION='.$report['next_action']."\n";
+			return;
+		}
+		if (arraySafeVal($report, 'command') === 'batch-run') {
+			echo "BADPOOL PAYMENT BATCH RUN\n";
+			foreach(array('batch_id','mode','scope','batch_size') as $key) echo $key.'='.arraySafeVal($report,$key)."\n";
+			echo "stop_before_wallet_send=true\n\nPHASE  NAME                         STATUS\n";
+			$done=array(); foreach(arraySafeVal($report,'phase_results',array()) as $phase){ if(!is_array($phase))continue; $done[(int)$phase['phase_number']]=$phase; }
+			$names=array('Safety Check','Select Eligible Work','Package Intent','Mature Earnings','Payment Delay Check','Credit Accounts','Prepare Payout Rows'); foreach($names as $n=>$name){$p=isset($done[$n])?$done[$n]:null;printf("%-6d %-28s %s\n",$n,$name,$p?strtoupper($p['status']):'NOT_STARTED');}
+			$future=array(7=>array('Send Wallet Payment','BLOCKED_HUMAN_REQUIRED'),8=>array('Closeout Proof','NOT_STARTED'),9=>array('Batch Complete','NOT_STARTED')); foreach($future as $n=>$v)printf("%-6d %-28s %s\n",$n,$v[0],$v[1]);
+			echo "\nCLASSIFICATION=".(arraySafeVal($report,'status')==='pass'?'PASS':(arraySafeVal($report,'status')==='fail'?'FAIL':'HOLD'))."\nBATCH_STATE=".arraySafeVal($report,'batch_state')."\nNEXT_ACTION=".arraySafeVal($report,'next_action')."\nrun_directory=".arraySafeVal($report,'run_directory')."\nledger_path=".arraySafeVal($report,'ledger_path')."\n";
 			return;
 		}
 

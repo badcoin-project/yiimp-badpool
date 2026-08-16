@@ -30,6 +30,7 @@ class BadpoolGuardContext
 		'only',
 		'batch-size',
 		'stop-before-wallet-send',
+		'resume-batch-id',
 	);
 
 	private $dangerousOptions = array(
@@ -265,7 +266,7 @@ class BadpoolGuardContext
 	private function parseOptions($args)
 	{
 		$options = array();
-		$batchOptions = array('mode', 'scope', 'only', 'batch-size', 'stop-before-wallet-send');
+		$batchOptions = array('mode', 'scope', 'only', 'batch-size', 'stop-before-wallet-send', 'resume-batch-id');
 		foreach ($args as $arg) {
 			if (!preg_match('/^--([^=]+)(=(.*))?$/', $arg, $matches)) {
 				$this->addError("Unknown argument refused: $arg");
@@ -284,8 +285,8 @@ class BadpoolGuardContext
 				$this->addError("Unknown option refused: --$name");
 				return array();
 			}
-			if (in_array($lower, $batchOptions, true) && $this->command !== 'batch-run-preview') {
-				$this->addError("Option --$name is only available for batch-run-preview.");
+			if (in_array($lower, $batchOptions, true) && !in_array($this->command, array('batch-run-preview','batch-run'), true)) {
+				$this->addError("Option --$name is only available for payment batch commands.");
 				return array();
 			}
 			if (isset($options[$lower])) {
@@ -320,7 +321,7 @@ class BadpoolGuardContext
 			return;
 		}
 		if (!$hasCoinId && !$allCoins) {
-			if ($this->command === 'status-runner' || $this->command === 'batch-run-preview') {
+			if ($this->command === 'status-runner' || $this->command === 'batch-run-preview' || $this->command === 'batch-run') {
 				$allCoins = true;
 			} else {
 				$this->addError('Refusing implicit all-coin preview. Pass --coin-id=<id> or --all-coins-preview.');
