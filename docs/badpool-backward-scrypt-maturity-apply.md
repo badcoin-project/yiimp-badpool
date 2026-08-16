@@ -4,9 +4,9 @@ PR #97 established the read-only `badpool.backward_maturity_dryrun.v1` contract.
 
 ## Fixed review binding
 
-The only eligible scope is coin `1267`, Scrypt `BAD`, 71 earnings (`12623-12662,12696-12726`) linked one-to-one to 71 blocks (`14263-14302,14336-14359,14361-14367`), totaling `153624.877229050000 BAD`. The inventory checksum is `145db645b8ce0b04b55a13ef788b00c0f87b10674bbc9ab2d7e00c250bcd2d2c`. The retained dry-run file SHA-256 is `0102703a6ce840471b87ac8e8324763670615763aaafc11d4a9b3a9504fabfea`; the deployed approval-package file SHA-256 supplied for the guarded file-byte binding is `acc0955d8b97720f86a18fe7e2308d3007157ab2dcea43c66f143d1099a27b7a`.
+The only eligible scope is coin `1267`, Scrypt `BAD`, 71 earnings (`12623-12662,12696-12726`) linked one-to-one to 71 blocks (`14263-14302,14336-14359,14361-14367`), totaling `153624.877229050000 BAD`. The inventory checksum is `145db645b8ce0b04b55a13ef788b00c0f87b10674bbc9ab2d7e00c250bcd2d2c`. The retained dry-run file SHA-256 is `0102703a6ce840471b87ac8e8324763670615763aaafc11d4a9b3a9504fabfea`. The reviewed package's internal `approval_package_checksum.value` is `acc0955d8b97720f86a18fe7e2308d3007157ab2dcea43c66f143d1099a27b7a`; that value is not the approval package file SHA-256.
 
-`--approval-package-checksum` means the SHA-256 of the exact package file bytes. Separately, the package's `approval_package_checksum.value` is recomputed over its documented canonical content and checked. The internal checksum remains a non-authorizing review binding and need not equal the file-byte checksum.
+`--approval-package-checksum` means the SHA-256 of the exact package file bytes. Its production value was not captured by PR #98 and must be obtained from the retained production file with `sha256sum` during production readiness/apply handling; it is not hardcoded by this contract. Separately, the package's `approval_package_checksum.value` is recomputed over its documented canonical content and must equal the known internal checksum above. The two values are not expected to be equal. The internal checksum remains a non-authorizing review binding. The file-byte checksum binds the operator-supplied file to the command input, but is likewise insufficient by itself to authorize mutation.
 
 ## Mutation boundary and transaction
 

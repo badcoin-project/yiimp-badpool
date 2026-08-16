@@ -2926,7 +2926,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 		$dryArgs=array();foreach($args as $arg)if(preg_match('/^--(coin-id|selected-earning-ids|selected-block-ids|expected-inventory-checksum|format)=/',$arg))$dryArgs[]=$arg;
 		$store=new BadpoolBackwardMaturityYiiStore(Yii::app()->db,array($this,'backwardMaturityFreshForApply'));
 		$this->backwardMaturityApplyDryArgs=$dryArgs;
-		return BadpoolBackwardMaturityApply::run($args,$store,array('approval_package_file_sha256'=>BadpoolBackwardMaturityApply::APPROVAL_FILE_SHA256,'dryrun_report_file_sha256'=>BadpoolBackwardMaturityApply::DRYRUN_FILE_SHA256));
+		return BadpoolBackwardMaturityApply::run($args,$store,array('approval_package_internal_checksum'=>BadpoolBackwardMaturityApply::APPROVAL_PACKAGE_INTERNAL_CHECKSUM,'dryrun_report_file_sha256'=>BadpoolBackwardMaturityApply::DRYRUN_FILE_SHA256));
 	}
 
 	private $backwardMaturityApplyDryArgs=array();
