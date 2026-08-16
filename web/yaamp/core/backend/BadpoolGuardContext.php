@@ -25,6 +25,11 @@ class BadpoolGuardContext
 		'limit',
 		'selected-payout-ids',
 		'algo',
+		'mode',
+		'scope',
+		'only',
+		'batch-size',
+		'stop-before-wallet-send',
 	);
 
 	private $dangerousOptions = array(
@@ -260,6 +265,7 @@ class BadpoolGuardContext
 	private function parseOptions($args)
 	{
 		$options = array();
+		$batchOptions = array('mode', 'scope', 'only', 'batch-size', 'stop-before-wallet-send');
 		foreach ($args as $arg) {
 			if (!preg_match('/^--([^=]+)(=(.*))?$/', $arg, $matches)) {
 				$this->addError("Unknown argument refused: $arg");
@@ -276,6 +282,10 @@ class BadpoolGuardContext
 			}
 			if (!in_array($lower, $this->allowedOptions, true)) {
 				$this->addError("Unknown option refused: --$name");
+				return array();
+			}
+			if (in_array($lower, $batchOptions, true) && $this->command !== 'batch-run-preview') {
+				$this->addError("Option --$name is only available for batch-run-preview.");
 				return array();
 			}
 			if (isset($options[$lower])) {
@@ -310,7 +320,7 @@ class BadpoolGuardContext
 			return;
 		}
 		if (!$hasCoinId && !$allCoins) {
-			if ($this->command === 'status-runner') {
+			if ($this->command === 'status-runner' || $this->command === 'batch-run-preview') {
 				$allCoins = true;
 			} else {
 				$this->addError('Refusing implicit all-coin preview. Pass --coin-id=<id> or --all-coins-preview.');
@@ -319,7 +329,8 @@ class BadpoolGuardContext
 		}
 
 		if ($allCoins) {
-			if ($options['all-coins-preview'] !== true && !in_array(strtolower($options['all-coins-preview']), array('1', 'true', 'yes'), true)) {
+			$allCoinsValue = array_key_exists('all-coins-preview', $options) ? $options['all-coins-preview'] : true;
+			if ($allCoinsValue !== true && !in_array(strtolower($allCoinsValue), array('1', 'true', 'yes'), true)) {
 				$this->addError('Use --all-coins-preview without a value, or with true/1/yes.');
 				return;
 			}

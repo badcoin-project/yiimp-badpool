@@ -64,6 +64,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 		'safety-scan',
 		'guard-context',
 		'status-runner',
+		'batch-run-preview',
 	);
 
 	public function run($args)
@@ -242,6 +243,9 @@ class BadpoolGuardCommand extends CConsoleCommand
 			case 'status-runner':
 				$report = $this->statusRunnerReport();
 				break;
+			case 'batch-run-preview':
+				$report = $this->paymentBatchPreviewReport();
+				break;
 			default:
 				$this->guard->addError("Unhandled action: $action");
 				$report = $this->guard->refusalReport();
@@ -296,10 +300,45 @@ class BadpoolGuardCommand extends CConsoleCommand
 			"       php yaamp/yiic.php badpoolguard safety-scan --coin-id=<id> [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard guard-context --coin-id=<id> [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard status-runner [--coin-id=<id>] [--algo=<algo>] --format=json\n".
+			"       php yaamp/yiic.php badpoolguard batch-run-preview [--mode=auto|catchup|normal] [--scope=all-active-payout-coins] [--only=<algo>] [--batch-size=250] [--stop-before-wallet-send=1] [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard overview --all-coins-preview [--format=json|text]\n\n".
 			"Stage1 generation emits badpool.stage1_drain_manifest.v3 with the canonical structured apply contract above. Authentic legacy v2 manifests remain valid without v3 fields; v2/v3 hybrids, relabeling, structured drift, --manifest, and --confirmation are refused. Manifest/progress paths are runtime-supplied; schema and authority remain checksum-bound, while exact structured validation occurs before authorization and any transaction. New manifests require separately generated authorization.\n".
 			"Apply classifications: invocation_refusal for parser/scope/format/runtime-path failures; authorization_refusal for checksum, confirmation, manifest, schema, or authority failures before a transaction; transactional_failure for a begun and rolled-back transaction with no commit; partial_committed_failure after an earlier committed/verified batch; successful_apply only after final reconciliation.\n".
 			"The Stage1 drain manifest package performs chain/DB reads only and no wallet reads. Guarded apply commands mutate only their exact approved stage; service actions, backend loops, share deletion, and unapproved later stages remain unavailable.\n";
+	}
+
+	private function paymentBatchPreviewReport()
+	{
+		$mode = strtolower((string)$this->guard->getOption('mode', 'auto'));
+		$scope = strtolower((string)$this->guard->getOption('scope', 'all-active-payout-coins'));
+		$only = strtolower((string)$this->guard->getOption('only', ''));
+		$batchSize = (string)$this->guard->getOption('batch-size', '250');
+		$stop = strtolower((string)$this->guard->getOption('stop-before-wallet-send', '1'));
+		if (!in_array($mode, array('auto', 'catchup', 'normal'), true)) $this->guard->addError('Invalid --mode. Use auto, catchup, or normal.');
+		if ($scope !== 'all-active-payout-coins') $this->guard->addError('Invalid --scope. Use all-active-payout-coins.');
+		if ($only !== '' && !in_array($only, array('scrypt', 'yescrypt', 'sha256d', 'skein', 'groestl'), true)) $this->guard->addError('Invalid --only algorithm.');
+		if (!preg_match('/^[1-9][0-9]*$/', $batchSize)) $this->guard->addError('Invalid --batch-size. Expected a positive integer.');
+		if (!in_array($stop, array('1', 'true', 'yes'), true)) $this->guard->addError('--stop-before-wallet-send must be enabled.');
+
+		$names = array('Safety Check', 'Select Eligible Work', 'Package Intent', 'Mature Earnings', 'Payment Delay Check', 'Credit Accounts', 'Prepare Payout Rows', 'Send Wallet Payment', 'Closeout Proof', 'Batch Complete');
+		$roles = array('validate safeguards', 'select bounded eligible work', 'describe immutable intent', 'future earnings maturity', 'enforce payment delay', 'future account credit', 'future payout row preparation', 'human wallet boundary', 'future closeout evidence', 'future completion marker');
+		$mutations = array('none', 'none', 'none', 'earnings', 'none', 'accounts', 'payout_rows', 'wallet', 'none', 'none');
+		$phases = array();
+		foreach ($names as $number => $name) {
+			$status = $number <= 2 ? 'previewed' : ($number <= 6 ? 'blocked_until_future_pr' : ($number === 7 ? 'wallet_human_required' : 'not_started'));
+			$phases[] = array('phase_number'=>$number, 'phase_name'=>$name, 'automation_role'=>$roles[$number], 'mutation_scope'=>$mutations[$number], 'status'=>$status);
+		}
+		$valid = $this->guard->isValid();
+		return array(
+			'schema'=>'badpool.payment_batch.preview.v1', 'command'=>'batch-run-preview', 'status'=>$valid ? 'ok' : 'refused',
+			'mode'=>$mode, 'scope'=>$scope, 'stop_before_wallet_send'=>true, 'batch_size'=>preg_match('/^[1-9][0-9]*$/', $batchSize) ? intval($batchSize) : 0,
+			'phases'=>$phases,
+			'inferred_coin_scope'=>array('type'=>$only === '' ? 'all-active-payout-coins' : 'algorithm-filter', 'only'=>$only === '' ? null : $only, 'coin_ids_required'=>false),
+			'eligible_work_summary'=>array('selection'=>'preview-only', 'candidate_count'=>null, 'database_queried'=>false),
+			'next_action'=>$valid ? 'implement_phase_0_to_6_automation' : 'inspect_preview_inputs',
+			'blocked_actions'=>array('maturity_apply','account_credit_apply','payout_row_creation','wallet_send','wallet_rpc_read','wallet_rpc_send','service_changes','backend_loops','share_deletion'),
+			'warnings'=>array(), 'errors'=>array(), 'read_only'=>true, 'wallet_reads'=>false, 'wallet_sends'=>false, 'db_mutations'=>false,
+		);
 	}
 
 
@@ -6911,6 +6950,15 @@ class BadpoolGuardCommand extends CConsoleCommand
 		if ($this->guard->getFormat() == 'json') {
 			// Finalization must stay immediately before output so runtime JSON includes checksum/audit fields.
 			echo json_encode($report, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES)."\n";
+			return;
+		}
+		if (arraySafeVal($report, 'command') === 'batch-run-preview') {
+			echo "BADPOOL PAYMENT BATCH PREVIEW\n";
+			echo 'mode='.$report['mode']."\n".'scope='.$report['scope']."\n".'batch_size='.$report['batch_size']."\n".'stop_before_wallet_send=true'."\n\n";
+			echo "PHASE  NAME                         STATUS\n";
+			foreach ($report['phases'] as $phase) printf("%-6d %-28s %s\n", $phase['phase_number'], $phase['phase_name'], $phase['status']);
+			echo "\nCLASSIFICATION=".($report['status'] === 'ok' ? 'PASS' : 'HOLD')."\n";
+			echo 'NEXT_ACTION='.$report['next_action']."\n";
 			return;
 		}
 
