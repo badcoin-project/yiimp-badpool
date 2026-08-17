@@ -24,6 +24,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 
 	private $guard;
 	private $retainedMaturityDryrun;
+	private $backwardMaturityApplyRunner;
 
 	private $actions = array(
 		'overview',
@@ -100,13 +101,15 @@ class BadpoolGuardCommand extends CConsoleCommand
 		elseif ($action === 'earnings-maturity-transition-dryrun' || $action === 'earnings-maturity-transition-approval-package') {
 			$actionArgs = $this->maturitySelectionContextArgs($args);
 		}
-		elseif ($action === 'backward-maturity-transition-dryrun' || $action === 'backward-maturity-transition-approval-package' || $action === 'backward-maturity-transition-apply') {
+		elseif ($action === 'backward-maturity-transition-dryrun' || $action === 'backward-maturity-transition-approval-package') {
 			$actionArgs = $this->backwardMaturityContextArgs($args);
 		}
 		elseif ($action === 'earnings-maturity-transition-apply' || $action === 'account-credit-clear-apply' || $action === 'payout-row-apply') {
 			$actionArgs = $this->guardedApplyContextArgs($args);
 		}
-		if ($action === 'earnings-maturity-transition-approval-package' && $this->hasRetainedMaturityReportOption($args)) {
+		if ($action === 'backward-maturity-transition-apply') {
+			$this->guard = BadpoolGuardContext::fromBackwardMaturityApplyArgs($action, $actionArgs);
+		} elseif ($action === 'earnings-maturity-transition-approval-package' && $this->hasRetainedMaturityReportOption($args)) {
 			$this->retainedMaturityDryrun = $this->loadRetainedMaturityDryrun($args);
 			$scope = is_array($this->retainedMaturityDryrun) && isset($this->retainedMaturityDryrun['report']['scope']) ? $this->retainedMaturityDryrun['report']['scope'] : array();
 			$this->guard = BadpoolGuardContext::fromRetainedReportArgs($action, $actionArgs, $scope);
@@ -2994,6 +2997,9 @@ class BadpoolGuardCommand extends CConsoleCommand
 
 	private function backwardMaturityTransitionApplyReport($args=array())
 	{
+		if (is_callable($this->backwardMaturityApplyRunner)) {
+			return call_user_func($this->backwardMaturityApplyRunner, $args);
+		}
 		$dryArgs=array();foreach($args as $arg)if(preg_match('/^--(coin-id|selected-earning-ids|selected-block-ids|expected-inventory-checksum|format)=/',$arg))$dryArgs[]=$arg;
 		$store=new BadpoolBackwardMaturityYiiStore(Yii::app()->db,array($this,'backwardMaturityFreshForApply'));
 		$this->backwardMaturityApplyDryArgs=$dryArgs;
