@@ -11,10 +11,10 @@ class BackwardApplyFixtureStore {
 	function updateEarnings($e,$b){return $this->earningUpdates;} function updateBlocks($e,$b){return $this->blockUpdates;} function post($e,$b){return $this->postReport;}
 	function commit(){$this->committed=true;} function rollback(){$this->rolledBack=true;}
 }
-function applyFixture($mutatePackage=null,$mutateDry=null,$mutateFresh=null,$mutateStore=null,$confirmation=true,$fileChecksumOverride=null){
+function applyFixture($mutatePackage=null,$mutateDry=null,$mutateFresh=null,$mutateStore=null,$confirmation=true,$fileChecksumOverride=null,$pr98Shape=false){
 	$dry=approvalRetained();if($mutateDry)$mutateDry($dry);$dryPath=tempnam(sys_get_temp_dir(),'back-dry-');$dryRaw=json_encode($dry,JSON_UNESCAPED_SLASHES);file_put_contents($dryPath,$dryRaw);$drySha=hash('sha256',$dryRaw);
 	$fresh=approvalRetained();if($mutateFresh)$mutateFresh($fresh);
-	$package=BadpoolBackwardMaturityApprovalPackage::generate($dryPath,$dryRaw,$drySha,BadpoolBackwardMaturityDryrun::expectedEarningIds(),BadpoolBackwardMaturityDryrun::expectedBlockIds(),BadpoolBackwardMaturityDryrun::INVENTORY_CHECKSUM,$dry,$fresh,'2026-08-15T00:00:00Z');$reviewedInternal=$package['approval_package_checksum']['value'];if($mutatePackage)$mutatePackage($package);
+	$package=BadpoolBackwardMaturityApprovalPackage::generate($dryPath,$dryRaw,$drySha,BadpoolBackwardMaturityDryrun::expectedEarningIds(),BadpoolBackwardMaturityDryrun::expectedBlockIds(),BadpoolBackwardMaturityDryrun::INVENTORY_CHECKSUM,$dry,$fresh,'2026-08-15T00:00:00Z');$reviewedInternal=$package['approval_package_checksum']['value'];if($pr98Shape)$package['report_checksum']=BadpoolGuardReport::checksum($package);if($mutatePackage)$mutatePackage($package);
 	$packagePath=tempnam(sys_get_temp_dir(),'back-package-');$packageRaw=json_encode($package,JSON_UNESCAPED_SLASHES);file_put_contents($packagePath,$packageRaw);$packageSha=hash('sha256',$packageRaw);
 	$suppliedSha=$fileChecksumOverride===null?$packageSha:$fileChecksumOverride;$confirmationText=is_callable($confirmation)?call_user_func($confirmation,$suppliedSha,$reviewedInternal):($confirmation?BadpoolBackwardMaturityApply::confirmationShape($suppliedSha):'wrong');
 	$args=array('--coin-id=1267','--approval-package='.$packagePath,'--approval-package-checksum='.$suppliedSha,'--dryrun-report='.$dryPath,'--dryrun-report-checksum='.$drySha,'--selected-earning-ids='.implode(',',BadpoolBackwardMaturityDryrun::expectedEarningIds()),'--selected-block-ids='.implode(',',BadpoolBackwardMaturityDryrun::expectedBlockIds()),'--expected-inventory-checksum='.BadpoolBackwardMaturityDryrun::INVENTORY_CHECKSUM,'--operator-confirms-backward-maturity-transition='.$confirmationText,'--format=json');
@@ -25,6 +25,8 @@ function applyStatus($status,$mp=null,$md=null,$mf=null,$ms=null,$confirmation=t
 $pass=applyStatus('committed');applyExpect($pass[0]['mutation_result']===array('earnings_status_updates'=>71,'block_category_updates'=>71),'committed update counts differ');applyExpect($pass[1]->committed&&!$pass[1]->rolledBack,'fixture transaction did not commit');
 applyExpect($pass[3]!==$pass[4],'fixture file-byte and internal checksums unexpectedly match');
 applyExpect($pass[0]['package_bindings']['approval_package_file_sha256']===$pass[3]&&$pass[0]['package_bindings']['approval_package_internal_checksum']===$pass[4],'report does not expose distinct checksum bindings');
+$pr98=applyFixture(null,null,null,null,true,null,true);applyExpect($pr98[0]['status']==='committed','retained PR98-shaped finalized package did not pass');applyExpect($pr98[0]['package_bindings']['approval_package_internal_checksum']===$pr98[4]&&$pr98[0]['package_bindings']['approval_package_internal_checksum']!==null,'PR98-shaped package internal checksum was not exposed');applyExpect($pr98[0]['pre_apply_validation']['retained_package_checks']['internal_checksum_valid']===true,'PR98-shaped package internal checksum did not validate');
+$extractor=new ReflectionMethod('BadpoolBackwardMaturityApply','approvalPackageInternalChecksum');$extractor->setAccessible(true);$reviewedObject=array('approval_package_checksum'=>array('algorithm'=>'sha256','value'=>BadpoolBackwardMaturityApply::APPROVAL_PACKAGE_INTERNAL_CHECKSUM,'excludes'=>array('generated_at','approval_package_checksum'),'purpose'=>BadpoolBackwardMaturityApprovalPackage::CHECKSUM_PURPOSE));applyExpect($extractor->invoke(null,$reviewedObject)===BadpoolBackwardMaturityApply::APPROVAL_PACKAGE_INTERNAL_CHECKSUM,'reviewed PR98 internal checksum was not extracted exactly');
 applyStatus('hold',function(&$p){$p['schema']='wrong';});
 applyStatus('hold',function(&$p){$p['package_type']='wrong';}); applyStatus('hold',function(&$p){$p['status']='hold';}); applyStatus('hold',function(&$p){$p['mode']='wrong';});
 applyStatus('hold',function(&$p){$p['failed_equality_checks']=array('drift');});
@@ -32,6 +34,8 @@ applyStatus('hold',function(&$p){array_pop($p['scope']['selected_earning_ids']);
 applyStatus('hold',function(&$p){$p['scope']['expected_inventory_checksum']=str_repeat('0',64);});
 applyStatus('hold',function(&$p){$p['retained_dryrun']['supplied_checksum']=str_repeat('0',64);});
 applyStatus('hold',function(&$p){$p['approval_package_checksum']['value']=str_repeat('0',64);});
+applyStatus('hold',function(&$p){$p['approval_package_checksum']='malformed';});
+applyStatus('hold',function(&$p){$p['wrong_checksum_key']=$p['approval_package_checksum'];unset($p['approval_package_checksum']);});
 applyStatus('hold',function(&$p){$p['scope']['symbol']='ALTERED';});
 applyStatus('hold',function(&$p){$p['review_note']='different valid package';$copy=$p;unset($copy['generated_at'],$copy['approval_package_checksum']);$p['approval_package_checksum']['value']=BadpoolGuardReport::checksum($copy)['value'];});
 applyStatus('hold',function(&$p){$p['approval_package_checksum']['purpose']='mutation authorization';});
