@@ -69,7 +69,8 @@ class BadpoolBackwardMaturityApply
 		$s=self::v($a,'scope',array());$r=self::v($a,'retained_dryrun',array());$blocked=self::v($a,'blocked_actions',array());$checksum=self::v($a,'approval_package_checksum',array());$copy=$a;unset($copy['generated_at'],$copy['approval_package_checksum'],$copy['report_checksum']);
 		$internalPresent=array_key_exists('approval_package_checksum',$a);
 		$internalShapeValid=$internalChecksum!==null;
-		$historicalBinding=hash_equals(self::APPROVAL_PACKAGE_FILE_SHA256,self::v($o,'approval-package-checksum',''))&&$internalShapeValid&&hash_equals(self::APPROVAL_PACKAGE_INTERNAL_CHECKSUM,$internalChecksum);
+		$internalMatchesReviewed=$internalShapeValid&&is_string($expectedInternal)&&hash_equals($expectedInternal,$internalChecksum);
+		$historicalBinding=hash_equals(self::APPROVAL_PACKAGE_FILE_SHA256,self::v($o,'approval-package-checksum',''))&&$internalMatchesReviewed&&hash_equals(self::APPROVAL_PACKAGE_INTERNAL_CHECKSUM,$internalChecksum);
 		$recomputeRequired=!$historicalBinding;
 		$recomputeMatches=BadpoolGuardReport::checksum($copy)['value'];
 		$recomputeSatisfied=false;if($internalShapeValid)$recomputeSatisfied=!$recomputeRequired||hash_equals($internalChecksum,$recomputeMatches);
@@ -78,7 +79,7 @@ class BadpoolBackwardMaturityApply
 			'file_checksum_matches'=>true,'schema'=>self::v($a,'schema')===BadpoolBackwardMaturityApprovalPackage::SCHEMA,'package_type'=>self::v($a,'package_type')===BadpoolBackwardMaturityApprovalPackage::PACKAGE_TYPE,'status'=>self::v($a,'status')==='pass','mode'=>self::v($a,'mode')===BadpoolBackwardMaturityApprovalPackage::MODE,'equality_checks'=>self::v($a,'failed_equality_checks')===array(),
 			'exact_scope'=>self::v($s,'coin_id')===1267&&self::v($s,'algo')==='scrypt'&&self::v($s,'symbol')==='BAD'&&self::v($s,'selected_earning_ids')===$eids&&self::v($s,'selected_block_ids')===$bids,
 			'inventory'=>self::v($s,'expected_inventory_checksum')===$o['expected-inventory-checksum'],'dryrun_path'=>self::v($r,'path')===$o['dryrun-report'],'dryrun_checksum'=>self::v($r,'supplied_checksum')===$o['dryrun-report-checksum'],
-			'internal_checksum_present'=>$internalPresent,'internal_checksum_shape_valid'=>$internalShapeValid,'internal_checksum_matches_reviewed'=>$internalShapeValid&&hash_equals($expectedInternal,$internalChecksum),'internal_checksum_recompute_satisfied'=>$recomputeSatisfied,'checksum_non_authorizing'=>self::v($checksum,'purpose')===BadpoolBackwardMaturityApprovalPackage::CHECKSUM_PURPOSE,'no_embedded_apply'=>!isset($a['apply_command'])&&!isset($a['apply_command_args'])&&!isset($a['apply_command_shape']),'blocked_actions'=>$allBlocked,'review_binding_only'=>strpos(self::v($checksum,'purpose',''),'not apply authorization')!==false,
+			'internal_checksum_present'=>$internalPresent,'internal_checksum_shape_valid'=>$internalShapeValid,'internal_checksum_matches_reviewed'=>$internalMatchesReviewed,'internal_checksum_recompute_satisfied'=>$recomputeSatisfied,'checksum_non_authorizing'=>self::v($checksum,'purpose')===BadpoolBackwardMaturityApprovalPackage::CHECKSUM_PURPOSE,'no_embedded_apply'=>!isset($a['apply_command'])&&!isset($a['apply_command_args'])&&!isset($a['apply_command_shape']),'blocked_actions'=>$allBlocked,'review_binding_only'=>strpos(self::v($checksum,'purpose',''),'not apply authorization')!==false,
 			'dryrun_bytes_match_package'=>self::v($r,'supplied_checksum')===$o['dryrun-report-checksum']
 		),'diagnostics'=>array('internal_checksum_recompute_required'=>$recomputeRequired,'internal_checksum_recompute_matches'=>$internalShapeValid&&$recomputeRequired?hash_equals($internalChecksum,$recomputeMatches):null,'internal_checksum_historical_review_binding'=>$historicalBinding));
 	}
