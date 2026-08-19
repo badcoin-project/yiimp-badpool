@@ -10,6 +10,8 @@ The only eligible scope is coin `1267`, Scrypt `BAD`, 71 earnings (`12623-12662,
 
 The internal checksum alone is never authorization. Apply additionally requires the exact retained package file SHA, retained dry-run SHA, exact scope, successful fresh validation, and exact operator confirmation. The transaction boundary and all payout, wallet, account-credit, service, backend-loop, and share-deletion prohibitions remain unchanged.
 
+Apply reports keep pass/fail gates in `retained_package_checks`. Historical-binding facts, including whether recomputation was required, are emitted separately in `retained_package_checksum_diagnostics`; informational values never participate in the mutation gate.
+
 ## Mutation boundary and transaction
 
 After exact-byte retained-file validation, package contract validation, exact operator confirmation, and a fresh SELECT-only rebuild, the command starts one transaction and locks the selected earning/block join. Fresh validation must still report 71 status-0 earnings, 71 immature blocks, the exact amount, IDs and retained time ranges, with no assertion failures. Prior-credit detection exclusively uses `earnings.create_time <= accounts.last_earning`; block time is not an acceptable substitute.
