@@ -8,6 +8,7 @@ class BadpoolBackwardMaturityApply
 	const SCHEMA = 'badpool.backward_maturity_apply.v1';
 	const COMMAND = 'backward-maturity-transition-apply';
 	const MODE = 'guarded-apply';
+	const APPROVAL_PACKAGE_FILE_SHA256 = '6cad1443efda2f794c87faa588c62602aae4f2f1e61215427613d643942d8e7b';
 	const APPROVAL_PACKAGE_INTERNAL_CHECKSUM = 'acc0955d8b97720f86a18fe7e2308d3007157ab2dcea43c66f143d1099a27b7a';
 	const DRYRUN_FILE_SHA256 = '0102703a6ce840471b87ac8e8324763670615763aaafc11d4a9b3a9504fabfea';
 
@@ -65,12 +66,17 @@ class BadpoolBackwardMaturityApply
 	private static function packageChecks($a,$d,$o,$eids,$bids,$expectedInternal,$internalChecksum)
 	{
 		$s=self::v($a,'scope',array());$r=self::v($a,'retained_dryrun',array());$blocked=self::v($a,'blocked_actions',array());$checksum=self::v($a,'approval_package_checksum',array());$copy=$a;unset($copy['generated_at'],$copy['approval_package_checksum'],$copy['report_checksum']);
+		$internalPresent=array_key_exists('approval_package_checksum',$a);
+		$internalShapeValid=$internalChecksum!==null;
+		$historicalBinding=hash_equals(self::APPROVAL_PACKAGE_FILE_SHA256,self::v($o,'approval-package-checksum',''))&&$internalShapeValid&&hash_equals(self::APPROVAL_PACKAGE_INTERNAL_CHECKSUM,$internalChecksum);
+		$recomputeRequired=!$historicalBinding;
+		$recomputeMatches=BadpoolGuardReport::checksum($copy)['value'];
 		$allBlocked=true;foreach(array('maturity_apply','account_credit_apply','payout_row_creation','wallet_send','database_mutation','backend_loop_execution','service_changes','share_deletion') as $k)if(self::v($blocked,$k)!==true)$allBlocked=false;
 		return array(
 			'file_checksum_matches'=>true,'schema'=>self::v($a,'schema')===BadpoolBackwardMaturityApprovalPackage::SCHEMA,'package_type'=>self::v($a,'package_type')===BadpoolBackwardMaturityApprovalPackage::PACKAGE_TYPE,'status'=>self::v($a,'status')==='pass','mode'=>self::v($a,'mode')===BadpoolBackwardMaturityApprovalPackage::MODE,'equality_checks'=>self::v($a,'failed_equality_checks')===array(),
 			'exact_scope'=>self::v($s,'coin_id')===1267&&self::v($s,'algo')==='scrypt'&&self::v($s,'symbol')==='BAD'&&self::v($s,'selected_earning_ids')===$eids&&self::v($s,'selected_block_ids')===$bids,
 			'inventory'=>self::v($s,'expected_inventory_checksum')===$o['expected-inventory-checksum'],'dryrun_path'=>self::v($r,'path')===$o['dryrun-report'],'dryrun_checksum'=>self::v($r,'supplied_checksum')===$o['dryrun-report-checksum'],
-			'internal_checksum_valid'=>$internalChecksum!==null&&hash_equals($internalChecksum,BadpoolGuardReport::checksum($copy)['value']),'internal_checksum_matches_reviewed'=>$internalChecksum!==null&&hash_equals($expectedInternal,$internalChecksum),'checksum_non_authorizing'=>self::v($checksum,'purpose')===BadpoolBackwardMaturityApprovalPackage::CHECKSUM_PURPOSE,'no_embedded_apply'=>!isset($a['apply_command'])&&!isset($a['apply_command_args'])&&!isset($a['apply_command_shape']),'blocked_actions'=>$allBlocked,'review_binding_only'=>strpos(self::v($checksum,'purpose',''),'not apply authorization')!==false,
+			'internal_checksum_present'=>$internalPresent,'internal_checksum_shape_valid'=>$internalShapeValid,'internal_checksum_matches_reviewed'=>$internalShapeValid&&hash_equals($expectedInternal,$internalChecksum),'internal_checksum_recompute_required'=>$recomputeRequired,'internal_checksum_recompute_matches'=>$recomputeRequired?hash_equals($internalChecksum,$recomputeMatches):true,'internal_checksum_historical_review_binding'=>$historicalBinding,'checksum_non_authorizing'=>self::v($checksum,'purpose')===BadpoolBackwardMaturityApprovalPackage::CHECKSUM_PURPOSE,'no_embedded_apply'=>!isset($a['apply_command'])&&!isset($a['apply_command_args'])&&!isset($a['apply_command_shape']),'blocked_actions'=>$allBlocked,'review_binding_only'=>strpos(self::v($checksum,'purpose',''),'not apply authorization')!==false,
 			'dryrun_bytes_match_package'=>self::v($r,'supplied_checksum')===$o['dryrun-report-checksum']
 		);
 	}
