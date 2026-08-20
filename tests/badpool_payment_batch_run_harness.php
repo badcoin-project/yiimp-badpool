@@ -32,7 +32,7 @@ $fake3=new FakeBatchAdapter();$fake3->holdPhase=3;$root3=$root.'-phase-hold';$ru
 $fake3->holdPhase=null;$resumed=$runner3->run(array('mode'=>'normal','scope'=>'all-active-payout-coins','only'=>'scrypt','batch_size'=>999,'resume_batch_id'=>$hold3['batch_id']));expect_batch($fake3->calls===array(0,1,2,3,3,4,5,6)&&$resumed['batch_state']==='READY_FOR_WALLET_APPROVAL'&&$resumed['mode']==='auto'&&$resumed['batch_size']===2,'resume skips passed phases and preserves options',$fail);
 $legacyRoot=$root.'-legacy';$legacy=(new BadpoolPaymentBatchRunner(null,$legacyRoot))->run(array('mode'=>'auto','scope'=>'all-active-payout-coins','only'=>'scrypt','batch_size'=>3));$repairedAdapter=new FakeBatchAdapter();$repaired=(new BadpoolPaymentBatchRunner($repairedAdapter,$legacyRoot))->run(array('mode'=>'auto','scope'=>'all-active-payout-coins','only'=>'scrypt','batch_size'=>3,'resume_batch_id'=>$legacy['batch_id']));expect_batch($repairedAdapter->calls===array(0,1,2,3,4,5,6)&&$repaired['batch_state']==='READY_FOR_WALLET_APPROVAL','legacy adapter hold resumes after repair',$fail);
 
-class ProductionFixtureGuard {public function selectAll($sql,$params){return array(array('id'=>1267,'symbol'=>'BAD','algo'=>'scrypt','enable'=>1,'installed'=>1,'visible'=>1,'auto_ready'=>1,'payout_min'=>1));}}
+class ProductionFixtureGuard {public function selectAll($sql,$params){return array(array('id'=>1267,'symbol'=>'BAD','algo'=>'scrypt','enable'=>1,'installed'=>1,'visible'=>1,'auto_ready'=>1,'payout_min'=>null));}}
 class ProductionFixtureExecutor {
 	public $calls=array();
 	public function run($command,$args){$this->calls[]=array($command,$args);$base=array('status'=>'pass','items'=>array());
@@ -46,6 +46,7 @@ class ProductionFixtureExecutor {
 }
 $productionRoot=$root.'-production';$productionExec=new ProductionFixtureExecutor();$productionAdapter=new BadpoolPaymentBatchPhaseAdapter(new ProductionFixtureGuard(),array($productionExec,'run'));$production=(new BadpoolPaymentBatchRunner($productionAdapter,$productionRoot))->run(array('mode'=>'auto','scope'=>'all-active-payout-coins','only'=>'scrypt','batch_size'=>1));$productionCommands=array_map(function($call){return $call[0];},$productionExec->calls);
 expect_batch($production['batch_state']==='READY_FOR_WALLET_APPROVAL'&&$production['created_payout_ids']===array(77),'production adapter phases 1-6 complete',$fail);
+expect_batch($production['selected_coin_scope']===array(array('coin_id'=>1267,'id'=>1267,'symbol'=>'BAD','algo'=>'scrypt')),'active coin with null payout_min selected',$fail);
 expect_batch(in_array('earnings-maturity-transition-apply',$productionCommands,true)&&in_array('account-credit-clear-apply',$productionCommands,true)&&in_array('payout-row-apply',$productionCommands,true),'guarded production applies invoked',$fail);
 expect_batch(!in_array('wallet-send-apply',$productionCommands,true)&&count($production['phase_results'])===7,'production adapter wallet boundary',$fail);
 $maturityPackageCall=array_values(array_filter($productionExec->calls,function($call){return $call[0]==='earnings-maturity-transition-approval-package';}));expect_batch(strpos(implode(' ',$maturityPackageCall[0][1]),'--selected-block-ids=4')!==false,'maturity package bound to selected blocks',$fail);
@@ -54,7 +55,7 @@ $maturityPackageCall=array_values(array_filter($productionExec->calls,function($
 class StrictFixtureGuard extends ProductionFixtureGuard {
 	public $rows;
 	public function __construct($rows){$this->rows=$rows;}
-	public function selectAll($sql,$params){$out=array();foreach($this->rows as $row){if(isset($params[':algo'])&&strtolower($row['algo'])!==strtolower($params[':algo']))continue;if(empty($row['enable'])||empty($row['installed'])||empty($row['visible'])||empty($row['auto_ready'])||floatval($row['payout_min'])<=0)continue;$out[]=$row;}return $out;}
+	public function selectAll($sql,$params){$out=array();foreach($this->rows as $row){if(isset($params[':algo'])&&strtolower($row['algo'])!==strtolower($params[':algo']))continue;if(empty($row['enable'])||empty($row['installed'])||empty($row['visible'])||empty($row['auto_ready']))continue;$out[]=$row;}return $out;}
 }
 class StrictFixtureExecutor extends ProductionFixtureExecutor {
 	public $mode=null;
@@ -86,8 +87,8 @@ function run_strict_batch($mode,&$commands){
 	global $root;
 	$exec=new StrictFixtureExecutor();$exec->mode=$mode;
 	$guard=new StrictFixtureGuard(array(
-		array('id'=>1267,'symbol'=>'BAD','algo'=>'scrypt','enable'=>1,'installed'=>1,'visible'=>1,'auto_ready'=>1,'payout_min'=>1),
-		array('id'=>1268,'symbol'=>'BAD','algo'=>'scrypt','enable'=>0,'installed'=>1,'visible'=>1,'auto_ready'=>1,'payout_min'=>1),
+		array('id'=>1267,'symbol'=>'BAD','algo'=>'scrypt','enable'=>1,'installed'=>1,'visible'=>1,'auto_ready'=>1,'payout_min'=>null),
+		array('id'=>1268,'symbol'=>'BAD','algo'=>'scrypt','enable'=>0,'installed'=>1,'visible'=>1,'auto_ready'=>0,'payout_min'=>null),
 	));
 	$r=(new BadpoolPaymentBatchRunner(new BadpoolPaymentBatchPhaseAdapter($guard,array($exec,'run')),$root.'-strict-'.($mode===null?'ok':$mode)))->run(array('mode'=>'auto','scope'=>'all-active-payout-coins','only'=>'scrypt','batch_size'=>1));
 	$commands=array_map(function($call){return $call[0];},$exec->calls);
