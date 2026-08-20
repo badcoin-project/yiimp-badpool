@@ -24,6 +24,8 @@ class BadpoolPaymentBatchRunner
 		if ($resume) {
 			$ledger = $this->load($resume);
 			if (!$ledger) return $this->refusal($options, $resume, 'Batch ledger was not found or is invalid.');
+			// The durable ledger, rather than new CLI defaults, is authoritative on resume.
+			foreach (array('mode','scope','only','batch_size') as $key) $options[$key]=$ledger[$key];
 		} else {
 			$id = gmdate('Ymd\THis\Z').'-'.substr(hash('sha256', uniqid('', true)), 0, 12);
 			$dir = $this->root.'/'.$id;
@@ -32,7 +34,7 @@ class BadpoolPaymentBatchRunner
 				'batch_size'=>$options['batch_size'], 'stop_before_wallet_send'=>true,
 				'current_phase'=>0, 'batch_state'=>'PREVIEWED', 'run_directory'=>$dir,
 				'selected_coin_scope'=>array(), 'selected_earning_ids'=>array(), 'selected_block_ids'=>array(),
-				'selected_account_ids'=>array(), 'created_payout_ids'=>array(), 'approval_package_paths'=>array(),
+				'selected_account_ids'=>array(), 'selected_accounts_by_coin'=>array(), 'created_payout_ids'=>array(), 'selected_work_by_coin'=>array(), 'approval_package_paths'=>array(),
 				'dryrun_report_paths'=>array(), 'checksums'=>array(), 'phase_results'=>array(), 'warnings'=>array(), 'errors'=>array());
 			if (!is_dir($dir) && !@mkdir($dir, 0770, true)) return $this->refusal($options, $id, 'Unable to create batch run directory.');
 			$this->save($ledger);
@@ -73,7 +75,7 @@ class BadpoolPaymentBatchRunner
 
 	private function mergeResult(&$ledger, $result)
 	{
-		foreach (array('selected_coin_scope','selected_earning_ids','selected_block_ids','selected_account_ids','created_payout_ids') as $key)
+		foreach (array('selected_coin_scope','selected_earning_ids','selected_block_ids','selected_account_ids','selected_accounts_by_coin','created_payout_ids','selected_work_by_coin') as $key)
 			if (isset($result[$key]) && is_array($result[$key])) $ledger[$key]=$result[$key];
 		foreach (array('warnings','errors') as $key) if (isset($result[$key]) && is_array($result[$key])) $ledger[$key]=array_merge($ledger[$key],$result[$key]);
 		if (isset($result['package_path']) && is_string($result['package_path']) && $result['package_path']!=='') $ledger['approval_package_paths'][]=$result['package_path'];

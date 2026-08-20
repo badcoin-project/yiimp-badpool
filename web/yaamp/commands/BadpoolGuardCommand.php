@@ -6,6 +6,7 @@ require_once(dirname(__FILE__).'/../core/backend/BadpoolBackwardMaturityDryrun.p
 require_once(dirname(__FILE__).'/../core/backend/BadpoolBackwardMaturityApprovalPackage.php');
 require_once(dirname(__FILE__).'/../core/backend/BadpoolBackwardMaturityApply.php');
 require_once(dirname(__FILE__).'/../core/backend/BadpoolPaymentBatchRunner.php');
+require_once(dirname(__FILE__).'/../core/backend/BadpoolPaymentBatchPhaseAdapter.php');
 require_once(dirname(__FILE__).'/../core/rpc/wallet-rpc.php');
 
 class BadpoolGuardCommand extends CConsoleCommand
@@ -364,11 +365,23 @@ class BadpoolGuardCommand extends CConsoleCommand
 		$options=array('mode'=>$mode,'scope'=>$scope,'only'=>$only===''?null:$only,'batch_size'=>preg_match('/^[1-9][0-9]*$/',$size)?intval($size):0);
 		if(!$this->guard->isValid()) return array_merge($this->paymentBatchRunRefusal($options),array('errors'=>array('Invalid batch-run options.')));
 		$resume=$this->guard->getOption('resume-batch-id',null); if($resume!==null)$options['resume_batch_id']=(string)$resume;
-		$runner=new BadpoolPaymentBatchRunner(null);
+		$adapter=$this->paymentBatchPhaseAdapter();
+		$runner=new BadpoolPaymentBatchRunner($adapter);
 		$report=$runner->run($options);
 		if($only==='' || $only!=='scrypt') $report['warnings'][]='Implementation support is currently narrowed to Scrypt; yescrypt, sha256d, skein, and groestl are not implemented and cannot be mutated.';
-		$report['warnings'][]='No production mutation adapter is configured in this command build; execution is safely held before mutation.';
 		return $report;
+	}
+
+	protected function paymentBatchPhaseAdapter()
+	{
+		return new BadpoolPaymentBatchPhaseAdapter($this->guard,array($this,'executePaymentBatchPhaseCommand'));
+	}
+
+	public function executePaymentBatchPhaseCommand($command,$args)
+	{
+		$nested=new self(); ob_start(); $nested->run(array_merge(array($command),$args)); $json=ob_get_clean();
+		$report=json_decode($json,true);
+		return is_array($report)?$report:array('status'=>'fail','errors'=>array('Phase command returned invalid JSON.'));
 	}
 
 	private function paymentBatchRunRefusal($o)
