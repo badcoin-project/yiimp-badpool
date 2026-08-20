@@ -32,7 +32,7 @@ $fake3=new FakeBatchAdapter();$fake3->holdPhase=3;$root3=$root.'-phase-hold';$ru
 $fake3->holdPhase=null;$resumed=$runner3->run(array('mode'=>'normal','scope'=>'all-active-payout-coins','only'=>'scrypt','batch_size'=>999,'resume_batch_id'=>$hold3['batch_id']));expect_batch($fake3->calls===array(0,1,2,3,3,4,5,6)&&$resumed['batch_state']==='READY_FOR_WALLET_APPROVAL'&&$resumed['mode']==='auto'&&$resumed['batch_size']===2,'resume skips passed phases and preserves options',$fail);
 $legacyRoot=$root.'-legacy';$legacy=(new BadpoolPaymentBatchRunner(null,$legacyRoot))->run(array('mode'=>'auto','scope'=>'all-active-payout-coins','only'=>'scrypt','batch_size'=>3));$repairedAdapter=new FakeBatchAdapter();$repaired=(new BadpoolPaymentBatchRunner($repairedAdapter,$legacyRoot))->run(array('mode'=>'auto','scope'=>'all-active-payout-coins','only'=>'scrypt','batch_size'=>3,'resume_batch_id'=>$legacy['batch_id']));expect_batch($repairedAdapter->calls===array(0,1,2,3,4,5,6)&&$repaired['batch_state']==='READY_FOR_WALLET_APPROVAL','legacy adapter hold resumes after repair',$fail);
 
-class ProductionFixtureGuard {public function selectAll($sql,$params){return array(array('id'=>1267,'symbol'=>'BAD','algo'=>'scrypt'));}}
+class ProductionFixtureGuard {public function selectAll($sql,$params){return array(array('id'=>1267,'symbol'=>'BAD','algo'=>'scrypt','enable'=>1,'installed'=>1,'visible'=>1,'auto_ready'=>1,'payout_min'=>1));}}
 class ProductionFixtureExecutor {
 	public $calls=array();
 	public function run($command,$args){$this->calls[]=array($command,$args);$base=array('status'=>'pass','items'=>array());
@@ -49,6 +49,57 @@ expect_batch($production['batch_state']==='READY_FOR_WALLET_APPROVAL'&&$producti
 expect_batch(in_array('earnings-maturity-transition-apply',$productionCommands,true)&&in_array('account-credit-clear-apply',$productionCommands,true)&&in_array('payout-row-apply',$productionCommands,true),'guarded production applies invoked',$fail);
 expect_batch(!in_array('wallet-send-apply',$productionCommands,true)&&count($production['phase_results'])===7,'production adapter wallet boundary',$fail);
 $maturityPackageCall=array_values(array_filter($productionExec->calls,function($call){return $call[0]==='earnings-maturity-transition-approval-package';}));expect_batch(strpos(implode(' ',$maturityPackageCall[0][1]),'--selected-block-ids=4')!==false,'maturity package bound to selected blocks',$fail);
+
+
+class StrictFixtureGuard extends ProductionFixtureGuard {
+	public $rows;
+	public function __construct($rows){$this->rows=$rows;}
+	public function selectAll($sql,$params){$out=array();foreach($this->rows as $row){if(isset($params[':algo'])&&strtolower($row['algo'])!==strtolower($params[':algo']))continue;if(empty($row['enable'])||empty($row['installed'])||empty($row['visible'])||empty($row['auto_ready'])||floatval($row['payout_min'])<=0)continue;$out[]=$row;}return $out;}
+}
+class StrictFixtureExecutor extends ProductionFixtureExecutor {
+	public $mode=null;
+	public function run($command,$args){
+		$r=parent::run($command,$args);
+		if($command==='earnings-maturity-transition-dryrun'&&strpos(implode(' ',$args),'--selected-block-ids=4')!==false){
+			if($this->mode==='wrong_block')$r['items']['linked_blocks']=array(array('block_id'=>5,'linked_earning_ids'=>array(11),'coin_id'=>1267));
+			if($this->mode==='wrong_coin'){$r['items']['selected_earnings'][0]['coin_id']=1268;$r['items']['linked_blocks'][0]['coin_id']=1268;}
+			if($this->mode==='duplicate_earning')$r['items']['selected_earnings'][]=$r['items']['selected_earnings'][0];
+		}
+		if($command==='earnings-maturity-transition-approval-package'){
+			if($this->mode==='empty_package')$r['items']['selected_earnings']=array();
+			if($this->mode==='subset_package')$r['items']['selected_earnings']=array();
+			if($this->mode==='widened_package')$r['items']['selected_earnings'][]=array('earning_id'=>12,'coin_id'=>1267);
+			if($this->mode==='cross_coin_package')$r['items']['selected_earnings'][0]['coin_id']=1268;
+			if($this->mode==='duplicate_package')$r['items']['selected_earnings'][]=$r['items']['selected_earnings'][0];
+		}
+		if($command==='account-credit-clear-approval-package'){
+			if($this->mode==='account_widened')$r['items']['selected_earnings'][]=array('earning_id'=>12,'account_id'=>10,'coin_id'=>1267);
+		}
+		if($command==='payout-row-approval-package'){
+			if($this->mode==='payout_empty')$r['items']['selected_accounts']=array();
+			if($this->mode==='payout_widened')$r['items']['selected_accounts'][]=array('account_id'=>10,'account_coinid'=>1267);
+		}
+		return $r;
+	}
+}
+function run_strict_batch($mode,&$commands){
+	global $root;
+	$exec=new StrictFixtureExecutor();$exec->mode=$mode;
+	$guard=new StrictFixtureGuard(array(
+		array('id'=>1267,'symbol'=>'BAD','algo'=>'scrypt','enable'=>1,'installed'=>1,'visible'=>1,'auto_ready'=>1,'payout_min'=>1),
+		array('id'=>1268,'symbol'=>'BAD','algo'=>'scrypt','enable'=>0,'installed'=>1,'visible'=>1,'auto_ready'=>1,'payout_min'=>1),
+	));
+	$r=(new BadpoolPaymentBatchRunner(new BadpoolPaymentBatchPhaseAdapter($guard,array($exec,'run')),$root.'-strict-'.($mode===null?'ok':$mode)))->run(array('mode'=>'auto','scope'=>'all-active-payout-coins','only'=>'scrypt','batch_size'=>1));
+	$commands=array_map(function($call){return $call[0];},$exec->calls);
+	return $r;
+}
+foreach(array('wrong_block','wrong_coin','duplicate_earning','empty_package','subset_package','widened_package','cross_coin_package','duplicate_package','account_widened','payout_empty','payout_widened') as $mode){
+	$cmds=array();$x=run_strict_batch($mode,$cmds);
+	expect_batch($x['status']==='hold'||$x['batch_state']==='HOLD',$mode.' did not hold',$fail);
+}
+$cmds=array();$ok=run_strict_batch(null,$cmds);
+expect_batch($ok['batch_state']==='READY_FOR_WALLET_APPROVAL','strict happy path failed',$fail);
+expect_batch(count($ok['selected_coin_scope'])===1&&$ok['selected_coin_scope'][0]['id']===1267,'inactive coin was not excluded',$fail);
 
 function command_batch($args,&$rc){$c=new FakeBatchGuardCommand();FakeBatchGuardCommand::$adapter=new FakeBatchAdapter();ob_start();$rc=$c->run(array_merge(array('batch-run'),$args));return ob_get_clean();}
 $j=json_decode(command_batch(array('--format=json'),$rc),true);expect_batch(is_array($j)&&$j['scope']==='all-active-payout-coins'&&$j['batch_size']===250,'default/no coin id',$fail);expect_batch($j['stop_before_wallet_send']===true,'default stop',$fail);

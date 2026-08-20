@@ -33,3 +33,25 @@ This prevents a fresh approval-package query from widening a resumed batch.
 Both the legacy `apply_command_shape` and standardized `apply_command_args`
 contracts are accepted, while the adapter substitutes only the package's own
 checksum placeholder before dispatching the guarded apply.
+
+
+## Hardened binding checks
+
+Before any persisted approval-package artifact is applied, the adapter recomputes
+the artifact SHA-256 and compares it with the durable ledger checksum for that
+phase. A resumed run therefore refuses missing, malformed, or tampered package
+artifacts before dispatching guarded apply commands.
+
+Package contents are compared against the exact expected selection for the
+specific coin being processed. Empty packages, subsets, duplicates, omitted IDs,
+extra IDs, widened IDs, and cross-coin rows fail closed instead of advancing the
+batch.
+
+The all-active-payout-coins scope is resolved only from configured payout coin
+IDs that are enabled, installed, visible, auto-ready, and have a positive payout
+minimum. If no coin satisfies those predicates, the batch holds before mutation.
+
+Bounded maturity dry-run responses are validated against the requested block
+scope before becoming durable Phase 1 evidence: returned block IDs must exactly
+match the requested IDs, selected earning IDs must be positive and unique, and
+returned coin IDs must match the active coin when present.
