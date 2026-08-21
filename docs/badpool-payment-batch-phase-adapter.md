@@ -55,3 +55,5 @@ Bounded maturity dry-run responses are validated against the requested block
 scope before becoming durable Phase 1 evidence: returned block IDs must exactly
 match the requested IDs, selected earning IDs must be positive and unique, and
 returned coin IDs must match the active coin when present.
+
+Active payout coin resolution follows the pool's operational coin flags (`enable`, `installed`, `visible`, and `auto_ready`). A blank or null `payout_min` does not by itself make a coin inactive; payout threshold logic remains owned by the payout-candidate guard command.

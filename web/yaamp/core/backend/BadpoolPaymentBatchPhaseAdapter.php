@@ -91,7 +91,7 @@ class BadpoolPaymentBatchPhaseAdapter
 	private function coins($options)
 	{
 		$ids=array(1266,1267,1268,1269,1270);$params=array();$p=array();foreach($ids as $i=>$id){$key=':id'.$i;$p[]=$key;$params[$key]=$id;}
-		$sql='SELECT id,symbol,algo FROM coins WHERE id IN ('.implode(',',$p).') AND IFNULL(enable,0)=1 AND IFNULL(installed,0)=1 AND IFNULL(visible,0)=1 AND IFNULL(auto_ready,0)=1 AND IFNULL(payout_min,0)>0';
+		$sql='SELECT id,symbol,algo FROM coins WHERE id IN ('.implode(',',$p).') AND IFNULL(enable,0)=1 AND IFNULL(installed,0)=1 AND IFNULL(visible,0)=1 AND IFNULL(auto_ready,0)=1';
 		$only=arraySafeVal($options,'only'); if($only){$sql.=' AND LOWER(algo)=LOWER(:algo)';$params[':algo']=$only;}
 		$sql.=' ORDER BY id';$rows=$this->guard->selectAll($sql,$params);$out=array();
 		foreach($rows as $r)$out[]=array('coin_id'=>intval($r['id']),'id'=>intval($r['id']),'symbol'=>(string)$r['symbol'],'algo'=>(string)$r['algo']);return $out;
