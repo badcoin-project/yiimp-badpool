@@ -379,7 +379,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 
 	public function executePaymentBatchPhaseCommand($command,$args)
 	{
-		$nested=new self(); ob_start(); $nested->run(array_merge(array($command),$args)); $json=ob_get_clean();
+		$nested=new self($this->getName(), $this->getCommandRunner()); ob_start(); $nested->run(array_merge(array($command),$args)); $json=ob_get_clean();
 		$report=json_decode($json,true);
 		return is_array($report)?$report:array('status'=>'fail','errors'=>array('Phase command returned invalid JSON.'));
 	}
