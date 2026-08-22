@@ -164,6 +164,7 @@ YAAMP_ALGO g_algos[] =
 	{"groestl", groestl_hash, 0x100, 0, sha256_hash_hex }, /* groestlcoin */
 	{"dmd-gr", groestl_hash, 0x100, 0, 0}, /* diamond (double groestl) */
 	{"myr-gr", groestlmyriad_hash, 1, 0, 0}, /* groestl + sha 64 */
+	{"badcoin-groestl", groestlmyriad_hash, 1, 0, 0}, /* Badcoin: groestl512 + sha256 */
 	{"skein", skein_hash, 1, 0, 0},
 	{"sonoa", sonoa_hash, 1, 0, 0},
 	{"tribus", tribus_hash, 1, 0, 0},
