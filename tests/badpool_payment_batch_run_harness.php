@@ -37,16 +37,20 @@ class ProductionFixtureExecutor {
 	public $calls=array();
 	public function run($command,$args){$this->calls[]=array($command,$args);$base=array('status'=>'pass','items'=>array());
 		if($command==='safety-scan')return $base;
-		if($command==='earnings-maturity-transition-dryrun')return array_merge($base,array('items'=>array('selected_earnings'=>array(array('earning_id'=>11,'userid'=>9)),'linked_blocks'=>array(array('block_id'=>4,'linked_earning_ids'=>array(11))))));
-		if($command==='earnings-maturity-transition-approval-package')return array_merge($base,array('items'=>array('selected_earnings'=>array(array('earning_id'=>11))),'approval_package_checksum'=>array('value'=>str_repeat('a',64)),'apply_command_shape'=>array('php','badpoolguard','earnings-maturity-transition-apply','--approval-package-checksum=<approval_package_checksum>','--format=json')));
-		if($command==='account-credit-clear-dryrun')return array_merge($base,array('items'=>array('selected_earnings'=>array(array('earning_id'=>11,'account_id'=>9)))));
-		if($command==='account-credit-clear-approval-package')return array_merge($base,array('items'=>array('selected_earnings'=>array(array('earning_id'=>11,'account_id'=>9))),'approval_package_checksum'=>array('value'=>str_repeat('b',64)),'apply_command_args'=>array('badpoolguard','account-credit-clear-apply','--approval-package-checksum=<approval_package_checksum>','--format=json')));
+		if($command==='earnings-maturity-transition-dryrun')return array_merge($base,array('items'=>array('selected_earnings'=>array(array('earning_id'=>11,'userid'=>9),array('earning_id'=>12,'userid'=>9)),'linked_blocks'=>array(array('block_id'=>4,'linked_earning_ids'=>array(11,12))))));
+		if($command==='earnings-maturity-transition-approval-package')return array_merge($base,array('items'=>array('selected_earnings'=>array(array('earning_id'=>11),array('earning_id'=>12))),'approval_package_checksum'=>array('value'=>str_repeat('a',64)),'apply_command_shape'=>array('php','badpoolguard','earnings-maturity-transition-apply','--approval-package-checksum=<approval_package_checksum>','--format=json')));
+		if($command==='account-credit-clear-dryrun')return array_merge($base,array('items'=>array('selected_earnings'=>array(array('earning_id'=>11,'account_id'=>9),array('earning_id'=>12,'account_id'=>9)))));
+		if($command==='account-credit-clear-approval-package')return array_merge($base,array('items'=>array('selected_earnings'=>array(array('earning_id'=>11,'account_id'=>9),array('earning_id'=>12,'account_id'=>9))),'approval_package_checksum'=>array('value'=>str_repeat('b',64)),'apply_command_args'=>array('badpoolguard','account-credit-clear-apply','--approval-package-checksum=<approval_package_checksum>','--format=json')));
 		if($command==='payout-row-approval-package')return array_merge($base,array('items'=>array('selected_accounts'=>array(array('account_id'=>9))),'approval_package_checksum'=>array('value'=>str_repeat('c',64)),'apply_command_shape'=>array('badpoolguard','payout-row-apply','--approval-package-checksum=<approval_package_checksum>','--format=json')));
 		if($command==='payout-row-apply')return array_merge($base,array('created_payout_ids'=>array(77)));return $base;}
 }
-$productionRoot=$root.'-production';$productionExec=new ProductionFixtureExecutor();$productionAdapter=new BadpoolPaymentBatchPhaseAdapter(new ProductionFixtureGuard(),array($productionExec,'run'));$production=(new BadpoolPaymentBatchRunner($productionAdapter,$productionRoot))->run(array('mode'=>'auto','scope'=>'all-active-payout-coins','only'=>'scrypt','batch_size'=>1));$productionCommands=array_map(function($call){return $call[0];},$productionExec->calls);
+$productionRoot=$root.'-production';$productionExec=new ProductionFixtureExecutor();$productionAdapter=new BadpoolPaymentBatchPhaseAdapter(new ProductionFixtureGuard(),array($productionExec,'run'));$production=(new BadpoolPaymentBatchRunner($productionAdapter,$productionRoot))->run(array('mode'=>'auto','scope'=>'all-active-payout-coins','only'=>'scrypt','batch_size'=>2));$productionCommands=array_map(function($call){return $call[0];},$productionExec->calls);
 expect_batch($production['batch_state']==='READY_FOR_WALLET_APPROVAL'&&$production['created_payout_ids']===array(77),'production adapter phases 1-6 complete',$fail);
 expect_batch($production['selected_coin_scope']===array(array('coin_id'=>1267,'id'=>1267,'symbol'=>'BAD','algo'=>'scrypt')),'active coin with null payout_min selected',$fail);
+expect_batch($production['selected_counts']['accounts']===1,'repeated credited account counted once',$fail);
+$productionLedger=json_decode(file_get_contents($production['ledger_path']),true);
+expect_batch($productionLedger['selected_account_ids']===array(9),'repeated credited account persisted once',$fail);
+expect_batch($productionLedger['selected_accounts_by_coin']['1267']['account_ids']===array(9),'repeated credited per-coin account persisted once',$fail);
 expect_batch(in_array('earnings-maturity-transition-apply',$productionCommands,true)&&in_array('account-credit-clear-apply',$productionCommands,true)&&in_array('payout-row-apply',$productionCommands,true),'guarded production applies invoked',$fail);
 expect_batch(!in_array('wallet-send-apply',$productionCommands,true)&&count($production['phase_results'])===7,'production adapter wallet boundary',$fail);
 $maturityPackageCall=array_values(array_filter($productionExec->calls,function($call){return $call[0]==='earnings-maturity-transition-approval-package';}));expect_batch(strpos(implode(' ',$maturityPackageCall[0][1]),'--selected-block-ids=4')!==false,'maturity package bound to selected blocks',$fail);
@@ -79,6 +83,7 @@ class StrictFixtureExecutor extends ProductionFixtureExecutor {
 		if($command==='payout-row-approval-package'){
 			if($this->mode==='payout_empty')$r['items']['selected_accounts']=array();
 			if($this->mode==='payout_widened')$r['items']['selected_accounts'][]=array('account_id'=>10,'account_coinid'=>1267);
+			if($this->mode==='payout_wrong_account')$r['items']['selected_accounts']=array(array('account_id'=>10,'account_coinid'=>1267));
 		}
 		return $r;
 	}
@@ -90,22 +95,26 @@ function run_strict_batch($mode,&$commands){
 		array('id'=>1267,'symbol'=>'BAD','algo'=>'scrypt','enable'=>1,'installed'=>1,'visible'=>1,'auto_ready'=>1,'payout_min'=>null),
 		array('id'=>1268,'symbol'=>'BAD','algo'=>'scrypt','enable'=>0,'installed'=>1,'visible'=>1,'auto_ready'=>0,'payout_min'=>null),
 	));
-	$r=(new BadpoolPaymentBatchRunner(new BadpoolPaymentBatchPhaseAdapter($guard,array($exec,'run')),$root.'-strict-'.($mode===null?'ok':$mode)))->run(array('mode'=>'auto','scope'=>'all-active-payout-coins','only'=>'scrypt','batch_size'=>1));
+	$r=(new BadpoolPaymentBatchRunner(new BadpoolPaymentBatchPhaseAdapter($guard,array($exec,'run')),$root.'-strict-'.($mode===null?'ok':$mode)))->run(array('mode'=>'auto','scope'=>'all-active-payout-coins','only'=>'scrypt','batch_size'=>2));
 	$commands=array_map(function($call){return $call[0];},$exec->calls);
 	return $r;
 }
-foreach(array('wrong_block','wrong_coin','duplicate_earning','empty_package','subset_package','widened_package','cross_coin_package','duplicate_package','account_widened','payout_empty','payout_widened') as $mode){
+foreach(array('wrong_block','wrong_coin','duplicate_earning','empty_package','subset_package','widened_package','cross_coin_package','duplicate_package','account_widened','payout_empty','payout_widened','payout_wrong_account') as $mode){
 	$cmds=array();$x=run_strict_batch($mode,$cmds);
 	expect_batch($x['status']==='hold'||$x['batch_state']==='HOLD',$mode.' did not hold',$fail);
 }
 $cmds=array();$ok=run_strict_batch(null,$cmds);
 expect_batch($ok['batch_state']==='READY_FOR_WALLET_APPROVAL','strict happy path failed',$fail);
 expect_batch(count($ok['selected_coin_scope'])===1&&$ok['selected_coin_scope'][0]['id']===1267,'inactive coin was not excluded',$fail);
+$recoveryRoot=$root.'-recovery';$recoveryExec=new StrictFixtureExecutor();$recoveryExec->mode='payout_widened';$recoveryRunner=new BadpoolPaymentBatchRunner(new BadpoolPaymentBatchPhaseAdapter(new ProductionFixtureGuard(),array($recoveryExec,'run')),$recoveryRoot);$held=$recoveryRunner->run(array('mode'=>'auto','scope'=>'all-active-payout-coins','only'=>'scrypt','batch_size'=>2));$heldLedger=json_decode(file_get_contents($held['ledger_path']),true);$heldLedger['selected_account_ids']=array();$heldLedger['selected_accounts_by_coin']['1267']['account_ids']=null;file_put_contents($held['ledger_path'],json_encode($heldLedger,JSON_PRETTY_PRINT|JSON_UNESCAPED_SLASHES)."\n",LOCK_EX);
+$resumeExec=new StrictFixtureExecutor();$resumeRunner=new BadpoolPaymentBatchRunner(new BadpoolPaymentBatchPhaseAdapter(new ProductionFixtureGuard(),array($resumeExec,'run')),$recoveryRoot);$recovered=$resumeRunner->run(array('mode'=>'auto','scope'=>'all-active-payout-coins','only'=>'scrypt','batch_size'=>2,'resume_batch_id'=>$held['batch_id']));$recoveredLedger=json_decode(file_get_contents($recovered['ledger_path']),true);
+expect_batch($recovered['batch_state']==='READY_FOR_WALLET_APPROVAL','held null account scope did not recover',$fail);
+expect_batch($recoveredLedger['selected_account_ids']===array(9)&&$recoveredLedger['selected_accounts_by_coin']['1267']['account_ids']===array(9),'recovered account scope was not persisted',$fail);
 
 function command_batch($args,&$rc){$c=new FakeBatchGuardCommand();FakeBatchGuardCommand::$adapter=new FakeBatchAdapter();ob_start();$rc=$c->run(array_merge(array('batch-run'),$args));return ob_get_clean();}
 $j=json_decode(command_batch(array('--format=json'),$rc),true);expect_batch(is_array($j)&&$j['scope']==='all-active-payout-coins'&&$j['batch_size']===250,'default/no coin id',$fail);expect_batch($j['stop_before_wallet_send']===true,'default stop',$fail);
 $bad=json_decode(command_batch(array('--only=randomx','--format=json'),$rc),true);expect_batch($rc===2&&$bad['status']==='refused','invalid only',$fail);$bad=json_decode(command_batch(array('--batch-size=0','--format=json'),$rc),true);expect_batch($rc===2&&$bad['status']==='refused','invalid size',$fail);
 $text=command_batch(array('--format=text'),$rc);foreach(array('CLASSIFICATION=','BATCH_STATE=','NEXT_ACTION=','run_directory=','ledger_path=','7      Send Wallet Payment          BLOCKED_HUMAN_REQUIRED','9      Batch Complete') as $needle)expect_batch(strpos($text,$needle)!==false,'text '.$needle,$fail);
 $preview=new FakeBatchGuardCommand();ob_start();$previewRc=$preview->run(array('batch-run-preview','--format=json'));$previewJson=json_decode(ob_get_clean(),true);expect_batch($previewRc===0&&$previewJson['status']==='ok'&&$previewJson['read_only']===true&&$previewJson['db_mutations']===false,'preview remains read only',$fail);expect_batch($previewJson['wallet_sends']===false&&$previewJson['inferred_coin_scope']['coin_ids_required']===false,'preview wallet/default scope',$fail);
-function rrmdir_batch($d){if(!is_dir($d))return;foreach(scandir($d) as $x)if($x!=='.'&&$x!=='..'){is_dir($d.'/'.$x)?rrmdir_batch($d.'/'.$x):unlink($d.'/'.$x);}rmdir($d);}foreach(array($root,$root.'-hold',$root3,$legacyRoot,$productionRoot) as $d)rrmdir_batch($d);
+function rrmdir_batch($d){if(!is_dir($d))return;foreach(scandir($d) as $x)if($x!=='.'&&$x!=='..'){is_dir($d.'/'.$x)?rrmdir_batch($d.'/'.$x):unlink($d.'/'.$x);}rmdir($d);}foreach(array($root,$root.'-hold',$root3,$legacyRoot,$productionRoot,$recoveryRoot) as $d)rrmdir_batch($d);
 if($fail){echo "Badpool payment batch run harness FAILED\n - ".implode("\n - ",$fail)."\n";exit(1);}echo "Badpool payment batch run harness passed\n";
