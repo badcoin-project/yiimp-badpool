@@ -76,15 +76,18 @@ class BadpoolPaymentBatchPhaseAdapter
 		$packaged=$this->packages($ledger,5,'account-credit-clear-approval-package','account-credit-packages.json','credit'); if(!$this->passed($packaged))return $packaged;
 		$applied=$this->applyPackages($ledger,5,5,'account-credit-clear-apply','account-credit-apply-report.json',$packaged['package_path'],$packaged['checksums']); if(!$this->passed($applied))return $applied;
 		$accounts=array(); $byCoin=array(); foreach($this->readArtifact($packaged['package_path']) as $package){$coinId=$this->packageCoinId($package);foreach($this->items($package,'selected_earnings') as $row){$id=$this->positiveId(arraySafeVal($row,'account_id',arraySafeVal($row,'userid')));if($id!==null){$accounts[]=$id;if($coinId!==null)$byCoin[(string)$coinId][]=$id;}}}
-		foreach($byCoin as $coinId=>$ids)$byCoin[$coinId]=array('account_ids'=>$this->normalizeIdList($ids));
-		$applied['selected_account_ids']=$this->normalizeIdList($accounts); $applied['selected_accounts_by_coin']=$byCoin; return $applied;
+		foreach($byCoin as $coinId=>$ids)$byCoin[$coinId]=array('account_ids'=>$this->uniqueIdList($ids));
+		$applied['selected_account_ids']=$this->uniqueIdList($accounts); $applied['selected_accounts_by_coin']=$byCoin; return $applied;
 	}
 
 	public function preparePayoutRows($ledger, $options)
 	{
+		$recovered=$this->recoverAccountScope($ledger);
+		if($recovered!==null){$ledger['selected_account_ids']=$recovered['selected_account_ids'];$ledger['selected_accounts_by_coin']=$recovered['selected_accounts_by_coin'];}
 		$packaged=$this->packages($ledger,6,'payout-row-approval-package','payout-row-packages.json','payout'); if(!$this->passed($packaged))return $packaged;
 		$applied=$this->applyPackages($ledger,6,6,'payout-row-apply','payout-row-apply-report.json',$packaged['package_path'],$packaged['checksums']); if(!$this->passed($applied))return $applied;
 		$ids=array(); foreach($this->readArtifact($applied['report_path']) as $report)foreach((array)arraySafeVal($report,'created_payout_ids',array()) as $id){$pid=$this->positiveId($id);if($pid!==null)$ids[]=$pid;}
+		if($recovered!==null){$applied['selected_account_ids']=$recovered['selected_account_ids'];$applied['selected_accounts_by_coin']=$recovered['selected_accounts_by_coin'];}
 		$applied['created_payout_ids']=$this->normalizeIdList($ids); return $applied;
 	}
 
@@ -146,11 +149,27 @@ class BadpoolPaymentBatchPhaseAdapter
 		if(!is_string($expected)||!preg_match('/^[a-f0-9]{64}$/i',$expected))return 'Required approval package artifact checksum is missing or malformed.';$actual=hash_file('sha256',$path);if(!hash_equals(strtolower($expected),strtolower($actual)))return 'Approval package artifact checksum mismatch for phase '.$phase.'.';return true;
 	}
 
+	private function recoverAccountScope($ledger)
+	{
+		$current=$this->normalizeIdList((array)arraySafeVal($ledger,'selected_account_ids',array()));
+		$byCoin=(array)arraySafeVal($ledger,'selected_accounts_by_coin',array());
+		$needsRecovery=$current===array();
+		foreach((array)arraySafeVal($ledger,'selected_coin_scope',array()) as $coin){$coinId=(string)arraySafeVal($coin,'id');$ids=arraySafeVal((array)arraySafeVal($byCoin,$coinId,array()),'account_ids',array());if(!is_array($ids)||$ids===array())$needsRecovery=true;}
+		if(!$needsRecovery)return null;
+		$path=$this->phaseArtifact($ledger,5,'package_path');if(!is_string($path)||$path==='')$path=arraySafeVal($ledger,'run_directory').'/account-credit-packages.json';$packages=$this->readArtifact($path);if(!is_array($packages))return null;
+		$accounts=array();$recoveredByCoin=array();
+		foreach($packages as $package){$coinId=$this->packageCoinId($package);foreach($this->items($package,'selected_earnings') as $row){$id=$this->positiveId(arraySafeVal($row,'account_id',arraySafeVal($row,'userid')));if($id!==null){$accounts[]=$id;if($coinId!==null)$recoveredByCoin[(string)$coinId][]=$id;}}}
+		$accounts=$this->uniqueIdList($accounts);if($accounts===null||$accounts===array())return null;
+		foreach($recoveredByCoin as $coinId=>$ids){$ids=$this->uniqueIdList($ids);if($ids===null)return null;$recoveredByCoin[$coinId]=array('account_ids'=>$ids);}
+		return array('selected_account_ids'=>$accounts,'selected_accounts_by_coin'=>$recoveredByCoin);
+	}
+
 	private function rowCoinId($row){foreach(array('coin_id','coinid','account_coinid','idcoin') as $k){$id=$this->positiveId(arraySafeVal($row,$k));if($id!==null)return $id;}return null;}
 	private function packageCoinId($package){$id=$this->positiveId(arraySafeVal($package,'batch_coin_id'));if($id!==null)return $id;$id=$this->positiveId(arraySafeVal(arraySafeVal($package,'scope_binding',array()),'coin_id'));if($id!==null)return $id;foreach(array('selected_earnings','selected_accounts') as $key)foreach($this->items($package,$key) as $row){$id=$this->rowCoinId($row);if($id!==null)return $id;}return null;}
 	private function positiveId($value){if(is_int($value)&&$value>0)return $value;if(is_string($value)&&preg_match('/^[1-9][0-9]*$/',$value))return intval($value);return null;}
 	private function idsFromRows($rows,$field){$ids=array();foreach((array)$rows as $row){$id=$this->positiveId(arraySafeVal($row,$field));if($id===null||in_array($id,$ids,true))return null;$ids[]=$id;}sort($ids,SORT_NUMERIC);return $ids;}
 	private function normalizeIdList($ids){$out=array();foreach((array)$ids as $id){$id=$this->positiveId($id);if($id===null||in_array($id,$out,true))return null;$out[]=$id;}sort($out,SORT_NUMERIC);return $out;}
+	private function uniqueIdList($ids){$out=array();foreach((array)$ids as $id){$id=$this->positiveId($id);if($id===null)return null;if(!in_array($id,$out,true))$out[]=$id;}sort($out,SORT_NUMERIC);return $out;}
 	private function command($command,$args){return call_user_func($this->execute,$command,$args);}
 	private function passed($r){return is_array($r)&&in_array(strtolower((string)arraySafeVal($r,'status')),array('ok','pass'),true);}
 	private function items($r,$key){return (array)arraySafeVal(arraySafeVal($r,'items',array()),$key,array());}
