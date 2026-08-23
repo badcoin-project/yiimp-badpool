@@ -27,6 +27,11 @@ expect_contains('apply uses scope mismatch abort reason', $command, 'selected_ac
 expect_contains('apply requires json format abort reason', $command, 'json_format_required', $failures);
 expect_contains('apply transaction wrapped', $command, 'app()->db->beginTransaction()', $failures);
 expect_contains('payout row insert exists', $command, 'INSERT INTO payouts (account_id, idcoin, time, amount, completed, tx) VALUES', $failures);
+expect_contains('insert id captured before account debit', $command, '$payoutId = $this->captureInsertedPayoutId($i, $createdAt);', $failures);
+expect_contains('insert id must be positive', $command, 'positiveIntegerOrNull(app()->db->getLastInsertID())', $failures);
+expect_contains('insert id is proven by exact payout row', $command, 'insertedPayoutIdMatches($id, $item, $createdAt)', $failures);
+expect_contains('insert id strict fallback requires exact match', $command, 'strictPayoutRowIdMatch($item, $createdAt, $createdAt)', $failures);
+expect_contains('insert id capture refuses unproven row', $command, 'inserted payout row id capture failed or could not be proven', $failures);
 expect_contains('payout schema preflight abort exists', $command, 'payout_schema_missing', $failures);
 expect_contains('accounts schema preflight abort exists', $command, 'accounts_schema_missing', $failures);
 expect_contains('payout schema preflight checks required columns', $command, "array('account_id', 'idcoin', 'time', 'amount', 'completed', 'tx')", $failures);

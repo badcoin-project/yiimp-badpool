@@ -2214,13 +2214,44 @@ class BadpoolGuardCommand extends CConsoleCommand
 		$items = arraySafeVal(arraySafeVal($approval, 'items', array()), 'selected_accounts', array());
 		$n = 0; $amount = 0.0; $ids = array(); $accounts = array();
 		foreach ($items as $i) {
+			$createdAt = time();
 			$insert = app()->db->createCommand('INSERT INTO payouts (account_id, idcoin, time, amount, completed, tx) VALUES (:account_id, :idcoin, :time, :amount, 0, NULL)');
-			$insert->execute(array(':account_id'=>$i['account_id'], ':idcoin'=>$i['account_coinid'], ':time'=>time(), ':amount'=>$i['projected_payout_row_amount']));
+			$insert->execute(array(':account_id'=>$i['account_id'], ':idcoin'=>$i['account_coinid'], ':time'=>$createdAt, ':amount'=>$i['projected_payout_row_amount']));
+			$payoutId = $this->captureInsertedPayoutId($i, $createdAt);
 			$u = app()->db->createCommand('UPDATE accounts SET balance=:new_balance WHERE id=:id AND coinid=:coinid AND balance=:old_balance')->execute(array(':new_balance'=>$i['projected_remaining_balance'], ':id'=>$i['account_id'], ':coinid'=>$i['account_coinid'], ':old_balance'=>$i['current_balance']));
 			if ($u !== 1) throw new Exception('selected account balance changed before apply: '.$i['account_id']);
-			$n++; $amount += floatval($i['projected_payout_row_amount']); $ids[] = intval(app()->db->getLastInsertID()); $accounts[] = intval($i['account_id']);
+			$n++; $amount += floatval($i['projected_payout_row_amount']); $ids[] = $payoutId; $accounts[] = intval($i['account_id']);
 		}
 		return array('created_count'=>$n, 'created_amount'=>$this->decimalString($amount), 'created_payout_ids'=>$ids, 'debited_account_ids'=>$accounts, 'payout_rows_inserted'=>$n, 'payout_count'=>$n, 'payout_rows_insert_only'=>true, 'accounts_debited_to_projected_remaining_balance'=>true, 'payouts_marked_completed'=>false, 'old_payouts_retried_or_deleted'=>false);
+	}
+
+	private function captureInsertedPayoutId($item, $createdAt)
+	{
+		$id = $this->positiveIntegerOrNull(app()->db->getLastInsertID());
+		if ($id !== null && $this->insertedPayoutIdMatches($id, $item, $createdAt)) return $id;
+		$matched = $this->strictPayoutRowIdMatch($item, $createdAt, $createdAt);
+		if ($matched !== null) return $matched;
+		throw new Exception('inserted payout row id capture failed or could not be proven for account '.$item['account_id']);
+	}
+
+	private function insertedPayoutIdMatches($id, $item, $createdAt)
+	{
+		$row = app()->db->createCommand("SELECT id FROM payouts WHERE id=:id AND account_id=:account_id AND idcoin=:idcoin AND time=:time AND amount=:amount AND IFNULL(completed,0)=0 AND (tx IS NULL OR tx='')")->queryRow(true, array(':id'=>$id, ':account_id'=>$item['account_id'], ':idcoin'=>$item['account_coinid'], ':time'=>$createdAt, ':amount'=>$item['projected_payout_row_amount']));
+		return is_array($row) && $this->positiveIntegerOrNull(arraySafeVal($row, 'id')) === $id;
+	}
+
+	private function strictPayoutRowIdMatch($item, $startTime, $endTime)
+	{
+		$rows = app()->db->createCommand("SELECT id FROM payouts WHERE account_id=:account_id AND idcoin=:idcoin AND time BETWEEN :start_time AND :end_time AND amount=:amount AND IFNULL(completed,0)=0 AND (tx IS NULL OR tx='') ORDER BY id")->queryAll(true, array(':account_id'=>$item['account_id'], ':idcoin'=>$item['account_coinid'], ':start_time'=>$startTime, ':end_time'=>$endTime, ':amount'=>$item['projected_payout_row_amount']));
+		if (!is_array($rows) || count($rows) !== 1) return null;
+		return $this->positiveIntegerOrNull(arraySafeVal($rows[0], 'id'));
+	}
+
+	private function positiveIntegerOrNull($value)
+	{
+		if (is_int($value) && $value > 0) return $value;
+		if (is_string($value) && preg_match('/^[1-9][0-9]*$/', $value)) return intval($value);
+		return null;
 	}
 
 	private function parsePayoutRowApplyOptions($args)

@@ -84,11 +84,14 @@ class BadpoolPaymentBatchPhaseAdapter
 	{
 		$recovered=$this->recoverAccountScope($ledger);
 		if($recovered!==null){$ledger['selected_account_ids']=$recovered['selected_account_ids'];$ledger['selected_accounts_by_coin']=$recovered['selected_accounts_by_coin'];}
+		$existing=$this->recoverExistingPayoutApply($ledger);
+		if($existing!==null){if($recovered!==null){$existing['selected_account_ids']=$recovered['selected_account_ids'];$existing['selected_accounts_by_coin']=$recovered['selected_accounts_by_coin'];}return $existing;}
 		$packaged=$this->packages($ledger,6,'payout-row-approval-package','payout-row-packages.json','payout'); if(!$this->passed($packaged))return $packaged;
 		$applied=$this->applyPackages($ledger,6,6,'payout-row-apply','payout-row-apply-report.json',$packaged['package_path'],$packaged['checksums']); if(!$this->passed($applied))return $applied;
-		$ids=array(); foreach($this->readArtifact($applied['report_path']) as $report)foreach((array)arraySafeVal($report,'created_payout_ids',array()) as $id){$pid=$this->positiveId($id);if($pid!==null)$ids[]=$pid;}
+		$ids=array();$inserted=0; foreach($this->readArtifact($applied['report_path']) as $report){$inserted+=intval(arraySafeVal($report,'payout_rows_inserted',arraySafeVal($report,'created_count',0)));foreach((array)arraySafeVal($report,'created_payout_ids',array()) as $id){$pid=$this->positiveId($id);if($pid!==null)$ids[]=$pid;}}
+		$ids=$this->normalizeIdList($ids);if($inserted>0&&($ids===null||count($ids)!==$inserted))return $this->hold('Payout-row apply did not return one positive created payout ID per inserted row.');
 		if($recovered!==null){$applied['selected_account_ids']=$recovered['selected_account_ids'];$applied['selected_accounts_by_coin']=$recovered['selected_accounts_by_coin'];}
-		$applied['created_payout_ids']=$this->normalizeIdList($ids); return $applied;
+		$applied['created_payout_ids']=$ids;$applied['payout_rows_inserted']=$inserted; return $applied;
 	}
 
 	private function coins($options)
@@ -162,6 +165,32 @@ class BadpoolPaymentBatchPhaseAdapter
 		$accounts=$this->uniqueIdList($accounts);if($accounts===null||$accounts===array())return null;
 		foreach($recoveredByCoin as $coinId=>$ids){$ids=$this->uniqueIdList($ids);if($ids===null)return null;$recoveredByCoin[$coinId]=array('account_ids'=>$ids);}
 		return array('selected_account_ids'=>$accounts,'selected_accounts_by_coin'=>$recoveredByCoin);
+	}
+
+	private function recoverExistingPayoutApply($ledger)
+	{
+		$reportPath=$this->phaseArtifact($ledger,6,'report_path');if(!is_string($reportPath)||$reportPath==='')$reportPath=arraySafeVal($ledger,'run_directory').'/payout-row-apply-report.json';
+		$reports=$this->readArtifact($reportPath);if(!is_array($reports))return null;
+		$inserted=0;$artifactIds=array();$hasBadId=false;foreach($reports as $report){$count=intval(arraySafeVal($report,'payout_rows_inserted',arraySafeVal($report,'created_count',0)));$inserted+=$count;$raw=(array)arraySafeVal($report,'created_payout_ids',array());foreach($raw as $id){$pid=$this->positiveId($id);if($pid===null)$hasBadId=true;else $artifactIds[]=$pid;}if($count>0&&count($raw)!==$count)$hasBadId=true;}
+		if($inserted<=0)return null;$artifactIds=$this->normalizeIdList($artifactIds);if(!$hasBadId&&$artifactIds!==null&&count($artifactIds)===$inserted)return array('status'=>'pass','mutation_scope'=>array('payout_row_recovery'=>'existing_positive_artifact_ids'),'report_path'=>$reportPath,'created_payout_ids'=>$artifactIds,'payout_rows_inserted'=>$inserted,'warnings'=>array('Recovered phase 6 from existing payout-row apply artifact; no payout rows were created.'));
+		$packagePath=$this->phaseArtifact($ledger,6,'package_path');if(!is_string($packagePath)||$packagePath==='')$packagePath=arraySafeVal($ledger,'run_directory').'/payout-row-packages.json';
+		$packages=$this->readArtifact($packagePath);if(!is_array($packages)||count($packages)!==count($reports))return $this->hold('Cannot recover payout IDs: payout package/apply artifact pairing is missing or mismatched.');
+		$window=$this->phaseTimeWindow($ledger,6);if($window===null)return $this->hold('Cannot recover payout IDs: phase 6 time window is missing or malformed.');
+		$ids=array();$expected=0;foreach($packages as $idx=>$package){$items=$this->items($package,'selected_accounts');$report=$reports[$idx];$count=intval(arraySafeVal($report,'payout_rows_inserted',arraySafeVal($report,'created_count',0)));if($count!==count($items))return $this->hold('Cannot recover payout IDs: payout apply count does not match approved selected accounts.');foreach($items as $item){$id=$this->strictPayoutIdMatch($item,$window[0],$window[1]);if($id===null)return $this->hold('Cannot recover payout IDs: exact matching payout row was not unique for account '.arraySafeVal($item,'account_id').'.');$ids[]=$id;$expected++;}}
+		$ids=$this->normalizeIdList($ids);if($ids===null||count($ids)!==$expected)return $this->hold('Cannot recover payout IDs: recovered ID list is malformed or duplicated.');
+		return array('status'=>'pass','mutation_scope'=>array('payout_row_recovery'=>'strict_read_only_existing_artifact'),'package_path'=>$packagePath,'report_path'=>$reportPath,'created_payout_ids'=>$ids,'payout_rows_inserted'=>$expected,'warnings'=>array('Recovered payout IDs from existing [0] payout-row apply artifact by strict DB matching; no payout rows were created and no wallet action was invoked.'));
+	}
+
+	private function strictPayoutIdMatch($item,$start,$end)
+	{
+		$rows=$this->guard->selectAll("SELECT id FROM payouts WHERE account_id=:account_id AND idcoin=:idcoin AND time BETWEEN :start_time AND :end_time AND amount=:amount AND IFNULL(completed,0)=0 AND (tx IS NULL OR tx='') ORDER BY id",array(':account_id'=>arraySafeVal($item,'account_id'),':idcoin'=>arraySafeVal($item,'account_coinid',arraySafeVal($item,'idcoin')),':start_time'=>$start,':end_time'=>$end,':amount'=>arraySafeVal($item,'projected_payout_row_amount',arraySafeVal($item,'amount'))));
+		if(!is_array($rows)||count($rows)!==1)return null;return $this->positiveId(arraySafeVal($rows[0],'id'));
+	}
+
+	private function phaseTimeWindow($ledger,$phase)
+	{
+		foreach((array)arraySafeVal($ledger,'phase_results',array()) as $r){if(intval(arraySafeVal($r,'phase_number',-1))!==$phase)continue;$start=strtotime((string)arraySafeVal($r,'started_at',''));$end=strtotime((string)arraySafeVal($r,'finished_at',''));if($start===false||$end===false||$end<$start)return null;return array($start,$end);}
+		return null;
 	}
 
 	private function rowCoinId($row){foreach(array('coin_id','coinid','account_coinid','idcoin') as $k){$id=$this->positiveId(arraySafeVal($row,$k));if($id!==null)return $id;}return null;}
