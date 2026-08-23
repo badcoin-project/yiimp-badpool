@@ -48,6 +48,12 @@ class BadpoolPaymentBatchRunner
 			if (!is_array($result)) $result = array('status'=>'fail', 'errors'=>array('Adapter returned a non-object result.'));
 			$status = isset($result['status']) ? strtolower((string)$result['status']) : 'fail';
 			if (!in_array($status, array('ok','pass','hold','refused','fail'), true)) $status = 'fail';
+			if ($number === 6 && in_array($status, array('ok','pass'), true) && !$this->validPhaseSixPayoutIds($ledger, $result)) {
+				$status = 'hold';
+				$result['status'] = 'hold';
+				$result['created_payout_ids'] = array();
+				$result['warnings'][] = 'Phase 6 refused readiness because payout rows were inserted without one positive created payout ID per inserted row.';
+			}
 			$entry = array('phase_number'=>$number, 'phase_name'=>$name, 'status'=>$status,
 				'mutation_scope'=>$this->arrayValue($result, 'mutation_scope'), 'report_path'=>$this->scalarValue($result, 'report_path'),
 				'package_path'=>$this->scalarValue($result, 'package_path'), 'checksum_summary'=>$this->arrayValue($result, 'checksums'),
@@ -83,7 +89,11 @@ class BadpoolPaymentBatchRunner
 		if (isset($result['checksums']) && is_array($result['checksums'])) $ledger['checksums']=array_merge($ledger['checksums'],$result['checksums']);
 	}
 
-	private function phasePassed($ledger, $phase) { foreach ($ledger['phase_results'] as $r) if (is_array($r) && isset($r['phase_number'],$r['status']) && (int)$r['phase_number']===$phase && in_array($r['status'],array('ok','pass'),true)) return true; return false; }
+	private function phasePassed($ledger, $phase) { foreach ($ledger['phase_results'] as $r) if (is_array($r) && isset($r['phase_number'],$r['status']) && (int)$r['phase_number']===$phase && in_array($r['status'],array('ok','pass'),true)) return $phase!==6 || $this->ledgerHasPositivePayoutIds($ledger); return false; }
+	private function validPhaseSixPayoutIds($ledger, $result) { $inserted=$this->positiveCount($result,'payout_rows_inserted'); if($inserted===0)$inserted=$this->positiveCount($result,'created_count'); $ids=$this->positiveIdList($this->arrayValue($result,'created_payout_ids')); if($inserted>0)return $ids!==null&&count($ids)===$inserted; if(count((array)$this->arrayValue($ledger,'selected_account_ids'))>0)return $ids!==null&&count($ids)>0; return $ids!==null; }
+	private function ledgerHasPositivePayoutIds($ledger) { $ids=$this->positiveIdList($this->arrayValue($ledger,'created_payout_ids')); return $ids!==null&&count($ids)>0; }
+	private function positiveCount($a,$key) { $v=isset($a[$key])?$a[$key]:0; return is_numeric($v)&&intval($v)>0?intval($v):0; }
+	private function positiveIdList($ids) { $out=array(); foreach((array)$ids as $id){ if(is_int($id)&&$id>0)$pid=$id; elseif(is_string($id)&&preg_match('/^[1-9][0-9]*$/',$id))$pid=intval($id); else return null; if(in_array($pid,$out,true))return null; $out[]=$pid; } sort($out,SORT_NUMERIC); return $out; }
 	private function arrayValue($a,$k) { return isset($a[$k]) && is_array($a[$k]) ? $a[$k] : array(); }
 	private function scalarValue($a,$k) { return isset($a[$k]) && is_string($a[$k]) ? $a[$k] : null; }
 	private function path($id) { return $this->root.'/'.$id.'/ledger.json'; }
