@@ -57,3 +57,43 @@ match the requested IDs, selected earning IDs must be positive and unique, and
 returned coin IDs must match the active coin when present.
 
 Active payout coin resolution follows the pool's operational coin flags (`enable`, `installed`, `visible`, and `auto_ready`). A blank or null `payout_min` does not by itself make a coin inactive; payout threshold logic remains owned by the payout-candidate guard command.
+
+## Confirmed-block payment-delay override
+
+Phase 4 continues to require every selected earning to appear in the ordinary
+`account-credit-clear-dryrun` result, which preserves the configured 12-hour
+hold by default. An operator may override only this delay (not any maturity,
+credit, payout-row, or wallet guard) while resuming a held batch:
+
+```text
+bin/badpool-batch-run --resume-batch-id=<batch-id> \
+  --payment-delay-override-package=/absolute/path/override.json \
+  --payment-delay-override-package-checksum=<sha256sum-of-exact-file> \
+  --operator-confirms-payment-delay-override=override_12h_payment_delay_for_exact_confirmed_block_scope \
+  --format=json
+```
+
+The JSON package has this exact shape (ID arrays contain canonical JSON positive
+integers, are unique, sorted, and must exactly equal the durable batch ledger):
+
+```json
+{
+  "schema": "badpool.confirmed_block_payment_delay_override.v1",
+  "generated_at": "2026-08-24T19:30:00Z",
+  "selected_coin_ids": [1267],
+  "selected_block_ids": [123],
+  "selected_account_ids": [456],
+  "selected_earning_ids": [789],
+  "scope_checksum": "<BadpoolGuardReport checksum of every preceding field>"
+}
+```
+
+After adding `scope_checksum`, compute the separate file checksum with
+`sha256sum override.json`. Packages expire after 15 minutes. Phase 4 re-queries
+durable `earnings INNER JOIN blocks INNER JOIN coins` evidence and requires each
+selected earning to remain status 1, each linked block to remain `generate`, and
+`blocks.confirmations >= coins.mature_blocks`. Missing rows, unconfirmed blocks,
+scope drift, stale packages, malformed or duplicate options, either checksum
+mismatch, and missing or inexact confirmation all fail closed. The override is
+read-only and does not itself credit accounts, create payout rows, or call a
+wallet.

@@ -1,5 +1,7 @@
 <?php
 
+require_once(dirname(__FILE__).'/BadpoolConfirmedBlockPaymentDelayOverride.php');
+
 /**
  * Production phase adapter for the guarded payment batch coordinator.
  *
@@ -32,7 +34,7 @@ class BadpoolPaymentBatchPhaseAdapter
 
 	public function selectEligibleWork($ledger, $options)
 	{
-		$reports=array(); $earnings=array(); $blocks=array(); $byCoin=array();
+		$reports=array(); $earnings=array(); $blocks=array(); $accounts=array(); $accountsByCoin=array(); $byCoin=array();
 		$remaining=intval(arraySafeVal($options,'batch_size',0));
 		foreach((array)$ledger['selected_coin_scope'] as $coin){
 			$r=$this->command('earnings-maturity-transition-dryrun',array('--coin-id='.$coin['id'],'--format=json'));
@@ -51,12 +53,13 @@ class BadpoolPaymentBatchPhaseAdapter
 				if(!$this->validateBoundedDryrun($r,$coin,$chosen,$remaining))return $this->hold('Bounded maturity selection did not match the requested durable scope for coin '.$coin['id'].'.',$reports);
 			}else{$r['items']['selected_earnings']=array();$r['items']['linked_blocks']=array();}
 			$coinEarnings=array();$coinBlocks=array();
-			foreach($this->items($r,'selected_earnings') as $row){$id=$this->positiveId(arraySafeVal($row,'earning_id'));if($id===null)return $this->hold('Bounded maturity selection returned a malformed earning ID for coin '.$coin['id'].'.',$reports);$coinEarnings[]=$id;$earnings[]=$id;}
+			foreach($this->items($r,'selected_earnings') as $row){$id=$this->positiveId(arraySafeVal($row,'earning_id'));if($id===null)return $this->hold('Bounded maturity selection returned a malformed earning ID for coin '.$coin['id'].'.',$reports);$accountId=$this->positiveId(arraySafeVal($row,'account_id',arraySafeVal($row,'userid')));if($accountId===null)return $this->hold('Bounded maturity selection returned a malformed account ID for coin '.$coin['id'].'.',$reports);$coinEarnings[]=$id;$earnings[]=$id;$accounts[]=$accountId;$accountsByCoin[(string)$coin['id']][]=$accountId;}
 			foreach($this->items($r,'linked_blocks') as $row){$id=$this->positiveId(arraySafeVal($row,'block_id'));if($id===null)return $this->hold('Bounded maturity selection returned a malformed block ID for coin '.$coin['id'].'.',$reports);$coinBlocks[]=$id;$blocks[]=$id;}
 			$remaining-=count($coinEarnings);$reports[]=$r;
 			$byCoin[(string)$coin['id']]=array('earning_ids'=>$this->normalizeIdList($coinEarnings),'block_ids'=>$this->normalizeIdList($coinBlocks));
 		}
-		return $this->artifact($ledger,1,'eligible-work-report.json',$reports,array('selected_earning_ids'=>$this->normalizeIdList($earnings),'selected_block_ids'=>$this->normalizeIdList($blocks),'selected_work_by_coin'=>$byCoin));
+		foreach($accountsByCoin as $coinId=>$ids)$accountsByCoin[$coinId]=array('account_ids'=>$this->uniqueIdList($ids));
+		return $this->artifact($ledger,1,'eligible-work-report.json',$reports,array('selected_earning_ids'=>$this->normalizeIdList($earnings),'selected_block_ids'=>$this->normalizeIdList($blocks),'selected_account_ids'=>$this->uniqueIdList($accounts),'selected_accounts_by_coin'=>$accountsByCoin,'selected_work_by_coin'=>$byCoin));
 	}
 
 	public function packageMaturity($ledger, $options) { return $this->packages($ledger,2,'earnings-maturity-transition-approval-package','maturity-packages.json','maturity'); }
@@ -64,11 +67,17 @@ class BadpoolPaymentBatchPhaseAdapter
 
 	public function paymentDelayCheck($ledger, $options)
 	{
-		$reports=array(); foreach((array)$ledger['selected_coin_scope'] as $coin){
+		$reports=array(); $eligible=array(); foreach((array)$ledger['selected_coin_scope'] as $coin){
 			$r=$this->command('account-credit-clear-dryrun',array('--coin-id='.$coin['id'],'--format=json'));
 			if(!$this->passed($r))return $this->hold('Payment delay check did not pass for coin '.$coin['id'].'.',$reports); $reports[]=$r;
+			foreach($this->items($r,'selected_earnings') as $row){$id=$this->positiveId(arraySafeVal($row,'earning_id'));if($id!==null)$eligible[]=$id;}
 		}
-		return $this->artifact($ledger,4,'payment-delay-report.json',$reports);
+		$expected=$this->normalizeIdList((array)arraySafeVal($ledger,'selected_earning_ids',array()));$eligible=$this->normalizeIdList($eligible);
+		if($eligible===$expected)return $this->artifact($ledger,4,'payment-delay-report.json',$reports,array('payment_delay_override_used'=>false));
+		$override=BadpoolConfirmedBlockPaymentDelayOverride::validate($options,$ledger,$this->guard);
+		if(arraySafeVal($override,'status')!=='pass')return $this->hold('The default payment delay remains active; selected earnings are not all older than the 12-hour threshold.',$reports,(array)arraySafeVal($override,'errors',array()));
+		$reports[]=array('status'=>'pass','read_only'=>true,'payment_delay_override'=>$override);
+		return $this->artifact($ledger,4,'payment-delay-report.json',$reports,array('payment_delay_override_used'=>true,'payment_delay_override_reason'=>arraySafeVal($override,'reason')));
 	}
 
 	public function creditAccounts($ledger, $options)
