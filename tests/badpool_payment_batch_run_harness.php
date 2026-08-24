@@ -131,23 +131,32 @@ class PayoutRecoveryGuard extends ProductionFixtureGuard {
 		return parent::selectAll($sql,$params);
 	}
 }
-function run_payout_id_recovery_case($suffix,$rows,&$resumeCommands){
+function run_payout_id_recovery_case($suffix,$rows,&$resumeCommands,$successfulApply=true){
 	global $root;
 	$caseRoot=$root.'-payout-id-recovery-'.$suffix;
 	$firstExec=new ZeroArtifactExecutor();$guard=new PayoutRecoveryGuard($rows);
 	$first=(new BadpoolPaymentBatchRunner(new BadpoolPaymentBatchPhaseAdapter($guard,array($firstExec,'run')),$caseRoot))->run(array('mode'=>'auto','scope'=>'all-active-payout-coins','only'=>'scrypt','batch_size'=>2));
+	$ledger=json_decode(file_get_contents($first['ledger_path']),true);$kept=array();foreach($ledger['phase_results'] as $entry)if(intval($entry['phase_number'])!==6)$kept[]=$entry;
+	$package=$first['run_directory'].'/payout-row-packages.json';$report=$first['run_directory'].'/payout-row-apply-report.json';
+	$kept[]=array('phase_number'=>6,'status'=>'hold','started_at'=>'2026-08-22T01:27:16+00:00','finished_at'=>'2026-08-22T01:27:16+00:00');
+	if($successfulApply)$kept[]=array('phase_number'=>6,'status'=>'pass','started_at'=>'2026-08-23T00:08:16+00:00','finished_at'=>'2026-08-23T00:08:17+00:00','package_path'=>$package,'report_path'=>$report);
+	$kept[]=array('phase_number'=>6,'status'=>'hold','started_at'=>'2026-08-23T22:21:57+00:00','finished_at'=>'2026-08-23T22:21:57+00:00');$ledger['phase_results']=$kept;file_put_contents($first['ledger_path'],json_encode($ledger,JSON_PRETTY_PRINT|JSON_UNESCAPED_SLASHES)."\n",LOCK_EX);
 	$resumeExec=new ZeroArtifactExecutor();
 	$resumed=(new BadpoolPaymentBatchRunner(new BadpoolPaymentBatchPhaseAdapter($guard,array($resumeExec,'run')),$caseRoot))->run(array('mode'=>'auto','scope'=>'all-active-payout-coins','only'=>'scrypt','batch_size'=>2,'resume_batch_id'=>$first['batch_id']));
 	$resumeCommands=array_map(function($call){return $call[0];},$resumeExec->calls);
 	return $resumed;
 }
-$resumeCommands=array();$one=run_payout_id_recovery_case('one',array(array('id'=>881,'account_id'=>9,'idcoin'=>1267,'time'=>'window','amount'=>'12.50000000')),$resumeCommands);
+$successfulWindow=strtotime('2026-08-23T00:08:16+00:00');
+$resumeCommands=array();$one=run_payout_id_recovery_case('one',array(array('id'=>881,'account_id'=>9,'idcoin'=>1267,'time'=>$successfulWindow,'amount'=>'12.50000000')),$resumeCommands);
 expect_batch($one['batch_state']==='READY_FOR_WALLET_APPROVAL'&&$one['created_payout_ids']===array(881),'strict one-match payout ID recovery failed',$fail);
 expect_batch(!in_array('payout-row-apply',$resumeCommands,true)&&!in_array('wallet-send-apply',$resumeCommands,true),'recovery must not reapply payout rows or invoke wallet send',$fail);
+$resumeCommands=array();$holds=run_payout_id_recovery_case('holds-only',array(array('id'=>880,'account_id'=>9,'idcoin'=>1267,'time'=>strtotime('2026-08-22T01:27:16+00:00'),'amount'=>'12.50000000')),$resumeCommands,false);
+expect_batch($holds['status']==='hold'&&$holds['batch_state']==='HOLD','stale hold-only phase windows must not recover payout IDs',$fail);
+expect_batch(!in_array('payout-row-apply',$resumeCommands,true),'hold-only recovery must not reapply payout rows',$fail);
 $resumeCommands=array();$none=run_payout_id_recovery_case('none',array(),$resumeCommands);
 expect_batch($none['status']==='hold'&&$none['batch_state']==='HOLD','zero-match payout ID recovery must hold',$fail);
 expect_batch(!in_array('payout-row-apply',$resumeCommands,true),'zero-match recovery must not reapply payout rows',$fail);
-$resumeCommands=array();$many=run_payout_id_recovery_case('many',array(array('id'=>882,'account_id'=>9,'idcoin'=>1267,'time'=>'window','amount'=>'12.50000000'),array('id'=>883,'account_id'=>9,'idcoin'=>1267,'time'=>'window','amount'=>'12.50000000')),$resumeCommands);
+$resumeCommands=array();$many=run_payout_id_recovery_case('many',array(array('id'=>882,'account_id'=>9,'idcoin'=>1267,'time'=>$successfulWindow,'amount'=>'12.50000000'),array('id'=>883,'account_id'=>9,'idcoin'=>1267,'time'=>$successfulWindow,'amount'=>'12.50000000')),$resumeCommands);
 expect_batch($many['status']==='hold'&&$many['batch_state']==='HOLD','multiple-match payout ID recovery must hold',$fail);
 expect_batch(!in_array('payout-row-apply',$resumeCommands,true),'multiple-match recovery must not reapply payout rows',$fail);
 
@@ -156,5 +165,5 @@ $j=json_decode(command_batch(array('--format=json'),$rc),true);expect_batch(is_a
 $bad=json_decode(command_batch(array('--only=randomx','--format=json'),$rc),true);expect_batch($rc===2&&$bad['status']==='refused','invalid only',$fail);$bad=json_decode(command_batch(array('--batch-size=0','--format=json'),$rc),true);expect_batch($rc===2&&$bad['status']==='refused','invalid size',$fail);
 $text=command_batch(array('--format=text'),$rc);foreach(array('CLASSIFICATION=','BATCH_STATE=','NEXT_ACTION=','run_directory=','ledger_path=','7      Send Wallet Payment          BLOCKED_HUMAN_REQUIRED','9      Batch Complete') as $needle)expect_batch(strpos($text,$needle)!==false,'text '.$needle,$fail);
 $preview=new FakeBatchGuardCommand();ob_start();$previewRc=$preview->run(array('batch-run-preview','--format=json'));$previewJson=json_decode(ob_get_clean(),true);expect_batch($previewRc===0&&$previewJson['status']==='ok'&&$previewJson['read_only']===true&&$previewJson['db_mutations']===false,'preview remains read only',$fail);expect_batch($previewJson['wallet_sends']===false&&$previewJson['inferred_coin_scope']['coin_ids_required']===false,'preview wallet/default scope',$fail);
-function rrmdir_batch($d){if(!is_dir($d))return;foreach(scandir($d) as $x)if($x!=='.'&&$x!=='..'){is_dir($d.'/'.$x)?rrmdir_batch($d.'/'.$x):unlink($d.'/'.$x);}rmdir($d);}foreach(array($root,$root.'-hold',$root3,$legacyRoot,$root.'-zero-id',$productionRoot,$recoveryRoot,$root.'-payout-id-recovery-one',$root.'-payout-id-recovery-none',$root.'-payout-id-recovery-many') as $d)rrmdir_batch($d);
+function rrmdir_batch($d){if(!is_dir($d))return;foreach(scandir($d) as $x)if($x!=='.'&&$x!=='..'){is_dir($d.'/'.$x)?rrmdir_batch($d.'/'.$x):unlink($d.'/'.$x);}rmdir($d);}foreach(array($root,$root.'-hold',$root3,$legacyRoot,$root.'-zero-id',$productionRoot,$recoveryRoot,$root.'-payout-id-recovery-one',$root.'-payout-id-recovery-holds-only',$root.'-payout-id-recovery-none',$root.'-payout-id-recovery-many') as $d)rrmdir_batch($d);
 if($fail){echo "Badpool payment batch run harness FAILED\n - ".implode("\n - ",$fail)."\n";exit(1);}echo "Badpool payment batch run harness passed\n";
