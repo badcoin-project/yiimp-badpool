@@ -169,17 +169,32 @@ class BadpoolPaymentBatchPhaseAdapter
 
 	private function recoverExistingPayoutApply($ledger)
 	{
-		$reportPath=$this->phaseArtifact($ledger,6,'report_path');if(!is_string($reportPath)||$reportPath==='')$reportPath=arraySafeVal($ledger,'run_directory').'/payout-row-apply-report.json';
-		$reports=$this->readArtifact($reportPath);if(!is_array($reports))return null;
+		$apply=$this->successfulPhaseApply($ledger,6);$reportPath=arraySafeVal((array)$apply,'report_path');$reports=arraySafeVal((array)$apply,'reports');
+		if($apply===null){
+			$paths=array(arraySafeVal($ledger,'run_directory').'/payout-row-apply-report.json');foreach((array)arraySafeVal($ledger,'phase_results',array()) as $r)if(intval(arraySafeVal($r,'phase_number',-1))===6)$paths[]=arraySafeVal($r,'report_path');
+			foreach(array_unique($paths) as $path)if(is_string($path)&&$path!==''&&$this->artifactInsertCount($this->readArtifact($path))>0)return $this->hold('Cannot recover payout IDs: no successful phase 6 apply entry matches the existing payout-row apply artifact.');
+			return null;
+		}
 		$inserted=0;$artifactIds=array();$hasBadId=false;foreach($reports as $report){$count=intval(arraySafeVal($report,'payout_rows_inserted',arraySafeVal($report,'created_count',0)));$inserted+=$count;$raw=(array)arraySafeVal($report,'created_payout_ids',array());foreach($raw as $id){$pid=$this->positiveId($id);if($pid===null)$hasBadId=true;else $artifactIds[]=$pid;}if($count>0&&count($raw)!==$count)$hasBadId=true;}
-		if($inserted<=0)return null;$artifactIds=$this->normalizeIdList($artifactIds);if(!$hasBadId&&$artifactIds!==null&&count($artifactIds)===$inserted)return array('status'=>'pass','mutation_scope'=>array('payout_row_recovery'=>'existing_positive_artifact_ids'),'report_path'=>$reportPath,'created_payout_ids'=>$artifactIds,'payout_rows_inserted'=>$inserted,'warnings'=>array('Recovered phase 6 from existing payout-row apply artifact; no payout rows were created.'));
-		$packagePath=$this->phaseArtifact($ledger,6,'package_path');if(!is_string($packagePath)||$packagePath==='')$packagePath=arraySafeVal($ledger,'run_directory').'/payout-row-packages.json';
+		$artifactIds=$this->normalizeIdList($artifactIds);if(!$hasBadId&&$artifactIds!==null&&count($artifactIds)===$inserted)return array('status'=>'pass','mutation_scope'=>array('payout_row_recovery'=>'existing_positive_artifact_ids'),'report_path'=>$reportPath,'created_payout_ids'=>$artifactIds,'payout_rows_inserted'=>$inserted,'warnings'=>array('Recovered phase 6 from existing payout-row apply artifact; no payout rows were created.'));
+		$packagePath=arraySafeVal($apply,'package_path');if(!is_string($packagePath)||$packagePath==='')$packagePath=arraySafeVal($ledger,'run_directory').'/payout-row-packages.json';
 		$packages=$this->readArtifact($packagePath);if(!is_array($packages)||count($packages)!==count($reports))return $this->hold('Cannot recover payout IDs: payout package/apply artifact pairing is missing or mismatched.');
-		$window=$this->phaseTimeWindow($ledger,6);if($window===null)return $this->hold('Cannot recover payout IDs: phase 6 time window is missing or malformed.');
+		$window=$apply['window'];
 		$ids=array();$expected=0;foreach($packages as $idx=>$package){$items=$this->items($package,'selected_accounts');$report=$reports[$idx];$count=intval(arraySafeVal($report,'payout_rows_inserted',arraySafeVal($report,'created_count',0)));if($count!==count($items))return $this->hold('Cannot recover payout IDs: payout apply count does not match approved selected accounts.');foreach($items as $item){$id=$this->strictPayoutIdMatch($item,$window[0],$window[1]);if($id===null)return $this->hold('Cannot recover payout IDs: exact matching payout row was not unique for account '.arraySafeVal($item,'account_id').'.');$ids[]=$id;$expected++;}}
 		$ids=$this->normalizeIdList($ids);if($ids===null||count($ids)!==$expected)return $this->hold('Cannot recover payout IDs: recovered ID list is malformed or duplicated.');
 		return array('status'=>'pass','mutation_scope'=>array('payout_row_recovery'=>'strict_read_only_existing_artifact'),'package_path'=>$packagePath,'report_path'=>$reportPath,'created_payout_ids'=>$ids,'payout_rows_inserted'=>$expected,'warnings'=>array('Recovered payout IDs from existing [0] payout-row apply artifact by strict DB matching; no payout rows were created and no wallet action was invoked.'));
 	}
+
+	private function successfulPhaseApply($ledger,$phase)
+	{
+		$match=null;foreach((array)arraySafeVal($ledger,'phase_results',array()) as $r){
+			if(intval(arraySafeVal($r,'phase_number',-1))!==$phase||!in_array(strtolower((string)arraySafeVal($r,'status','')),array('pass','ok'),true))continue;
+			$path=arraySafeVal($r,'report_path');if(!is_string($path)||$path==='')continue;$reports=$this->readArtifact($path);if($this->artifactInsertCount($reports)<=0)continue;
+			$window=$this->phaseTimeWindow($r);if($window===null)continue;$match=array('report_path'=>$path,'package_path'=>arraySafeVal($r,'package_path'),'reports'=>$reports,'window'=>$window);
+		}return $match;
+	}
+
+	private function artifactInsertCount($reports){if(!is_array($reports))return 0;$count=0;foreach($reports as $report)$count+=intval(arraySafeVal($report,'payout_rows_inserted',arraySafeVal($report,'created_count',0)));return $count;}
 
 	private function strictPayoutIdMatch($item,$start,$end)
 	{
@@ -187,10 +202,9 @@ class BadpoolPaymentBatchPhaseAdapter
 		if(!is_array($rows)||count($rows)!==1)return null;return $this->positiveId(arraySafeVal($rows[0],'id'));
 	}
 
-	private function phaseTimeWindow($ledger,$phase)
+	private function phaseTimeWindow($r)
 	{
-		foreach((array)arraySafeVal($ledger,'phase_results',array()) as $r){if(intval(arraySafeVal($r,'phase_number',-1))!==$phase)continue;$start=strtotime((string)arraySafeVal($r,'started_at',''));$end=strtotime((string)arraySafeVal($r,'finished_at',''));if($start===false||$end===false||$end<$start)return null;return array($start,$end);}
-		return null;
+		$start=strtotime((string)arraySafeVal($r,'started_at',''));$end=strtotime((string)arraySafeVal($r,'finished_at',''));if($start===false||$end===false||$end<$start)return null;return array($start,$end);
 	}
 
 	private function rowCoinId($row){foreach(array('coin_id','coinid','account_coinid','idcoin') as $k){$id=$this->positiveId(arraySafeVal($row,$k));if($id!==null)return $id;}return null;}
