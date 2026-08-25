@@ -179,15 +179,8 @@ void db_update_workers(YAAMP_DB *db)
 		if(client->deleted) continue;
 		if(!client->workerid) continue;
 
-		if(client->speed < 0.00001)
-		{
-			clientlog(client, "speed %f", client->speed);
-			shutdown(client->sock->sock, SHUT_RDWR);
-			db_clear_worker(db, client);
-			object_delete(client);
-			continue;
-		}
-
+		// Speed is an estimate for reporting, not a connection-health signal.
+		// Low-hash miners can legitimately go long periods between shares.
 		client->speed *= 0.8;
 		if(client->difficulty_written == client->difficulty_actual) continue;
 
