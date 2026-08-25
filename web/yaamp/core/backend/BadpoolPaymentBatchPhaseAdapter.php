@@ -73,7 +73,7 @@ class BadpoolPaymentBatchPhaseAdapter
 			foreach($this->items($r,'selected_earnings') as $row){$id=$this->positiveId(arraySafeVal($row,'earning_id'));if($id!==null)$eligible[]=$id;}
 		}
 		$expected=$this->normalizeIdList((array)arraySafeVal($ledger,'selected_earning_ids',array()));$eligible=$this->normalizeIdList($eligible);
-		if($eligible===$expected)return $this->artifact($ledger,4,'payment-delay-report.json',$reports,array('payment_delay_override_used'=>false));
+		if($expected!==null&&$eligible!==null&&array_diff($expected,$eligible)===array())return $this->artifact($ledger,4,'payment-delay-report.json',$reports,array('payment_delay_override_used'=>false));
 		$override=BadpoolConfirmedBlockPaymentDelayOverride::validate($options,$ledger,$this->guard);
 		if(arraySafeVal($override,'status')!=='pass')return $this->hold('The default payment delay remains active; selected earnings are not all older than the 12-hour threshold.',$reports,(array)arraySafeVal($override,'errors',array()));
 		$reports[]=array('status'=>'pass','read_only'=>true,'payment_delay_override'=>$override);

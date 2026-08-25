@@ -32,10 +32,15 @@ $duplicateScope=$scope;$duplicateScope['selected_earning_ids']=array(11,11);dela
 $context=file_get_contents($root.'/web/yaamp/core/backend/BadpoolGuardContext.php');delay_expect(strpos($context,'Duplicate option refused: --')!==false,'CLI duplicate option refusal missing',$fail);
 $runDir=sys_get_temp_dir().'/badpool-delay-phase-'.getmypid();@mkdir($runDir);
 $phaseLedger=array_merge($ledger,array('run_directory'=>$runDir));
-$executor=function($command,$args){return array('status'=>'pass','items'=>array('selected_earnings'=>array()));};
-$adapter=new BadpoolPaymentBatchPhaseAdapter($guard,$executor);
-$default=$adapter->paymentDelayCheck($phaseLedger,array());delay_expect($default['status']==='hold','default 12-hour delay did not hold',$fail);
-delay_package($path,time(),$scope);$liveOptions=delay_options($path);$override=$adapter->paymentDelayCheck($phaseLedger,$liveOptions);delay_expect($override['status']==='pass'&&$override['payment_delay_override_used']===true,'explicit confirmed-block override did not pass phase 4',$fail);
+function delay_executor($earningIds){return function($command,$args)use($earningIds){$items=array();foreach($earningIds as $id)$items[]=array('earning_id'=>$id);return array('status'=>'pass','items'=>array('selected_earnings'=>$items));};}
+$exactAdapter=new BadpoolPaymentBatchPhaseAdapter($guard,delay_executor(array(11,12)));$exact=$exactAdapter->paymentDelayCheck($phaseLedger,array());
+delay_expect($exact['status']==='pass'&&$exact['payment_delay_override_used']===false,'default exact delayed eligibility did not pass without override',$fail);
+$supersetAdapter=new BadpoolPaymentBatchPhaseAdapter($guard,delay_executor(array(10,11,12,13)));$superset=$supersetAdapter->paymentDelayCheck($phaseLedger,array());
+delay_expect($superset['status']==='pass'&&$superset['payment_delay_override_used']===false,'default delayed eligibility superset did not pass without reading an override package',$fail);
+$missingAdapter=new BadpoolPaymentBatchPhaseAdapter($guard,delay_executor(array(11)));$default=$missingAdapter->paymentDelayCheck($phaseLedger,array());
+delay_expect($default['status']==='hold','default 12-hour delay did not hold when a selected earning was missing',$fail);
+delay_package($path,time(),$scope);$liveOptions=delay_options($path);$override=$missingAdapter->paymentDelayCheck($phaseLedger,$liveOptions);
+delay_expect($override['status']==='pass'&&$override['payment_delay_override_used']===true,'explicit confirmed-block override did not pass phase 4 when selected delayed eligibility was missing',$fail);
 @unlink($runDir.'/payment-delay-report.json');@rmdir($runDir);
 @unlink($path);
 if($fail){echo "Badpool confirmed-block payment-delay override harness FAILED\n - ".implode("\n - ",$fail)."\n";exit(1);}echo "Badpool confirmed-block payment-delay override harness passed\n";
