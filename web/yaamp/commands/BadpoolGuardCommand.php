@@ -7,6 +7,7 @@ require_once(dirname(__FILE__).'/../core/backend/BadpoolBackwardMaturityApproval
 require_once(dirname(__FILE__).'/../core/backend/BadpoolBackwardMaturityApply.php');
 require_once(dirname(__FILE__).'/../core/backend/BadpoolPaymentBatchRunner.php');
 require_once(dirname(__FILE__).'/../core/backend/BadpoolPaymentBatchPhaseAdapter.php');
+require_once(dirname(__FILE__).'/../core/backend/BadpoolConfirmedBlockPaymentDelayOverride.php');
 require_once(dirname(__FILE__).'/../core/rpc/wallet-rpc.php');
 
 class BadpoolGuardCommand extends CConsoleCommand
@@ -294,6 +295,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 			"       php yaamp/yiic.php badpoolguard forward-catchup-stage1-drain-plan --coin-id=<id> --selection-limit=<n> [--internal-batch-size=25] --format=json\n".
 			"       php yaamp/yiic.php badpoolguard forward-catchup-stage1-drain-approval-package --coin-id=<id> --selection-limit=<n> [--internal-batch-size=25] --format=json\n".
 			"       ".implode(' ', BadpoolStage1Manifest::applyCommandShape())."\n".
+			"       php yaamp/yiic.php badpoolguard batch-run --resume-batch-id=<id> --payment-delay-override-package=<path> --payment-delay-override-package-checksum=<file-sha256> --operator-confirms-payment-delay-override=".BadpoolConfirmedBlockPaymentDelayOverride::CONFIRMATION." --format=json\n".
 			"       php yaamp/yiic.php badpoolguard forward-catchup-stage1-apply --coin-id=<id> --limit=<approved_n> --selected-count=<approved_n> --approval-package-checksum=<sha256> --batch-scope-checksum=<sha256> --projected-mutation-checksum=<sha256> --projected-earnings-checksum=<sha256> --operator-confirms-attribution-model=block_userid_single_recipient --format=json\n".
 			"       php yaamp/yiic.php badpoolguard earnings-maturity-transition-dryrun --coin-id=<id> [--selected-block-ids=<csv>] [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard backward-maturity-transition-dryrun --coin-id=1267 --selected-earning-ids=<explicit-csv> --selected-block-ids=<explicit-csv> --expected-inventory-checksum=<sha256> --format=json\n".
@@ -365,6 +367,10 @@ class BadpoolGuardCommand extends CConsoleCommand
 		$options=array('mode'=>$mode,'scope'=>$scope,'only'=>$only===''?null:$only,'batch_size'=>preg_match('/^[1-9][0-9]*$/',$size)?intval($size):0);
 		if(!$this->guard->isValid()) return array_merge($this->paymentBatchRunRefusal($options),array('errors'=>array('Invalid batch-run options.')));
 		$resume=$this->guard->getOption('resume-batch-id',null); if($resume!==null)$options['resume_batch_id']=(string)$resume;
+		$overrideMap=array('payment-delay-override-package'=>'payment_delay_override_package','payment-delay-override-package-checksum'=>'payment_delay_override_package_checksum','operator-confirms-payment-delay-override'=>'operator_confirms_payment_delay_override');
+		foreach($overrideMap as $cli=>$key){$value=$this->guard->getOption($cli,null);if($value!==null)$options[$key]=(string)$value;}
+		$overrideValidation=BadpoolConfirmedBlockPaymentDelayOverride::validateOptions($options);
+		if(arraySafeVal($overrideValidation,'status')==='refused')return array_merge($this->paymentBatchRunRefusal($options),array('errors'=>arraySafeVal($overrideValidation,'errors',array())));
 		$adapter=$this->paymentBatchPhaseAdapter();
 		$runner=new BadpoolPaymentBatchRunner($adapter);
 		$report=$runner->run($options);

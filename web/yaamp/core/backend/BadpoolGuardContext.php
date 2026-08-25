@@ -31,6 +31,9 @@ class BadpoolGuardContext
 		'batch-size',
 		'stop-before-wallet-send',
 		'resume-batch-id',
+		'payment-delay-override-package',
+		'payment-delay-override-package-checksum',
+		'operator-confirms-payment-delay-override',
 	);
 
 	private $dangerousOptions = array(
@@ -285,7 +288,7 @@ class BadpoolGuardContext
 	private function parseOptions($args)
 	{
 		$options = array();
-		$batchOptions = array('mode', 'scope', 'only', 'batch-size', 'stop-before-wallet-send', 'resume-batch-id');
+		$batchOptions = array('mode', 'scope', 'only', 'batch-size', 'stop-before-wallet-send', 'resume-batch-id', 'payment-delay-override-package', 'payment-delay-override-package-checksum', 'operator-confirms-payment-delay-override');
 		foreach ($args as $arg) {
 			if (!preg_match('/^--([^=]+)(=(.*))?$/', $arg, $matches)) {
 				$this->addError("Unknown argument refused: $arg");
