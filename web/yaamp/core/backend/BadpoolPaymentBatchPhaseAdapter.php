@@ -116,10 +116,17 @@ class BadpoolPaymentBatchPhaseAdapter
 	{
 		$reports=array();foreach((array)$ledger['selected_coin_scope'] as $coin){
 			$args=array('--coin-id='.$coin['id']);if($kind==='maturity'){$work=(array)arraySafeVal((array)arraySafeVal($ledger,'selected_work_by_coin',array()),(string)$coin['id'],array());$ids=(array)arraySafeVal($work,'block_ids',array());if(!$ids)continue;$args[]='--selected-block-ids='.implode(',',$ids);}
+			if($kind==='credit'&&$this->paymentDelayOverrideUsed($ledger)){$work=(array)arraySafeVal((array)arraySafeVal($ledger,'selected_work_by_coin',array()),(string)$coin['id'],array());$ids=$this->normalizeIdList((array)arraySafeVal($work,'earning_ids',array()));if(!$ids)continue;$args[]='--selected-earning-ids='.implode(',',$ids);}
 			$args[]='--format=json';$r=$this->command($command,$args);if(!$this->passed($r))return $this->hold('Approval package generation did not pass for coin '.$coin['id'].'.',$reports);
 			$r['batch_coin_id']=intval($coin['id']);
 			if(!$this->packageWithinLedgerScope($r,$ledger,$kind,$coin))return $this->hold('Approval package did not exactly match the durable per-coin batch selection for coin '.$coin['id'].'.',$reports);$reports[]=$r;
 		}return $this->artifact($ledger,$phase,$file,$reports,array(),true);
+	}
+
+	private function paymentDelayOverrideUsed($ledger)
+	{
+		foreach((array)arraySafeVal($ledger,'phase_results',array()) as $result)if(intval(arraySafeVal($result,'phase_number',-1))===4&&arraySafeVal($result,'status')==='pass')return arraySafeVal($result,'payment_delay_override_used')===true;
+		return false;
 	}
 
 	private function applyPackages($ledger,$sourcePhase,$phase,$command,$file,$path=null,$checksums=null)
@@ -141,6 +148,7 @@ class BadpoolPaymentBatchPhaseAdapter
 		if($kind==='payout'){$expected=$this->normalizeIdList((array)arraySafeVal((array)arraySafeVal((array)arraySafeVal($ledger,'selected_accounts_by_coin',array()),$coinId,array()),'account_ids',array()));}
 		else{$expected=$this->normalizeIdList((array)arraySafeVal((array)arraySafeVal((array)arraySafeVal($ledger,'selected_work_by_coin',array()),$coinId,array()),'earning_ids',array()));}
 		$items=$this->items($package,$key);$actual=$this->idsFromRows($items,$field);if($actual===null)return false;foreach($items as $row){$rowCoin=$this->rowCoinId($row);if($rowCoin!==null&&$rowCoin!==intval($coin['id']))return false;}
+		if($kind==='credit'){$expectedAccounts=$this->normalizeIdList((array)arraySafeVal((array)arraySafeVal((array)arraySafeVal($ledger,'selected_accounts_by_coin',array()),$coinId,array()),'account_ids',array()));$actualAccounts=array();foreach($items as $row){$accountId=$this->positiveId(arraySafeVal($row,'account_id',arraySafeVal($row,'userid')));if($accountId===null)return false;$actualAccounts[]=$accountId;}$actualAccounts=$this->uniqueIdList($actualAccounts);if($expectedAccounts===null||$actualAccounts===null||$actualAccounts!==$expectedAccounts)return false;}
 		if($expected&&!$actual)return false;return $actual===$expected;
 	}
 
