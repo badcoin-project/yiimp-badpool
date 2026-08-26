@@ -119,7 +119,9 @@ class BadpoolPaymentBatchPhaseAdapter
 			if($kind==='credit'){$work=(array)arraySafeVal((array)arraySafeVal($ledger,'selected_work_by_coin',array()),(string)$coin['id'],array());$ids=$this->normalizeIdList((array)arraySafeVal($work,'earning_ids',array()));if(!$ids)continue;$args[]='--selected-earning-ids='.implode(',',$ids);}
 			$args[]='--format=json';$r=$this->command($command,$args);if(!$this->passed($r))return $this->hold('Approval package generation did not pass for coin '.$coin['id'].'.',$reports);
 			$r['batch_coin_id']=intval($coin['id']);
-			if(!$this->packageWithinLedgerScope($r,$ledger,$kind,$coin))return $this->hold('Approval package did not exactly match the durable per-coin batch selection for coin '.$coin['id'].'.',$reports);$reports[]=$r;
+			if(!$this->packageWithinLedgerScope($r,$ledger,$kind,$coin))return $this->hold('Approval package did not exactly match the durable per-coin batch selection for coin '.$coin['id'].'.',$reports);
+			if($kind==='payout'&&!$this->items($r,'selected_accounts'))continue;
+			$reports[]=$r;
 		}return $this->artifact($ledger,$phase,$file,$reports,array(),true);
 	}
 
