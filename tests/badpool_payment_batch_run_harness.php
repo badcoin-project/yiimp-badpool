@@ -61,6 +61,7 @@ expect_batch($productionLedger['selected_accounts_by_coin']['1267']['account_ids
 expect_batch(in_array('earnings-maturity-transition-apply',$productionCommands,true)&&in_array('account-credit-clear-apply',$productionCommands,true)&&in_array('payout-row-apply',$productionCommands,true),'guarded production applies invoked',$fail);
 expect_batch(!in_array('wallet-send-apply',$productionCommands,true)&&count($production['phase_results'])===7,'production adapter wallet boundary',$fail);
 $maturityPackageCall=array_values(array_filter($productionExec->calls,function($call){return $call[0]==='earnings-maturity-transition-approval-package';}));expect_batch(strpos(implode(' ',$maturityPackageCall[0][1]),'--selected-block-ids=4')!==false,'maturity package bound to selected blocks',$fail);
+$creditPackageCall=array_values(array_filter($productionExec->calls,function($call){return $call[0]==='account-credit-clear-approval-package';}));expect_batch(count($creditPackageCall)===1&&in_array('--selected-earning-ids=11,12',$creditPackageCall[0][1],true),'normal post-delay credit package was not bound to coin 1267 durable earning IDs',$fail);
 
 
 class StrictFixtureGuard extends ProductionFixtureGuard {
