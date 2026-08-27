@@ -6,14 +6,15 @@ $percent = 16;
 $algo = user()->getState('yaamp-algo');
 $factor = yaamp_algo_mBTC_factor($algo); // 1000 sha (GH/s), 1 for normal MH/s
 
-$step = 15*60;
+$step = 5*60;
 $t = time() - 24*60*60;
 $t = intval($t / $step) * $step;
 $stats = getdbolist('db_hashrate', "time >= $t AND algo=:algo ORDER BY time", array(':algo'=>$algo));
 $tfirst = empty($stats) ? $t : $stats[0]->time;
 $averages = array();
 
-for($i = 0; $i < 95-count($stats); $i++) {
+$historyPoints = 24*60*60/$step;
+for($i = 0; $i < $historyPoints-1-count($stats); $i++) {
 	$d = date('Y-m-d H:i:s', $t);
 	$averages[] = array($d, 0);
 	$t += $step;
