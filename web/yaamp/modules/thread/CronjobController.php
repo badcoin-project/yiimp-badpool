@@ -3,6 +3,7 @@
 require_once('serverconfig.php');
 require_once('yaamp/defaultconfig.php');
 require_once(dirname(__FILE__).'/../../components/BackendCycleGuard.php');
+require_once(dirname(__FILE__).'/../../core/backend/BadpoolStatsRefresh.php');
 
 class CronjobController extends CommonController
 {
@@ -50,6 +51,13 @@ class CronjobController extends CommonController
 	{
 		// Production freeze: validation proves the boundary without invoking legacy callbacks.
 		$this->runGuardedCycle('loop2', array());
+	}
+
+	public function actionRunBadpoolStats()
+	{
+		$report = (new BadpoolStatsRefresh)->run();
+		echo json_encode($report, JSON_UNESCAPED_SLASHES)."\n";
+		if ($report['status'] !== 'success') exit(2);
 	}
 
 	private function runGuardedCycle($route, array $steps)
