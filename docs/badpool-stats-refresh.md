@@ -22,6 +22,8 @@ The component's exact write boundary is `hashrate`, `hashstats`, and `hashuser`.
 
 Pool and user samples store raw rate-calculator results, including legitimate rates below 1,000 H/s. User samples do not retain the legacy 20% smoothing: at a five-minute cadence smoothing would make changes lag across several graph points, while the existing rate function already supplies the intended recent-share estimate.
 
+The pool and miner history readers use the same five-minute cadence. Miner history retains its 24-hour valid, smoothed-display, and rejected series, and substitutes live share-derived rates for the newest interval. Pool history renders stored sample timestamps directly and uses the five-minute cadence when padding the beginning of its 24-hour range.
+
 ## Why the legacy functions remain frozen
 
 `BackendStatsUpdate()` cannot safely be reused because it deletes stale stratums and workers, removes empty history, calculates rental/profitability state, and writes generic financial and algorithm state. `BackendStatsUpdate2()` mixes user mining history with renter history, account balance history, earnings conversion, and paid-earnings deletion. The new route calls neither function. `actionRunLoop2()` and `actionRunBlocks()` retain their deliberately empty callback lists.

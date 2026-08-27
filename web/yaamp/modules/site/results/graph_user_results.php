@@ -10,7 +10,7 @@ if(empty($algo)) $algo = user()->getState('yaamp-algo');
 
 $target = yaamp_hashrate_constant($algo);
 
-$step = 15*60;
+$step = 5*60;
 $t = time() - 24*60*60;
 
 $stats = getdbolist('db_hashuser', "time>$t and algo=:algo and userid=$user->id order by time", array(':algo'=>$algo));
