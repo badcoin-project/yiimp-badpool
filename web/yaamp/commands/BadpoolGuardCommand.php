@@ -7,6 +7,7 @@ require_once(dirname(__FILE__).'/../core/backend/BadpoolBackwardMaturityApproval
 require_once(dirname(__FILE__).'/../core/backend/BadpoolBackwardMaturityApply.php');
 require_once(dirname(__FILE__).'/../core/backend/BadpoolPaymentBatchRunner.php');
 require_once(dirname(__FILE__).'/../core/backend/BadpoolPaymentBatchPhaseAdapter.php');
+require_once(dirname(__FILE__).'/../core/backend/BadpoolCompletedPayoutBatchCloseout.php');
 require_once(dirname(__FILE__).'/../core/backend/BadpoolConfirmedBlockPaymentDelayOverride.php');
 require_once(dirname(__FILE__).'/../core/rpc/wallet-rpc.php');
 
@@ -70,6 +71,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 		'status-runner',
 		'batch-run-preview',
 		'batch-run',
+		'completed-payout-batch-closeout',
 	);
 
 	public function run($args)
@@ -259,6 +261,9 @@ class BadpoolGuardCommand extends CConsoleCommand
 			case 'batch-run':
 				$report = $this->paymentBatchRunReport();
 				break;
+			case 'completed-payout-batch-closeout':
+				$report = $this->completedPayoutBatchCloseoutReport();
+				break;
 			default:
 				$this->guard->addError("Unhandled action: $action");
 				$report = $this->guard->refusalReport();
@@ -299,6 +304,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 			"       php yaamp/yiic.php badpoolguard forward-catchup-stage1-drain-approval-package --coin-id=<id> --selection-limit=<n> [--internal-batch-size=25] --format=json\n".
 			"       ".implode(' ', BadpoolStage1Manifest::applyCommandShape())."\n".
 			"       php yaamp/yiic.php badpoolguard batch-run --resume-batch-id=<id> --payment-delay-override-package=<path> --payment-delay-override-package-checksum=<file-sha256> --operator-confirms-payment-delay-override=".BadpoolConfirmedBlockPaymentDelayOverride::CONFIRMATION." --format=json\n".
+			"       php yaamp/yiic.php badpoolguard completed-payout-batch-closeout --batch-id=<id> --format=json\n".
 			"       php yaamp/yiic.php badpoolguard forward-catchup-stage1-apply --coin-id=<id> --limit=<approved_n> --selected-count=<approved_n> --approval-package-checksum=<sha256> --batch-scope-checksum=<sha256> --projected-mutation-checksum=<sha256> --projected-earnings-checksum=<sha256> --operator-confirms-attribution-model=block_userid_single_recipient --format=json\n".
 			"       php yaamp/yiic.php badpoolguard earnings-maturity-transition-dryrun --coin-id=<id> [--selected-block-ids=<csv>] [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard backward-maturity-transition-dryrun --coin-id=1267 --selected-earning-ids=<explicit-csv> --selected-block-ids=<explicit-csv> --expected-inventory-checksum=<sha256> --format=json\n".
@@ -379,6 +385,15 @@ class BadpoolGuardCommand extends CConsoleCommand
 		$report=$runner->run($options);
 		if($only==='' || $only!=='scrypt') $report['warnings'][]='Implementation support is currently narrowed to Scrypt; yescrypt, sha256d, skein, and groestl are not implemented and cannot be mutated.';
 		return $report;
+	}
+
+	private function completedPayoutBatchCloseoutReport()
+	{
+		$batchId=(string)$this->guard->getOption('batch-id','');
+		$adapter=$this->paymentBatchPhaseAdapter();
+		$proof=function($coinId,$ids){return $this->executePaymentBatchPhaseCommand('wallet-proof-closeout',array('--coin-id='.$coinId,'--selected-payout-ids='.implode(',',$ids),'--format=json'));};
+		$runner=new BadpoolCompletedPayoutBatchCloseout($adapter,$proof);
+		return $runner->preview($batchId);
 	}
 
 	protected function paymentBatchPhaseAdapter()
