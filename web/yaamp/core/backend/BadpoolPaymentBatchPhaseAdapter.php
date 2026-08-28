@@ -103,6 +103,14 @@ class BadpoolPaymentBatchPhaseAdapter
 		$applied['created_payout_ids']=$ids;$applied['payout_rows_inserted']=$inserted; return $applied;
 	}
 
+	/** Read-only classification at the wallet boundary; never dispatches a guard apply command. */
+	public function inspectCreatedPayoutRows($ids)
+	{
+		$ids=$this->normalizeIdList($ids);if($ids===null||$ids===array())return array();
+		$params=array();$placeholders=array();foreach($ids as $i=>$id){$key=':payout_boundary_'.$i;$params[$key]=$id;$placeholders[]=$key;}
+		return $this->guard->selectAll("SELECT id, idcoin, IFNULL(completed,0) AS completed, tx FROM payouts WHERE id IN (".implode(',',$placeholders).") ORDER BY id",$params);
+	}
+
 	private function coins($options)
 	{
 		$ids=array(1266,1267,1268,1269,1270);$params=array();$p=array();foreach($ids as $i=>$id){$key=':id'.$i;$p[]=$key;$params[$key]=$id;}

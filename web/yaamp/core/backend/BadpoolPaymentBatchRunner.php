@@ -68,7 +68,24 @@ class BadpoolPaymentBatchRunner
 			$this->save($ledger);
 			if (!in_array($status, array('ok','pass'), true)) break;
 		}
+		$this->enforceCompletedPayoutBoundary($ledger);
 		return $this->report($ledger);
+	}
+
+	private function enforceCompletedPayoutBoundary(&$ledger)
+	{
+		$ids=$this->positiveIdList($this->arrayValue($ledger,'created_payout_ids'));
+		if($ids===null||$ids===array()||!is_object($this->adapter)||!is_callable(array($this->adapter,'inspectCreatedPayoutRows')))return;
+		$rows=call_user_func(array($this->adapter,'inspectCreatedPayoutRows'),$ids);
+		if(!is_array($rows)||count($rows)!==count($ids))return;
+		$completed=array();foreach($rows as $row){$id=isset($row['id'])?intval($row['id']):0;$tx=trim((string)(isset($row['tx'])?$row['tx']:''));if($id>0&&intval(isset($row['completed'])?$row['completed']:0)===1&&$tx!=='')$completed[]=$id;}
+		sort($completed,SORT_NUMERIC);if($completed!==$ids)return;
+		$ledger['batch_state']='HOLD_COMPLETED_PAYOUT_RECONCILIATION';
+		$ledger['reconciliation_classification']='HOLD / COMPLETED PAYOUT WALLET PROOF REQUIRED';
+		$ledger['completed_payout_ids']=$completed;
+		$warning='Created payout rows are already completed with transaction IDs; wallet send and mutation phases must not be rerun. Use read-only wallet-proof-closeout.';
+		if(!in_array($warning,$ledger['warnings'],true))$ledger['warnings'][]=$warning;
+		$this->save($ledger);
 	}
 
 	private function invoke($phase, $ledger, $options)
@@ -103,13 +120,17 @@ class BadpoolPaymentBatchRunner
 	private function report($l)
 	{
 		$status=$l['batch_state']==='READY_FOR_WALLET_APPROVAL'?'pass':($l['batch_state']==='FAIL'?'fail':'hold');
+		$completedReconciliation=$l['batch_state']==='HOLD_COMPLETED_PAYOUT_RECONCILIATION';
+		if($completedReconciliation)$status='hold';
 		return array('schema'=>self::SCHEMA,'command'=>'batch-run','status'=>$status,'batch_id'=>$l['batch_id'],'batch_state'=>$l['batch_state'],
 			'mode'=>$l['mode'],'scope'=>$l['scope'],'only'=>$l['only'],'batch_size'=>$l['batch_size'],'stop_before_wallet_send'=>true,
 			'current_phase'=>$l['current_phase'],'phase_results'=>$l['phase_results'],'selected_coin_scope'=>$l['selected_coin_scope'],
 			'selected_counts'=>array('earnings'=>count($l['selected_earning_ids']),'blocks'=>count($l['selected_block_ids']),'accounts'=>count($l['selected_account_ids']),'payouts'=>count($l['created_payout_ids'])),
 			'selected_amounts'=>array(),'created_payout_ids'=>$l['created_payout_ids'],'wallet_boundary'=>'blocked_human_required',
-			'run_directory'=>$l['run_directory'],'ledger_path'=>$this->path($l['batch_id']),'next_action'=>$l['batch_state']==='READY_FOR_WALLET_APPROVAL'?'human_wallet_approval':'resume_batch',
-			'suggested_command'=>$l['batch_state']==='READY_FOR_WALLET_APPROVAL'?'bin/badpool-wallet-approve --batch-id='.$l['batch_id']:'bin/badpool-batch-run --resume-batch-id='.$l['batch_id'],
+			'run_directory'=>$l['run_directory'],'ledger_path'=>$this->path($l['batch_id']),'reconciliation_classification'=>isset($l['reconciliation_classification'])?$l['reconciliation_classification']:null,
+			'next_action'=>$completedReconciliation?'read_only_wallet_proof_closeout':($l['batch_state']==='READY_FOR_WALLET_APPROVAL'?'human_wallet_approval':'resume_batch'),
+			'suggested_command'=>$completedReconciliation?null:($l['batch_state']==='READY_FOR_WALLET_APPROVAL'?'bin/badpool-wallet-approve --batch-id='.$l['batch_id']:'bin/badpool-batch-run --resume-batch-id='.$l['batch_id']),
+			'do_not_rerun'=>$completedReconciliation?array('wallet-send-apply','payout-row-apply','account-credit-apply'):array(),
 			'blocked_actions'=>array('wallet_rpc_send','wallet_send_apply','fund_transfer','payout_rows_marked_completed_by_wallet_send'),
 			'warnings'=>$l['warnings'],'errors'=>$l['errors']);
 	}

@@ -1863,8 +1863,12 @@ class BadpoolGuardCommand extends CConsoleCommand
 			if (intval($row['payout_idcoin']) !== $coinId) $report['invalid_closeout_fields'][] = 'coin_id mismatch payout '.$id;
 			if (intval($row['completed']) !== 1) $report['invalid_closeout_fields'][] = 'completed not 1 payout '.$id;
 			if ($txid === '') $report['missing_closeout_fields'][] = 'tx missing payout '.$id;
-			if (!$item['account_balance_reported']) $report['missing_closeout_fields'][] = 'account balance missing payout '.$id;
-			if (!$item['account_balance_zero']) { $report['invalid_closeout_fields'][] = 'account balance nonzero payout '.$id; $item['account_balance_classification'] = 'hold'; }
+			// A historical payout may be followed by later credits.  The current
+			// account balance is useful reconciliation context, but is not proof
+			// about whether this completed payout was sent.
+			$item['account_balance_classification'] = $item['account_balance_reported']
+				? ($item['account_balance_zero'] ? 'informational_zero' : 'informational_nonzero_after_historical_payout')
+				: 'informational_unavailable';
 			$report['payout_inventory'][] = $item;
 			$expected = $this->walletSendDryrunDecimalAdd($expected, $amount);
 			$expectedWallet = $this->walletSendDryrunDecimalAdd($expectedWallet, $this->walletSendProjectBtcAmount8dp($amount));
