@@ -4,7 +4,7 @@ function arraySafeVal($a,$k,$d=null){return is_array($a)&&array_key_exists($k,$a
 require_once(dirname(__DIR__).'/web/yaamp/commands/BadpoolGuardCommand.php');
 
 class FakeBatchAdapter {
-	public $calls=array(); public $delay=false; public $holdPhase=null;
+	public $calls=array(); public $delay=false; public $holdPhase=null; public $boundaryRows=null;
 	protected function result($n,$extra=array()){$this->calls[]=$n;if($this->holdPhase===$n)$extra=array_merge($extra,array('status'=>'hold'));return array_merge(array('status'=>'pass','mutation_scope'=>array()),$extra);}
 	public function safetyCheck($l,$o){return $this->result(0);}
 	public function selectEligibleWork($l,$o){return $this->result(1,array('selected_coin_scope'=>array(array('id'=>1267,'algo'=>'scrypt')),'selected_earning_ids'=>array(11,12),'selected_block_ids'=>array(4)));}
@@ -13,6 +13,7 @@ class FakeBatchAdapter {
 	public function paymentDelayCheck($l,$o){return $this->delay?$this->result(4,array('status'=>'hold','warnings'=>array('resume_after_utc=2099-01-01T00:00:00Z'))):$this->result(4);}
 	public function creditAccounts($l,$o){return $this->result(5,array('selected_account_ids'=>array(9),'package_path'=>$l['run_directory'].'/credit.json','report_path'=>$l['run_directory'].'/credit-apply.json','checksums'=>array('credit'=>'def')));}
 	public function preparePayoutRows($l,$o){return $this->result(6,array('created_payout_ids'=>array(77),'payout_rows_inserted'=>1,'package_path'=>$l['run_directory'].'/payout.json','report_path'=>$l['run_directory'].'/payout-apply.json','checksums'=>array('payout'=>'ghi')));}
+	public function inspectCreatedPayoutRows($ids){return $this->boundaryRows===null?array():$this->boundaryRows;}
 }
 class FakeBatchGuardCommand extends BadpoolGuardCommand {public static $adapter;protected function paymentBatchPhaseAdapter(){return self::$adapter;}}
 function expect_batch($v,$m,&$f){if(!$v)$f[]=$m;}
@@ -28,6 +29,12 @@ expect_batch(strpos(json_encode($r),'Phase adapter is not configured')===false,'
 expect_batch($fake->calls===array(0,1,2,3,4,5,6),'ordered phases',$fail);
 expect_batch(count($r['phase_results'])===7&&$r['phase_results'][6]['phase_number']===6&&$r['phase_results'][6]['status']==='pass','ready only after phase 6',$fail);
 $before=$fake->calls;$opts['resume_batch_id']=$r['batch_id'];$again=$runner->run($opts);expect_batch($fake->calls===$before&&$again['batch_state']==='READY_FOR_WALLET_APPROVAL','resume repeated phase',$fail);
+$fake->boundaryRows=array(array('id'=>77,'idcoin'=>1267,'completed'=>1,'tx'=>'458bf4f254e09a4de4572febd15171f4700e3a6d9c68fc64a856f25cfa95229e'));
+$reconciled=$runner->run($opts);
+expect_batch($reconciled['status']==='hold'&&$reconciled['batch_state']==='HOLD_COMPLETED_PAYOUT_RECONCILIATION','completed+tx recovered payout remained wallet-ready',$fail);
+expect_batch($reconciled['next_action']==='read_only_wallet_proof_closeout'&&$reconciled['suggested_command']===null,'completed+tx payout suggested wallet approval/send',$fail);
+expect_batch($reconciled['do_not_rerun']===array('wallet-send-apply','payout-row-apply','account-credit-apply'),'completed reconciliation rerun prohibitions missing',$fail);
+expect_batch($fake->calls===$before,'completed reconciliation reran a mutation phase',$fail);
 $fake2=new FakeBatchAdapter();$fake2->delay=true;$hold=(new BadpoolPaymentBatchRunner($fake2,$root.'-hold'))->run(array('mode'=>'catchup','scope'=>'all-active-payout-coins','only'=>'scrypt','batch_size'=>1));expect_batch($hold['batch_state']==='WAITING_PAYMENT_DELAY'&&!in_array(5,$fake2->calls,true),'delay did not hold',$fail);
 $fake3=new FakeBatchAdapter();$fake3->holdPhase=3;$root3=$root.'-phase-hold';$runner3=new BadpoolPaymentBatchRunner($fake3,$root3);$hold3=$runner3->run(array('mode'=>'auto','scope'=>'all-active-payout-coins','only'=>'scrypt','batch_size'=>2));expect_batch($fake3->calls===array(0,1,2,3)&&is_file($hold3['ledger_path'])&&$hold3['status']==='hold','hold preserves ledger and stops later phases',$fail);
 $fake3->holdPhase=null;$resumed=$runner3->run(array('mode'=>'normal','scope'=>'all-active-payout-coins','only'=>'scrypt','batch_size'=>999,'resume_batch_id'=>$hold3['batch_id']));expect_batch($fake3->calls===array(0,1,2,3,3,4,5,6)&&$resumed['batch_state']==='READY_FOR_WALLET_APPROVAL'&&$resumed['mode']==='auto'&&$resumed['batch_size']===2,'resume skips passed phases and preserves options',$fail);
@@ -155,6 +162,7 @@ class PayoutRecoveryGuard extends ProductionFixtureGuard {
 	public $payoutRows;
 	public function __construct($rows){$this->payoutRows=$rows;}
 	public function selectAll($sql,$params){
+		if(strpos($sql,'payout_boundary_')!==false){$wanted=array_map('intval',array_values($params));$out=array();foreach($this->payoutRows as $row)if(in_array(intval($row['id']),$wanted,true))$out[]=array('id'=>$row['id'],'idcoin'=>$row['idcoin'],'completed'=>arraySafeVal($row,'completed',0),'tx'=>arraySafeVal($row,'tx',null));return $out;}
 		if(strpos($sql,'FROM payouts WHERE')!==false){
 			$out=array();foreach($this->payoutRows as $row){$rowTime=array_key_exists('time',$row)&&$row['time']!=='window'?intval($row['time']):intval($params[':start_time']);if(intval($row['account_id'])!==intval($params[':account_id']))continue;if(intval($row['idcoin'])!==intval($params[':idcoin']))continue;if(strval($row['amount'])!==strval($params[':amount']))continue;if($rowTime<intval($params[':start_time'])||$rowTime>intval($params[':end_time']))continue;$out[]=array('id'=>$row['id']);}return $out;
 		}

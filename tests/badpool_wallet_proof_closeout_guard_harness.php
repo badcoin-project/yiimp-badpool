@@ -15,6 +15,8 @@ function wallet_proof_project_8dp_harness($amount) {
 function wallet_proof_amount_matches_expected_harness($walletAmount, $rawDbAmount) {
 	return strpos($walletAmount, '-') === 0 && ltrim($walletAmount, '-') === wallet_proof_project_8dp_harness($rawDbAmount);
 }
+function wallet_send_shape_harness($row) { return intval($row['completed']) === 0 && trim((string)$row['tx']) === ''; }
+function wallet_proof_shape_harness($row) { return intval($row['completed']) === 1 && trim((string)$row['tx']) !== ''; }
 function wallet_proof_smoke_audit_harness($executedCommand, $report) {
 	$actual = is_array($executedCommand) ? implode(' ', $executedCommand) : (string)$executedCommand;
 	$sendInvoked = preg_match('/(?:^|\s)(?:wallet-send-apply|sendmany|sendtoaddress)(?:\s|$)/', $actual) === 1;
@@ -73,7 +75,13 @@ expect_contains('tx missing guard', $command, 'tx missing payout', $failures);
 expect_contains('completed guard', $command, 'completed not 1 payout', $failures);
 expect_contains('coin mismatch guard', $command, 'coin_id mismatch payout', $failures);
 expect_contains('account balance reported', $command, 'account_balance_reported', $failures);
-expect_contains('account balance nonzero hold', $command, 'account balance nonzero payout', $failures);
+expect_not_contains('account balance nonzero is not invalid closeout', $section = substr($command, strpos($command, 'private function walletProofCloseoutReport'), strpos($command, 'private function walletProofCloseoutHold') - strpos($command, 'private function walletProofCloseoutReport')), "invalid_closeout_fields'][] = 'account balance nonzero payout", $failures);
+expect_contains('account balance nonzero is informational', $command, 'informational_nonzero_after_historical_payout', $failures);
+$completedFixture=array('completed'=>1,'tx'=>'c64b4c1dec4f4a619b70b0f27c133aaac7a40c25f0556b581fbdf3b775c8d4c2','account_balance'=>'42.0');
+$unsentFixture=array('completed'=>0,'tx'=>'','account_balance'=>'0');
+if(!wallet_proof_shape_harness($completedFixture)||wallet_send_shape_harness($completedFixture))$failures[]='519/520 completed+tx shape was not proof-only';
+if(wallet_proof_shape_harness($unsentFixture)||!wallet_send_shape_harness($unsentFixture))$failures[]='unsent payout shape was not send-only';
+if(!wallet_proof_shape_harness($completedFixture)||wallet_proof_decimal_is_zero_harness($completedFixture['account_balance']))$failures[]='nonzero later balance incorrectly affected completed proof shape';
 expect_contains('withdraw rows reported', $command, 'walletProofWithdrawRows', $failures);
 $start = strpos($command, 'private function walletProofCloseoutReport');
 $end = strpos($command, 'private function walletSendDryrunReport', $start);
