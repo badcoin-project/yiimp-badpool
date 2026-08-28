@@ -1,4 +1,5 @@
 <?php
+require_once(dirname(__FILE__).'/../core/backend/BadpoolManagedPayoutGuard.php');
 /**
  * PayoutCommand is a console command :
  *  - check: compare wallet's chain history and database payouts
@@ -86,6 +87,12 @@ class PayoutCommand extends CConsoleCommand
 		$coin = getdbosql('db_coins', "symbol=:symbol", array(':symbol'=>$symbol));
 		if (!$coin) {
 			echo "wallet $symbol not found!\n";
+			return 0;
+		}
+		// checkPayouts can confirm/create rows, assign txids, and debit accounts.
+		// It is therefore not a read-only inspection command for managed payouts.
+		if ($message = BadpoolManagedPayoutGuard::refuseLegacyOperation($coin->id, 'payout check/fixit')) {
+			echo $message."\n";
 			return 0;
 		}
 
@@ -297,6 +304,10 @@ class PayoutCommand extends CConsoleCommand
 		$coin = getdbo('db_coins', $payout->idcoin);
 		if (!$coin || !$coin->installed)
 			die("Invalid payout coin id\n");
+		if ($message = BadpoolManagedPayoutGuard::refuseLegacyOperation($coin->id, 'payout redotx send/retry/orphan')) {
+			echo $message."\n";
+			return 0;
+		}
 
 		$relayfee = 0.0001;
 
