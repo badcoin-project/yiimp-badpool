@@ -1,13 +1,17 @@
 <?php
 
+require_once(dirname(__FILE__).'/BadpoolManagedPayoutGuard.php');
+
 function BackendPayments()
 {
 	// attempt to increase max execution time limit for the cron job
 	set_time_limit(300);
 
 	$list = getdbolist('db_coins', "enable and id in (select distinct coinid from accounts)");
-	foreach($list as $coin)
+	foreach($list as $coin) {
+		if (BadpoolManagedPayoutGuard::refuseLegacyOperation($coin->id, 'BackendPayments dispatch')) continue;
 		BackendCoinPayments($coin);
+	}
 
 	dborun("update accounts set balance=0 where coinid=0");
 }
@@ -16,6 +20,7 @@ function BackendUserCancelFailedPayment($userid)
 {
 	$user = getdbo('db_accounts', intval($userid));
 	if(!$user) return false;
+	if (BadpoolManagedPayoutGuard::refuseLegacyOperation($user->coinid, 'failed-payout cancellation')) return false;
 
 	$amount_failed = 0.0;
 	$failed = getdbolist('db_payouts', "account_id=:uid AND IFNULL(tx,'') = ''", array(':uid'=>$user->id));
@@ -34,6 +39,8 @@ function BackendUserCancelFailedPayment($userid)
 
 function BackendCoinPayments($coin)
 {
+	// This check must precede WalletRPC construction and every payout/account mutation.
+	if (!$coin || BadpoolManagedPayoutGuard::refuseLegacyOperation($coin->id, 'BackendCoinPayments wallet send')) return false;
 //	debuglog("BackendCoinPayments $coin->symbol");
 	$remote = new WalletRPC($coin);
 
@@ -323,5 +330,4 @@ function BackendCoinPayments($coin)
 	}
 
 }
-
 
