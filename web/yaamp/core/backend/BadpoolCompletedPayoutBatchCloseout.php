@@ -47,7 +47,10 @@ class BadpoolCompletedPayoutBatchCloseout
 		foreach($byCoin as $coin=>$coinIds){
 			$proof=call_user_func($this->proofExecutor,$coin,$coinIds);
 			$r['wallet_proof_reports'][]=$proof;
-			if(!is_array($proof)||arraySafeVal($proof,'closeout_valid')!==true||arraySafeVal($proof,'wallet_lookup_success')!==true||arraySafeVal($proof,'wallet_txid_expected')!==true||arraySafeVal($proof,'wallet_amount_matches_expected')!==true||arraySafeVal($proof,'wallet_confirmations_present')!==true)return $this->hold($r,'wallet_proof_missing_or_invalid');
+			$bindingError=$this->proofBindingError($proof,$coin,$coinIds);
+			if($bindingError!==null)return $this->hold($r,$bindingError);
+			if(arraySafeVal($proof,'closeout_valid')!==true||arraySafeVal($proof,'wallet_lookup_success')!==true||arraySafeVal($proof,'wallet_txid_expected')!==true||arraySafeVal($proof,'wallet_amount_matches_expected')!==true||arraySafeVal($proof,'wallet_confirmations_present')!==true)return $this->hold($r,'wallet_proof_missing_or_invalid');
+			if(arraySafeVal($proof,'wallet_sends')!==false||arraySafeVal($proof,'db_mutations')!==false)return $this->hold($r,'wallet_proof_report_not_read_only');
 		}
 		$r['status']='pass';$r['classification']='PASS / COMPLETED-PAYOUT RECONCILIATION PROOF COMPLETE';$r['final_classification']=$r['classification'];$r['next_safe_lane_or_STOP']='STOP';
 		return $r;
@@ -56,8 +59,19 @@ class BadpoolCompletedPayoutBatchCloseout
 	private function base($id){return array('schema'=>self::SCHEMA,'command'=>'completed-payout-batch-closeout','status'=>'hold','classification'=>'HOLD / COMPLETED-PAYOUT RECONCILIATION INCOMPLETE','final_classification'=>'HOLD / COMPLETED-PAYOUT RECONCILIATION INCOMPLETE','batch_id'=>$id,'batch_state'=>null,'current_phase'=>null,'ledger_path'=>null,'created_payout_ids'=>array(),'completed_payout_reconciliation'=>true,'read_only'=>true,'wallet_reads'=>'proof_only','wallet_sends'=>false,'db_mutations'=>false,'ledger_only_apply_mode_available'=>false,'mutation_policy'=>'No DB or ledger mutations; a future ledger-only apply mode must be explicit.','wallet_send_apply_report_exists'=>false,'wallet_proof_reports'=>array(),'do_not_rerun'=>array('wallet-send-apply','payout-row-apply','account-credit-apply'),'next_safe_lane_or_STOP'=>'HOLD','errors'=>array());}
 	private function hold($r,$reason){$r['errors'][]=$reason;return $r;}
 	private function positiveIds($ids){if(!is_array($ids))return null;$out=array();foreach($ids as $id){if(is_int($id)&&$id>0)$n=$id;elseif(is_string($id)&&preg_match('/^[1-9][0-9]*$/',$id))$n=intval($id);else return null;if(isset($out[$n]))return null;$out[$n]=$n;}ksort($out,SORT_NUMERIC);return array_values($out);}
+	private function proofBindingError($proof,$coin,$ids){
+		if(!is_array($proof))return 'wallet_proof_missing_or_invalid';
+		$proofIds=$this->positiveIds(arraySafeVal($proof,'selected_payout_ids'));
+		if($proofIds===null||$proofIds!==$ids)return 'wallet_proof_payout_ids_mismatch';
+		$proofCoins=array();
+		$scope=arraySafeVal($proof,'scope',array());if(is_array($scope)&&array_key_exists('coin_id',$scope)&&$scope['coin_id']!==null)$proofCoins[]=intval($scope['coin_id']);
+		$context=arraySafeVal($proof,'wallet_proof_context',array());if(is_array($context)&&array_key_exists('coin_id',$context))$proofCoins[]=intval($context['coin_id']);
+		foreach((array)arraySafeVal($proof,'payout_inventory',array()) as $item)if(is_array($item)&&array_key_exists('coin_id',$item))$proofCoins[]=intval($item['coin_id']);
+		foreach($proofCoins as $proofCoin)if($proofCoin!==intval($coin))return 'wallet_proof_coin_id_mismatch';
+		return null;
+	}
 	private function walletSendApplyReportExists($ledger,$ledgerPath){
-		foreach(array('wallet_send_apply_report','wallet_send_apply_report_path') as $key)if(!empty($ledger[$key]))return true;
+		foreach(array('wallet_send_apply_report','wallet_send_apply_report_path','wallet_send_apply_report_exists') as $key)if(!empty($ledger[$key]))return true;
 		$dir=dirname($ledgerPath);foreach(array('wallet-send-apply-report.json','wallet_send_apply_report.json') as $name)if(is_file($dir.'/'.$name))return true;
 		return false;
 	}

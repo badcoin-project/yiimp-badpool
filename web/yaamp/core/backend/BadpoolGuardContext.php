@@ -31,6 +31,7 @@ class BadpoolGuardContext
 		'batch-size',
 		'stop-before-wallet-send',
 		'resume-batch-id',
+		'batch-id',
 		'payment-delay-override-package',
 		'payment-delay-override-package-checksum',
 		'operator-confirms-payment-delay-override',
@@ -106,6 +107,17 @@ class BadpoolGuardContext
 			$this->format = strtolower($options['format']);
 			if (!in_array($this->format, array('json', 'text'), true)) {
 				$this->addError('Unsupported --format value. Use --format=json or --format=text.');
+				return;
+			}
+		}
+
+		if ($this->command === 'completed-payout-batch-closeout') {
+			if (!isset($options['batch-id'])) {
+				$this->addError('completed-payout-batch-closeout requires --batch-id=<id>.');
+				return;
+			}
+			if (!is_string($options['batch-id']) || !preg_match('/^[A-Za-z0-9._-]+$/', $options['batch-id'])) {
+				$this->addError('Invalid --batch-id. Expected a nonempty batch identifier.');
 				return;
 			}
 		}
@@ -307,8 +319,16 @@ class BadpoolGuardContext
 				$this->addError("Unknown option refused: --$name");
 				return array();
 			}
+			if ($this->command === 'completed-payout-batch-closeout' && !in_array($lower, array('batch-id', 'format'), true)) {
+				$this->addError("Option --$name is not available for completed-payout-batch-closeout.");
+				return array();
+			}
 			if (in_array($lower, $batchOptions, true) && !in_array($this->command, array('batch-run-preview','batch-run'), true)) {
 				$this->addError("Option --$name is only available for payment batch commands.");
+				return array();
+			}
+			if ($lower === 'batch-id' && $this->command !== 'completed-payout-batch-closeout') {
+				$this->addError("Option --$name is only available for completed-payout-batch-closeout.");
 				return array();
 			}
 			if (isset($options[$lower])) {
@@ -343,7 +363,7 @@ class BadpoolGuardContext
 			return;
 		}
 		if (!$hasCoinId && !$allCoins) {
-			if ($this->command === 'status-runner' || $this->command === 'batch-run-preview' || $this->command === 'batch-run') {
+			if ($this->command === 'status-runner' || $this->command === 'batch-run-preview' || $this->command === 'batch-run' || $this->command === 'completed-payout-batch-closeout') {
 				$allCoins = true;
 			} else {
 				$this->addError('Refusing implicit all-coin preview. Pass --coin-id=<id> or --all-coins-preview.');

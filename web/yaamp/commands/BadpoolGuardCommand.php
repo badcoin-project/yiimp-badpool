@@ -7092,7 +7092,11 @@ class BadpoolGuardCommand extends CConsoleCommand
 
 	private function finalizeCommandReport($report)
 	{
+		$closeoutErrors = arraySafeVal($report, 'command') === 'completed-payout-batch-closeout' ? arraySafeVal($report, 'errors', array()) : null;
 		$report = $this->guard->finalizeReport($report);
+		// Closeout lane HOLD reasons are domain validation results, not parser
+		// errors held by BadpoolGuardContext. Preserve them through finalization.
+		if ($closeoutErrors !== null) $report['errors'] = $closeoutErrors;
 		if ($this->isPayoutAuditCommand(arraySafeVal($report, 'command'))) {
 			$report = $this->ensurePayoutPreviewAuditFields($report);
 		}
