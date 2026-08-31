@@ -6,7 +6,7 @@ DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 refuse() {
 	local code="$1" message="$2" now
 	now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-	printf '{"schema":"badpool.backend-cycle.v2","route":"blocks","mode":"invalid","started_at_utc":"%s","completed_at_utc":"%s","lock_acquired":false,"readiness_gate":"refused","callbacks_started":[],"callbacks_completed":[],"callbacks_failed":[],"declared_effect_classes":[],"instrumentation_available":false,"result":"refused","errors":["%s"]}\n' "$now" "$now" "$message"
+	printf '{"schema":"badpool.backend-cycle.v2","route":"blocks","mode":"invalid","started_at_utc":"%s","completed_at_utc":"%s","lock_acquired":false,"readiness_gate":"refused","callbacks_started":[],"callbacks_completed":[],"callbacks_failed":[],"declared_callbacks":[],"declared_effect_classes":[],"instrumentation_available":false,"result":"refused","errors":["%s"]}\n' "$now" "$now" "$message"
 	exit "$code"
 }
 if ! cd "${DIR}"; then

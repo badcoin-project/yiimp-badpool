@@ -84,15 +84,21 @@ class BackendCycleGuard
 	private static function newReport($route, $mode, array $callbacks)
 	{
 		$effects = array();
-		foreach ($callbacks as $declaration) {
-			if (is_array($declaration) && isset($declaration['effects']))
-				$effects = array_merge($effects, (array) $declaration['effects']);
+		$declaredCallbacks = array();
+		foreach ($callbacks as $name => $declaration) {
+			$callbackEffects = array();
+			if (is_array($declaration) && isset($declaration['effects'])) {
+				$callbackEffects = array_values(array_unique((array) $declaration['effects']));
+				$effects = array_merge($effects, $callbackEffects);
+			}
+			$declaredCallbacks[$name] = array('effects' => $callbackEffects);
 		}
 		return array(
 			'schema' => self::SCHEMA, 'route' => $route, 'mode' => $mode,
 			'started_at_utc' => gmdate('c'), 'completed_at_utc' => null,
 			'lock_acquired' => false, 'readiness_gate' => 'refused',
 			'callbacks_started' => array(), 'callbacks_completed' => array(), 'callbacks_failed' => array(),
+			'declared_callbacks' => $declaredCallbacks,
 			'declared_effect_classes' => array_values(array_unique($effects)),
 			'instrumentation_available' => false, 'result' => 'refused', 'errors' => array(),
 		);
