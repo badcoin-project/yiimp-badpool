@@ -32,7 +32,7 @@ catch(Throwable $e)
 			'mode' => getenv('BADPOOL_BACKEND_MODE') ?: 'invalid',
 			'started_at_utc' => gmdate('c'), 'completed_at_utc' => gmdate('c'),
 			'lock_acquired' => false, 'readiness_gate' => 'unknown',
-			'callbacks_started' => array(), 'callbacks_completed' => array(), 'callbacks_failed' => array(),
+			'callbacks_started' => array(), 'callbacks_completed' => array(), 'callbacks_failed' => array(), 'declared_callbacks' => array(),
 			'declared_effect_classes' => array(), 'instrumentation_available' => false,
 			'result' => 'failed', 'errors' => array(get_class($e).': '.$message),
 		);

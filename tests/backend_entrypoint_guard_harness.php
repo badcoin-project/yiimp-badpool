@@ -54,15 +54,36 @@ expect_true(cycle('blocks', 'execute', array(), $blocks)['readiness_gate'] === '
 putenv('BADPOOL_BACKEND_LOOP2_READY=1');
 expect_true(cycle('blocks', 'execute', array(), $blocks)['result'] === 'refused' && cycle('loop2', 'execute', array(), $loop2)['result'] === 'success', 'route readiness must be isolated');
 
-$report = cycle('blocks', 'report-only', array('probe' => function() use (&$calls) { $calls++; }), $blocks);
+$planned = array(
+	'BackendBlockFind1' => array('callback' => function() use (&$calls) { $calls++; }, 'effects' => array('daemon_rpc_read', 'db_block_update', 'earnings_creation_or_update')),
+	'BackendBlocksUpdate' => array('callback' => function() use (&$calls) { $calls++; }, 'effects' => array('daemon_rpc_read', 'block_category_update', 'earnings_status_update')),
+);
+$report = cycle('blocks', 'report-only', $planned, $blocks);
 expect_true($report['result'] === 'success' && $report['readiness_gate'] === 'not-required' && $calls === 0, 'report-only must need no readiness and run no callbacks');
 expect_true($report['callbacks_started'] === array() && $report['instrumentation_available'] === false, 'report fields must truthfully deny instrumentation');
+expect_true($report['declared_callbacks'] === array(
+	'BackendBlockFind1' => array('effects' => array('daemon_rpc_read', 'db_block_update', 'earnings_creation_or_update')),
+	'BackendBlocksUpdate' => array('effects' => array('daemon_rpc_read', 'block_category_update', 'earnings_status_update')),
+), 'report-only must expose the callback-to-effect plan');
+expect_true($report['declared_effect_classes'] === array('daemon_rpc_read', 'db_block_update', 'earnings_creation_or_update', 'block_category_update', 'earnings_status_update'), 'report-only must expose unique declared effect classes');
 expect_true(json_decode(BackendCycleGuard::encode($report), true)['result'] === 'success', 'success report JSON must parse');
+$loop2Calls = 0;
+$loop2Plan = array(
+	'BackendBlockFind2' => array('callback' => function() use (&$loop2Calls) { $loop2Calls++; }, 'effects' => array('daemon_rpc_read', 'db_block_insert_possible', 'earnings_creation_possible')),
+	'BackendUpdatePoolBalances' => array('callback' => function() use (&$loop2Calls) { $loop2Calls++; }, 'effects' => array('daemon_rpc_read', 'pool_balance_update')),
+);
+$loop2Report = cycle('loop2', 'report-only', $loop2Plan, $loop2);
+expect_true($loop2Calls === 0 && $loop2Report['callbacks_started'] === array(), 'loop2 report-only must not run its declared callbacks');
+expect_true($loop2Report['declared_callbacks'] === array(
+	'BackendBlockFind2' => array('effects' => array('daemon_rpc_read', 'db_block_insert_possible', 'earnings_creation_possible')),
+	'BackendUpdatePoolBalances' => array('effects' => array('daemon_rpc_read', 'pool_balance_update')),
+), 'loop2 report-only must expose the callback-to-effect plan');
+expect_true($loop2Report['declared_effect_classes'] === array('daemon_rpc_read', 'db_block_insert_possible', 'earnings_creation_possible', 'pool_balance_update'), 'loop2 report-only must expose unique declared effect classes');
 
 putenv('BADPOOL_BACKEND_BLOCKS_READY=1'); putenv('BADPOOL_BACKEND_LOOP2_READY=1');
-$report = cycle('blocks', 'execute', array('one' => array('callback' => function() use (&$calls) { $calls++; }, 'effects' => array('test-only'))), $blocks);
-expect_true($calls === 1 && $report['callbacks_started'] === array('one') && $report['callbacks_completed'] === array('one'), 'execute must perform at most one declared cycle and trace completion');
-expect_true($report['declared_effect_classes'] === array('test-only'), 'declared effects must be reported without invented activity counts');
+$report = cycle('blocks', 'execute', $planned, $blocks);
+expect_true($calls === 2 && $report['callbacks_started'] === array('BackendBlockFind1', 'BackendBlocksUpdate') && $report['callbacks_completed'] === array('BackendBlockFind1', 'BackendBlocksUpdate'), 'execute must run only the declared callbacks in declaration order after readiness and lock checks');
+expect_true($report['declared_effect_classes'] === array('daemon_rpc_read', 'db_block_update', 'earnings_creation_or_update', 'block_category_update', 'earnings_status_update'), 'declared effects must be reported without invented activity counts');
 
 foreach (array('Exception', 'Error', 'TypeError') as $kind) {
 	$thrower = function() use ($kind) {
@@ -113,6 +134,14 @@ $controller = file_get_contents(dirname(__FILE__).'/../web/yaamp/modules/thread/
 foreach (array('BackendProcessList(', 'BackendStatsUpdate(', 'BackendUsersUpdate(', 'BackendStatsUpdate2(', 'BackendClearEarnings(', 'BackendRentingPayout(', 'BackendPayments(', 'BackendUpdateDeposit(', 'BackendUpdateServices(') as $prohibited)
 	expect_true(strpos(substr($controller, strpos($controller, 'public function actionRunBlocks'), strpos($controller, 'public function actionRun()')-strpos($controller, 'public function actionRunBlocks')), $prohibited) === false, "$prohibited must remain unreachable");
 expect_true(substr_count($controller, "runGuardedCycle('blocks'") === 1 && substr_count($controller, "runGuardedCycle('loop2'") === 1, 'direct controller actions must each cross the guard once');
+$expectedDeclarations = array(
+	"'BackendBlockFind1' => array(" => "'effects' => array('daemon_rpc_read', 'db_block_update', 'earnings_creation_or_update')",
+	"'BackendBlocksUpdate' => array(" => "'effects' => array('daemon_rpc_read', 'block_category_update', 'earnings_status_update')",
+	"'BackendBlockFind2' => array(" => "'effects' => array('daemon_rpc_read', 'db_block_insert_possible', 'earnings_creation_possible')",
+	"'BackendUpdatePoolBalances' => array(" => "'effects' => array('daemon_rpc_read', 'pool_balance_update')",
+);
+foreach ($expectedDeclarations as $callbackDeclaration => $effectDeclaration)
+	expect_true(strpos($controller, $callbackDeclaration) !== false && strpos($controller, $effectDeclaration) !== false, "$callbackDeclaration must retain its declared effect map");
 
 // Wrapper argument matrix uses a harmless fake executable and never loads Yii or callbacks.
 chdir(dirname(__FILE__).'/..');

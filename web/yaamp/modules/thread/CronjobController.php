@@ -43,14 +43,30 @@ class CronjobController extends CommonController
 
 	public function actionRunBlocks()
 	{
-		// Production freeze: validation proves the boundary without invoking legacy callbacks.
-		$this->runGuardedCycle('blocks', array());
+		$this->runGuardedCycle('blocks', array(
+			'BackendBlockFind1' => array(
+				'callback' => 'BackendBlockFind1',
+				'effects' => array('daemon_rpc_read', 'db_block_update', 'earnings_creation_or_update'),
+			),
+			'BackendBlocksUpdate' => array(
+				'callback' => 'BackendBlocksUpdate',
+				'effects' => array('daemon_rpc_read', 'block_category_update', 'earnings_status_update'),
+			),
+		));
 	}
 
 	public function actionRunLoop2()
 	{
-		// Production freeze: validation proves the boundary without invoking legacy callbacks.
-		$this->runGuardedCycle('loop2', array());
+		$this->runGuardedCycle('loop2', array(
+			'BackendBlockFind2' => array(
+				'callback' => 'BackendBlockFind2',
+				'effects' => array('daemon_rpc_read', 'db_block_insert_possible', 'earnings_creation_possible'),
+			),
+			'BackendUpdatePoolBalances' => array(
+				'callback' => 'BackendUpdatePoolBalances',
+				'effects' => array('daemon_rpc_read', 'pool_balance_update'),
+			),
+		));
 	}
 
 	public function actionRunBadpoolStats()
