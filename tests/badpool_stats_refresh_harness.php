@@ -69,8 +69,8 @@ expect_stats(!preg_match('/\b(DELETE|UPDATE|INSERT)\b/i', $source), 'the compone
 foreach (array('BackendStatsUpdate(', 'BackendStatsUpdate2(', 'BackendUsersUpdate(', 'BackendPayments(', 'yaamp_convert_earnings_user(', 'systemctl', 'service ') as $term)
 	expect_stats(strpos($source, $term) === false, "$term must be absent from the isolated component");
 $controller = file_get_contents(dirname(__FILE__).'/../web/yaamp/modules/thread/CronjobController.php');
-expect_stats((bool) preg_match("/actionRunLoop2\(\).*?runGuardedCycle\('loop2', array\(\)\);/s", $controller), 'runLoop2 must retain its empty callback freeze');
-expect_stats((bool) preg_match("/actionRunBlocks\(\).*?runGuardedCycle\('blocks', array\(\)\);/s", $controller), 'runBlocks must retain its empty callback freeze');
+expect_stats((bool) preg_match("/actionRunLoop2\(\).*?runGuardedCycle\('loop2', array\(.*?BackendBlockFind2.*?BackendUpdatePoolBalances.*?\)\);/s", $controller), 'runLoop2 declares mapped report-only callbacks without executing backend loop');
+expect_stats((bool) preg_match("/actionRunBlocks\(\).*?runGuardedCycle\('blocks', array\(.*?BackendBlockFind1.*?BackendBlocksUpdate.*?\)\);/s", $controller), 'runBlocks declares mapped report-only callbacks without executing backend loop');
 $routeStart = strpos($controller, 'public function actionRunBadpoolStats');
 $routeEnd = strpos($controller, 'private function runGuardedCycle', $routeStart);
 $route = substr($controller, $routeStart, $routeEnd - $routeStart);
