@@ -64,6 +64,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 		'earnings-maturity-transition-approval-package',
 		'earnings-maturity-transition-apply',
 		'account-credit-clear-dryrun',
+		'block-accounting-dryrun',
 		'account-credit-clear-approval-package',
 		'account-credit-clear-apply',
 		'safety-scan',
@@ -101,6 +102,9 @@ class BadpoolGuardCommand extends CConsoleCommand
 		}
 		if ($action === 'wallet-send-apply') {
 			$actionArgs = $this->walletSendApplyContextArgs($args);
+		}
+		elseif ($action === 'block-accounting-dryrun') {
+			$actionArgs = $this->blockAccountingDryrunContextArgs($args);
 		}
 		elseif ($action === 'earnings-maturity-transition-dryrun' || $action === 'earnings-maturity-transition-approval-package') {
 			$actionArgs = $this->maturitySelectionContextArgs($args);
@@ -240,6 +244,9 @@ class BadpoolGuardCommand extends CConsoleCommand
 			case 'account-credit-clear-dryrun':
 				$report = $this->accountCreditClearDryrunReport();
 				break;
+			case 'block-accounting-dryrun':
+				$report = $this->blockAccountingDryrunReport($args);
+				break;
 			case 'account-credit-clear-approval-package':
 				$report = $this->accountCreditClearApprovalPackageReport($args);
 				break;
@@ -315,6 +322,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 			"       php yaamp/yiic.php badpoolguard earnings-maturity-transition-apply --coin-id=<id> --selected-earning-ids=<csv> [--selection-mode=exact-blocks --selected-block-ids=<csv>] --approval-package-checksum=<sha256> --selected-scope-checksum=<sha256> --projected-block-mutation-checksum=<sha256> --projected-earnings-mutation-checksum=<sha256> --operator-confirms-maturity-transition=scrypt_status0_to_status1 --format=json\n".
 			"       Retained-package apply additionally requires --retained-dryrun-report=<path> and the package-bound --retained-dryrun-report-checksum=<sha256>; the operator confirmation remains a separate runtime requirement.\n".
 			"       php yaamp/yiic.php badpoolguard account-credit-clear-dryrun --coin-id=<id> [--format=json|text]\n".
+				"       php yaamp/yiic.php badpoolguard block-accounting-dryrun --coin-id=<id> --selector=backlog --first-block-id=<id> --last-block-id=<id> [--max-rows=50] [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard account-credit-clear-approval-package --coin-id=<id> [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard account-credit-clear-apply --coin-id=<id> --selected-earning-ids=<csv> --approval-package-checksum=<sha256> --selected-earnings-scope-checksum=<sha256> --projected-earnings-mutation-checksum=<sha256> --projected-account-credit-checksum=<sha256> --operator-confirms-account-credit=scrypt_status1_to_status2_balance_increment --format=json\n".
 			"       php yaamp/yiic.php badpoolguard safety-scan --coin-id=<id> [--format=json|text]\n".
@@ -7301,4 +7309,190 @@ class BadpoolGuardCommand extends CConsoleCommand
 		}
 		return substr(hash('sha256', $value), 0, 16);
 	}
+	private function blockAccountingDryrunReport($args)
+	{
+		$opts = $this->parseBlockAccountingDryrunOptions($args);
+		$errors = array();
+
+		$report = array(
+			'generated_at' => gmdate('c'),
+			'warnings' => array(),
+		);
+		$report['schema'] = 'badpool.block-accounting-dryrun.v1';
+		$report['action'] = 'block-accounting-dryrun';
+		$report['mode'] = 'dryrun';
+		$report['read_only'] = true;
+		$report['mutation_intent'] = 'none';
+		$report['backend_execute_mode'] = false;
+		$report['daemon_rpc'] = false;
+		$report['database_mutation'] = false;
+		$report['wallet_command'] = false;
+		$report['service_action'] = false;
+		$report['legacy_backend_callbacks_invoked'] = false;
+
+		if (isset($opts['__parse_error']))
+			$errors[] = $opts['__parse_error'];
+
+		$coinId = isset($opts['coin-id']) && preg_match('/^[1-9][0-9]*$/', $opts['coin-id']) ? intval($opts['coin-id']) : null;
+		$selector = isset($opts['selector']) ? $opts['selector'] : null;
+		$first = isset($opts['first-block-id']) && preg_match('/^[1-9][0-9]*$/', $opts['first-block-id']) ? intval($opts['first-block-id']) : null;
+		$last = isset($opts['last-block-id']) && preg_match('/^[1-9][0-9]*$/', $opts['last-block-id']) ? intval($opts['last-block-id']) : null;
+		$maxRows = isset($opts['max-rows']) && preg_match('/^[1-9][0-9]*$/', $opts['max-rows']) ? intval($opts['max-rows']) : 50;
+
+		if ($coinId === null)
+			$errors[] = 'block-accounting-dryrun requires --coin-id=<positive integer>.';
+		if ($selector !== 'backlog' && $selector !== 'forward')
+			$errors[] = 'block-accounting-dryrun requires --selector=backlog|forward.';
+		if ($maxRows < 1 || $maxRows > 50)
+			$errors[] = '--max-rows must be between 1 and 50.';
+
+		if ($selector === 'backlog') {
+			if ($first === null)
+				$errors[] = 'backlog selector requires --first-block-id=<positive integer>.';
+			if ($last === null)
+				$errors[] = 'backlog selector requires --last-block-id=<positive integer>.';
+			if ($first !== null && $last !== null && $last < $first)
+				$errors[] = '--last-block-id must be greater than or equal to --first-block-id.';
+		}
+
+		if ($selector === 'forward') {
+			if ($first !== null || $last !== null)
+				$errors[] = 'forward selector refuses backlog boundary options.';
+			$errors[] = 'forward selector is mapped but not enabled until daemon/blocknotify reconciliation is implemented.';
+		}
+
+		$selectedCount = ($selector === 'backlog' && $first !== null && $last !== null && $last >= $first) ? ($last - $first + 1) : 0;
+		if ($selector === 'backlog' && $selectedCount > $maxRows)
+			$errors[] = 'backlog selector refuses more than --max-rows block rows.';
+
+		$report['selector'] = array(
+			'name' => $selector,
+			'coin_id' => $coinId,
+			'first_block_id' => $first,
+			'last_block_id' => $last,
+			'selected_count_from_bounds' => $selectedCount,
+			'max_rows' => $maxRows,
+			'category' => 'new',
+		);
+
+		$report['replacement_scope'] = array(
+			'legacy_replaced_now' => array('bounded category=new selection dryrun'),
+			'legacy_not_replaced_yet' => array('daemon getblock accounting apply', 'immature/stake/orphan maturity update', 'pool balance refresh'),
+			'archive_status' => 'not-ready',
+		);
+
+		if (count($errors) > 0) {
+			$this->blockAccountingPublishLocalErrors($errors);
+			$report['status'] = 'refused';
+			$report['errors'] = $errors;
+			return $report;
+		}
+
+		$params = array(':coin_id'=>$coinId, ':first_id'=>$first, ':last_id'=>$last);
+		$rows = $this->guard->selectAll('SELECT id, height, category, userid, workerid, amount, confirmations, txhash, time FROM blocks WHERE coin_id=:coin_id AND id BETWEEN :first_id AND :last_id ORDER BY id', $params);
+		$earningOverlap = $this->guard->selectRow('SELECT COUNT(e.id) AS earning_rows, COUNT(DISTINCT e.blockid) AS blocks_with_earnings FROM blocks b LEFT JOIN earnings e ON e.coinid=b.coin_id AND e.blockid=b.id WHERE b.coin_id=:coin_id AND b.id BETWEEN :first_id AND :last_id', $params);
+		$duplicateHeights = $this->guard->selectAll('SELECT height, COUNT(*) AS block_rows FROM blocks WHERE coin_id=:coin_id AND id BETWEEN :first_id AND :last_id GROUP BY height HAVING COUNT(*) > 1 ORDER BY height', $params);
+		$workerSummary = $this->guard->selectAll('SELECT userid, workerid, COUNT(*) AS row_count, MIN(id) AS min_block_id, MAX(id) AS max_block_id, MIN(height) AS min_height, MAX(height) AS max_height, MIN(time) AS first_time, MAX(time) AS last_time FROM blocks WHERE coin_id=:coin_id AND id BETWEEN :first_id AND :last_id GROUP BY userid, workerid ORDER BY row_count DESC, userid, workerid', $params);
+
+		$normalized = array();
+		$blockIds = array();
+		$heights = array();
+		$allNew = true;
+		$allUnaccounted = true;
+
+		foreach ($rows as $row) {
+			$id = intval(arraySafeVal($row, 'id', 0));
+			$height = intval(arraySafeVal($row, 'height', 0));
+			$blockIds[] = $id;
+			$heights[] = $height;
+			if (arraySafeVal($row, 'category') !== 'new')
+				$allNew = false;
+			if (arraySafeVal($row, 'amount') !== null || arraySafeVal($row, 'confirmations') !== null || arraySafeVal($row, 'txhash') !== null)
+				$allUnaccounted = false;
+			$normalized[] = array(
+				'id'=>$id,
+				'height'=>$height,
+				'category'=>arraySafeVal($row, 'category'),
+				'userid'=>intval(arraySafeVal($row, 'userid', 0)),
+				'workerid'=>intval(arraySafeVal($row, 'workerid', 0)),
+				'amount'=>arraySafeVal($row, 'amount'),
+				'confirmations'=>arraySafeVal($row, 'confirmations'),
+				'txhash'=>arraySafeVal($row, 'txhash'),
+				'time'=>intval(arraySafeVal($row, 'time', 0)),
+				'time_utc'=>gmdate('Y-m-d H:i:s', intval(arraySafeVal($row, 'time', 0))),
+			);
+		}
+
+		$checks = array(
+			'selected_count_matches_bounds' => count($rows) === $selectedCount,
+			'selected_count_within_limit' => $selectedCount <= $maxRows,
+			'all_candidates_are_new' => $allNew,
+			'all_candidates_unaccounted_shape' => $allUnaccounted,
+			'no_earnings_overlap' => intval(arraySafeVal($earningOverlap, 'earning_rows', 0)) === 0 && intval(arraySafeVal($earningOverlap, 'blocks_with_earnings', 0)) === 0,
+			'no_duplicate_heights' => count($duplicateHeights) === 0,
+			'no_backend_callbacks_invoked' => true,
+			'no_daemon_rpc_invoked' => true,
+			'no_database_mutation_invoked' => true,
+		);
+
+		foreach ($checks as $name => $passed) {
+			if (!$passed)
+				$errors[] = 'block-accounting-dryrun check failed: '.$name;
+		}
+
+		$report['summary'] = array(
+			'candidate_count' => count($rows),
+			'height_range' => array('first'=>count($heights) ? min($heights) : null, 'last'=>count($heights) ? max($heights) : null),
+			'worker_summary' => $workerSummary,
+			'earnings_overlap' => $earningOverlap,
+			'duplicate_heights' => $duplicateHeights,
+			'checks' => $checks,
+		);
+		$report['items'] = array('selected_block_ids'=>$blockIds, 'candidate_blocks'=>$normalized);
+		$report['selected_scope_checksum'] = BadpoolGuardReport::checksum(array('coin_id'=>$coinId, 'selector'=>$selector, 'selected_block_ids'=>$blockIds));
+		$report['candidate_rows_checksum'] = BadpoolGuardReport::checksum($normalized);
+		$report['dryrun_report_checksum'] = BadpoolGuardReport::checksum(array('selector'=>$report['selector'], 'summary'=>$report['summary'], 'items'=>$report['items'], 'selected_scope_checksum'=>$report['selected_scope_checksum'], 'candidate_rows_checksum'=>$report['candidate_rows_checksum']));
+		if (count($errors) > 0)
+			$this->blockAccountingPublishLocalErrors($errors);
+		$report['status'] = count($errors) > 0 ? 'blocked' : 'pass';
+		$report['errors'] = $errors;
+		return $report;
+	}
+
+	private function blockAccountingPublishLocalErrors($errors)
+	{
+		foreach ($errors as $error)
+			$this->guard->addError($error);
+	}
+
+	private function blockAccountingDryrunContextArgs($args)
+	{
+		$out = array();
+		foreach ($args as $arg) {
+			if (preg_match('/^--(coin-id|format)(=.*)?$/i', $arg))
+				$out[] = $arg;
+		}
+		return $out;
+	}
+
+	private function parseBlockAccountingDryrunOptions($args)
+	{
+		$allowed = array('coin-id','format','selector','first-block-id','last-block-id','max-rows');
+		$o = array();
+		foreach ($args as $arg) {
+			if (!preg_match('/^--([^=]+)=(.*)$/', $arg, $m)) {
+				$o['__parse_error'] = 'Unknown argument refused: '.$arg;
+				continue;
+			}
+			$name = strtolower($m[1]);
+			if (!in_array($name, $allowed, true))
+				$o['__parse_error'] = 'Unknown option refused: --'.$m[1];
+			elseif (isset($o[$name]))
+				$o['__parse_error'] = 'Duplicate option refused: --'.$m[1];
+			else
+				$o[$name] = $m[2];
+		}
+		return $o;
+	}
+
 }
