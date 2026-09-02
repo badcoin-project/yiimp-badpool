@@ -65,6 +65,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 		'earnings-maturity-transition-apply',
 		'account-credit-clear-dryrun',
 		'block-accounting-dryrun',
+            'block-accounting-approval-package',
 		'account-credit-clear-approval-package',
 		'account-credit-clear-apply',
 		'safety-scan',
@@ -91,6 +92,9 @@ class BadpoolGuardCommand extends CConsoleCommand
 		}
 
 		$actionArgs = $args;
+                if ($action === 'block-accounting-approval-package') {
+                        $actionArgs = $this->blockAccountingApprovalPackageContextArgs($args);
+                }
 		if ($action === 'status-runner') {
 			$actionArgs = $this->statusRunnerContextArgs($args);
 		}
@@ -247,6 +251,9 @@ class BadpoolGuardCommand extends CConsoleCommand
 			case 'block-accounting-dryrun':
 				$report = $this->blockAccountingDryrunReport($args);
 				break;
+                        case 'block-accounting-approval-package':
+                                $report = $this->blockAccountingApprovalPackageReport($args);
+                                break;
 			case 'account-credit-clear-approval-package':
 				$report = $this->accountCreditClearApprovalPackageReport($args);
 				break;
@@ -7464,6 +7471,231 @@ class BadpoolGuardCommand extends CConsoleCommand
 		foreach ($errors as $error)
 			$this->guard->addError($error);
 	}
+
+        private function blockAccountingApprovalPackageContextArgs($args)
+        {
+                $out = array();
+                foreach ($args as $arg) {
+                        if (preg_match('/^--(coin-id|format)(=.*)?$/i', $arg)) {
+                                $out[] = $arg;
+                        }
+                }
+                return $out;
+        }
+
+        private function blockAccountingApprovalPackageReport($args)
+        {
+                $opts = array(
+                        'dryrun-report' => null,
+                        'dryrun-report-checksum' => null,
+                        'coin-id' => null,
+                        'format' => 'json',
+                );
+                $seen = array();
+                $errors = array();
+
+                foreach ($args as $arg) {
+                        if (!preg_match('/^--([a-z0-9-]+)(=(.*))?$/i', $arg, $m)) {
+                                $errors[] = 'Malformed option refused: '.$arg;
+                                continue;
+                        }
+
+                        $name = strtolower($m[1]);
+                        $value = array_key_exists(3, $m) ? $m[3] : null;
+
+                        if (!array_key_exists($name, $opts)) {
+                                $errors[] = 'Unknown option refused: --'.$name;
+                                continue;
+                        }
+                        if (isset($seen[$name])) {
+                                $errors[] = 'Duplicate option refused: --'.$name;
+                                continue;
+                        }
+                        if ($value === null || $value === '') {
+                                $errors[] = 'Option requires a value: --'.$name;
+                                continue;
+                        }
+
+                        $seen[$name] = true;
+                        $opts[$name] = $value;
+                }
+
+                if ($opts['dryrun-report'] === null) {
+                        $errors[] = 'block-accounting-approval-package requires --dryrun-report=<path>.';
+                }
+
+                if ($opts['coin-id'] !== null && !preg_match('/^[1-9][0-9]*$/', $opts['coin-id'])) {
+                        $errors[] = 'block-accounting-approval-package requires --coin-id=<positive integer>.';
+                }
+
+                $dryrun = null;
+                if ($opts['dryrun-report'] !== null) {
+                        if (is_readable($opts['dryrun-report'])) {
+                                $dryrun = json_decode(file_get_contents($opts['dryrun-report']), true);
+                                if (!is_array($dryrun)) {
+                                        $errors[] = 'dryrun report is not valid JSON.';
+                                }
+                        } else {
+                                $errors[] = 'dryrun report is not readable.';
+                        }
+                }
+
+                if (is_array($dryrun)) {
+                        if (arraySafeVal($dryrun, 'schema') !== 'badpool.block-accounting-dryrun.v1') {
+                                $errors[] = 'dryrun report schema mismatch.';
+                        }
+                        if (arraySafeVal($dryrun, 'status') !== 'pass') {
+                                $errors[] = 'dryrun report must have pass status.';
+                        }
+
+                        $scope = arraySafeVal($dryrun, 'scope', arraySafeVal($dryrun, 'replacement_scope', array()));
+                        if (!is_array($scope)) {
+                                $scope = array();
+                        }
+
+                        $items = arraySafeVal($dryrun, 'items', arraySafeVal($dryrun, 'candidates', array()));
+                        if (!is_array($items)) {
+                                $items = array();
+                        }
+
+                        $findFirstScalar = null;
+                        $findFirstScalar = function($node, $keys) use (&$findFirstScalar) {
+                                if (!is_array($node)) {
+                                        return null;
+                                }
+                                foreach ($keys as $key) {
+                                        if (array_key_exists($key, $node) && !is_array($node[$key]) && $node[$key] !== null && $node[$key] !== '') {
+                                                return $node[$key];
+                                        }
+                                }
+                                foreach ($node as $value) {
+                                        if (is_array($value)) {
+                                                $found = $findFirstScalar($value, $keys);
+                                                if ($found !== null) {
+                                                        return $found;
+                                                }
+                                        }
+                                }
+                                return null;
+                        };
+
+                        $findLargestCount = null;
+                        $findLargestCount = function($node) use (&$findLargestCount) {
+                                $max = 0;
+                                if (!is_array($node)) {
+                                        return $max;
+                                }
+
+                                foreach (array('candidate_count', 'selected_count', 'row_count', 'total_selected') as $key) {
+                                        if (array_key_exists($key, $node) && !is_array($node[$key]) && is_numeric($node[$key])) {
+                                                $max = max($max, intval($node[$key]));
+                                        }
+                                }
+
+                                foreach (array('candidate_rows', 'selected_rows', 'rows', 'blocks', 'candidates') as $key) {
+                                        if (array_key_exists($key, $node) && is_array($node[$key])) {
+                                                $max = max($max, count($node[$key]));
+                                        }
+                                }
+
+                                foreach ($node as $value) {
+                                        if (is_array($value)) {
+                                                $max = max($max, $findLargestCount($value));
+                                        }
+                                }
+
+                                return $max;
+                        };
+
+                        $dryCoinId = arraySafeVal($scope, 'coin_id', arraySafeVal($dryrun, 'coin_id', null));
+                        if ($dryCoinId === null) {
+                                $dryCoinId = $findFirstScalar($dryrun, array('coin_id'));
+                        }
+
+                        $selector = arraySafeVal($dryrun, 'selector', null);
+                        if ($selector === null || !is_string($selector)) {
+                                $selector = arraySafeVal($scope, 'selector', 'backlog');
+                        }
+                        if (!is_string($selector)) {
+                                $selector = 'backlog';
+                        }
+
+                        if ($opts['coin-id'] !== null && $dryCoinId !== null && (string)$dryCoinId !== (string)$opts['coin-id']) {
+                                $errors[] = 'dryrun report coin-id mismatch.';
+                        }
+                        if ($selector !== 'backlog') {
+                                $errors[] = 'only backlog selector dryrun reports can be packaged.';
+                        }
+
+                        $count = intval(arraySafeVal($dryrun, 'candidate_count', arraySafeVal($dryrun, 'selected_count', 0)));
+                        if ($count < 1) {
+                                $count = $findLargestCount($dryrun);
+                        }
+                        if ($count < 1 && count($items) > 0) {
+                                $count = count($items);
+                        }
+                        if ($count < 1) {
+                                $errors[] = 'dryrun report has no selected candidates.';
+                        }
+                        if ($count > 50) {
+                                $errors[] = 'approval package refuses more than 50 block rows.';
+                        }
+
+                        $checks = arraySafeVal($dryrun, 'checks', array());
+                        if (is_array($checks)) {
+                                foreach ($checks as $name => $value) {
+                                        if ($value !== true && $value !== 'PASS') {
+                                                $errors[] = 'dryrun check failed: '.$name;
+                                        }
+                                }
+                        }
+
+                        $dryChecksum = arraySafeVal($dryrun, 'dryrun_report_checksum', arraySafeVal($dryrun, 'report_checksum'));
+                        if (is_array($dryChecksum)) {
+                                $dryChecksum = arraySafeVal($dryChecksum, 'sha256', arraySafeVal($dryChecksum, 'checksum', null));
+                        }
+                        if ($opts['dryrun-report-checksum'] !== null && $dryChecksum !== null && $opts['dryrun-report-checksum'] !== $dryChecksum) {
+                                $errors[] = 'dryrun report checksum mismatch.';
+                        }
+                }
+
+                foreach ($errors as $error) {
+                        $this->guard->addError($error);
+                }
+
+                $report = array(
+                        'schema' => 'badpool.block-accounting-approval-package.v1',
+                        'action' => 'block-accounting-approval-package',
+                        'mode' => 'read-only-approval-package',
+                        'generated_at' => date('c'),
+                        'status' => empty($errors) ? 'pass' : 'refused',
+                        'read_only' => true,
+                        'wallet_reads' => false,
+                        'wallet_sends' => false,
+                        'db_mutations' => false,
+                        'share_deletion' => false,
+                        'payout_retry_delete' => false,
+                        'service_actions' => false,
+                        'backend_execute_mode' => false,
+                        'source_dryrun_report' => $opts['dryrun-report'],
+                        'scope' => $scope,
+                        'selected_count' => $count,
+                        'items' => $items,
+                        'checks' => is_array($dryrun) ? arraySafeVal($dryrun, 'checks', array()) : array(),
+                        'selected_scope_checksum' => is_array($dryrun) ? arraySafeVal($dryrun, 'selected_scope_checksum') : null,
+                        'candidate_rows_checksum' => is_array($dryrun) ? arraySafeVal($dryrun, 'candidate_rows_checksum') : null,
+                        'dryrun_report_checksum' => is_array($dryrun) ? arraySafeVal($dryrun, 'dryrun_report_checksum', arraySafeVal($dryrun, 'report_checksum')) : null,
+                        'operator_confirmation_embedded' => false,
+                        'apply_status' => 'future-apply-not-implemented',
+                        'apply_command_shape' => 'php yaamp/yiic.php badpoolguard block-accounting-apply --approval-package=<path> --format=json',
+                        'warnings' => array('block accounting apply is intentionally not implemented in this package.'),
+                        'errors' => $errors,
+                );
+
+                $report['approval_package_checksum'] = hash('sha256', json_encode($report));
+                return $report;
+        }
+
 
 	private function blockAccountingDryrunContextArgs($args)
 	{
