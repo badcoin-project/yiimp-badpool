@@ -66,6 +66,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 		'account-credit-clear-dryrun',
 		'block-accounting-dryrun',
             'block-accounting-approval-package',
+            'block-accounting-apply',
 		'account-credit-clear-approval-package',
 		'account-credit-clear-apply',
 		'safety-scan',
@@ -92,6 +93,9 @@ class BadpoolGuardCommand extends CConsoleCommand
 		}
 
 		$actionArgs = $args;
+                if ($action === 'block-accounting-apply') {
+                        $actionArgs = $this->blockAccountingApplyContextArgs($args);
+                }
                 if ($action === 'block-accounting-approval-package') {
                         $actionArgs = $this->blockAccountingApprovalPackageContextArgs($args);
                 }
@@ -253,6 +257,9 @@ class BadpoolGuardCommand extends CConsoleCommand
 				break;
                         case 'block-accounting-approval-package':
                                 $report = $this->blockAccountingApprovalPackageReport($args);
+                                break;
+                        case 'block-accounting-apply':
+                                $report = $this->blockAccountingApplyReport($args);
                                 break;
 			case 'account-credit-clear-approval-package':
 				$report = $this->accountCreditClearApprovalPackageReport($args);
@@ -7471,6 +7478,151 @@ class BadpoolGuardCommand extends CConsoleCommand
 		foreach ($errors as $error)
 			$this->guard->addError($error);
 	}
+
+        private function blockAccountingApplyContextArgs($args)
+    {
+        $out = array('--all-coins-preview');
+        foreach ($args as $arg) {
+            if ($arg === '--format=json'
+                || $arg === '--format=text'
+                || strpos($arg, '--format=') === 0) {
+                $out[] = $arg;
+            }
+        }
+
+        return $out;
+    }
+
+        private function blockAccountingApplyReport($args)
+        {
+                $opts = array(
+                        'approval-package' => null,
+                        'approval-package-checksum' => null,
+                        'operator-confirms-block-accounting' => null,
+                        'format' => 'json',
+                );
+                $seen = array();
+                $errors = array();
+
+                foreach ($args as $arg) {
+                        if (!preg_match('/^--([a-z0-9-]+)(=(.*))?$/i', $arg, $m)) {
+                                $errors[] = 'Malformed option refused: '.$arg;
+                                continue;
+                        }
+
+                        $name = strtolower($m[1]);
+                        $value = array_key_exists(3, $m) ? $m[3] : null;
+
+                        if (!array_key_exists($name, $opts)) {
+                                $errors[] = 'Unknown option refused: --'.$name;
+                                continue;
+                        }
+                        if (isset($seen[$name])) {
+                                $errors[] = 'Duplicate option refused: --'.$name;
+                                continue;
+                        }
+                        if ($value === null || $value === '') {
+                                $errors[] = 'Option requires a value: --'.$name;
+                                continue;
+                        }
+
+                        $seen[$name] = true;
+                        $opts[$name] = $value;
+                }
+
+                if ($opts['approval-package'] === null) {
+                        $errors[] = 'block-accounting-apply requires --approval-package=<path>.';
+                }
+
+                $approval = null;
+                if ($opts['approval-package'] !== null) {
+                        if (is_readable($opts['approval-package'])) {
+                                $approval = json_decode(file_get_contents($opts['approval-package']), true);
+                                if (!is_array($approval)) {
+                                        $errors[] = 'approval package is not valid JSON.';
+                                }
+                        } else {
+                                $errors[] = 'approval package is not readable.';
+                        }
+                }
+
+                if (is_array($approval)) {
+                        if (arraySafeVal($approval, 'schema') !== 'badpool.block-accounting-approval-package.v1') {
+                                $errors[] = 'approval package schema mismatch.';
+                        }
+                        if (arraySafeVal($approval, 'status') !== 'pass') {
+                                $errors[] = 'approval package must have pass status.';
+                        }
+                        if (arraySafeVal($approval, 'operator_confirmation_embedded') !== false) {
+                                $errors[] = 'approval package must not embed operator confirmation.';
+                        }
+
+                        $selectedCount = intval(arraySafeVal($approval, 'selected_count', 0));
+                        if ($selectedCount < 1) {
+                                $errors[] = 'approval package has no selected candidates.';
+                        }
+                        if ($selectedCount > 50) {
+                                $errors[] = 'block-accounting-apply refuses more than 50 block rows.';
+                        }
+
+                        foreach (array('selected_scope_checksum', 'candidate_rows_checksum', 'dryrun_report_checksum', 'approval_package_checksum') as $key) {
+                                if (!array_key_exists($key, $approval) || $approval[$key] === null || $approval[$key] === '') {
+                                        $errors[] = 'approval package missing '.$key.'.';
+                                }
+                        }
+
+                        $packageChecksum = arraySafeVal($approval, 'approval_package_checksum');
+                        if (is_array($packageChecksum)) {
+                                $packageChecksum = arraySafeVal($packageChecksum, 'sha256', arraySafeVal($packageChecksum, 'checksum', arraySafeVal($packageChecksum, 'value', null)));
+                        }
+                        if ($opts['approval-package-checksum'] !== null && $packageChecksum !== null && $opts['approval-package-checksum'] !== $packageChecksum) {
+                                $errors[] = 'approval package checksum mismatch.';
+                        }
+                }
+
+                if ($opts['operator-confirms-block-accounting'] !== 'apply_selected_block_accounting_package') {
+                        $errors[] = 'block-accounting-apply requires --operator-confirms-block-accounting=apply_selected_block_accounting_package.';
+                }
+
+                foreach ($errors as $error) {
+                        $this->guard->addError($error);
+                }
+
+                $report = array(
+                        'schema' => 'badpool.block-accounting-apply.v1',
+                        'action' => 'block-accounting-apply',
+                        'mode' => 'guarded-apply',
+                        'generated_at' => date('c'),
+                        'status' => empty($errors) ? 'ready' : 'refused',
+                        'read_only' => false,
+                        'wallet_reads' => false,
+                        'wallet_sends' => false,
+                        'db_mutations' => empty($errors),
+                        'share_deletion' => false,
+                        'payout_retry_delete' => false,
+                        'service_actions' => false,
+                        'backend_execute_mode' => false,
+                        'approval_package' => $opts['approval-package'],
+                        'selected_count' => is_array($approval) ? intval(arraySafeVal($approval, 'selected_count', 0)) : 0,
+                        'selected_scope_checksum' => is_array($approval) ? arraySafeVal($approval, 'selected_scope_checksum') : null,
+                        'candidate_rows_checksum' => is_array($approval) ? arraySafeVal($approval, 'candidate_rows_checksum') : null,
+                        'dryrun_report_checksum' => is_array($approval) ? arraySafeVal($approval, 'dryrun_report_checksum') : null,
+                        'approval_package_checksum' => is_array($approval) ? arraySafeVal($approval, 'approval_package_checksum') : null,
+                        'blocked_before_mutation' => !empty($errors),
+                        'applied_block_count' => 0,
+                        'created_earnings_count' => 0,
+                        'updated_block_count' => 0,
+                        'wallet_rpc_send_performed' => false,
+                        'backend_callbacks_invoked' => false,
+                        'daemon_rpc_invoked' => false,
+                        'errors' => $errors,
+                        'warnings' => array('mutation executor is intentionally not wired in this guard commit.'),
+                );
+
+                $report['report_checksum'] = hash('sha256', json_encode($report));
+                return $report;
+        }
+
 
         private function blockAccountingApprovalPackageContextArgs($args)
         {
