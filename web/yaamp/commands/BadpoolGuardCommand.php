@@ -7597,7 +7597,7 @@ class BadpoolGuardCommand extends CConsoleCommand
                         'read_only' => false,
                         'wallet_reads' => false,
                         'wallet_sends' => false,
-                        'db_mutations' => empty($errors),
+                        'db_mutations' => false,
                         'share_deletion' => false,
                         'payout_retry_delete' => false,
                         'service_actions' => false,
