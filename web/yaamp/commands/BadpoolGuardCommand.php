@@ -7616,6 +7616,7 @@ class BadpoolGuardCommand extends CConsoleCommand
                         'backend_callbacks_invoked' => false,
                         'daemon_rpc_invoked' => false,
                         'errors' => $errors,
+                        'planned_mutations' => is_array($approval) ? $this->blockAccountingApplyPlannedMutations($approval) : array(),
                         'warnings' => array('mutation executor is intentionally not wired in this guard commit.'),
                 );
 
@@ -7623,6 +7624,61 @@ class BadpoolGuardCommand extends CConsoleCommand
                 return $report;
         }
 
+
+        private function blockAccountingApplyPlannedMutations($approval)
+        {
+                $blocks = arraySafeVal(arraySafeVal($approval, 'items', array()), 'candidate_blocks', array());
+                $plan = array(
+                        'schema' => 'badpool.block-accounting-apply-plan.v1',
+                        'source' => 'approval_package_candidate_blocks',
+                        'executor_wired' => false,
+                        'wallet_rpc_required' => false,
+                        'backend_callbacks_required' => false,
+                        'database_mutation_required_for_future_apply' => true,
+                        'block_update_count' => 0,
+                        'earning_insert_count' => 0,
+                        'selected_block_ids' => array(),
+                        'block_updates' => array(),
+                        'earning_inserts' => array(),
+                        'warnings' => array(
+                                'plan is read-only evidence only; it is not an apply executor',
+                                'candidate blocks do not include daemon reward amounts yet',
+                                'earning inserts remain blocked until attribution inputs are explicit and package-bound',
+                        ),
+                );
+
+                foreach ($blocks as $block) {
+                        if (!is_array($block)) {
+                                continue;
+                        }
+
+                        $blockId = intval(arraySafeVal($block, 'id', 0));
+                        if ($blockId <= 0) {
+                                continue;
+                        }
+
+                        $plan['selected_block_ids'][] = $blockId;
+                        $plan['block_updates'][] = array(
+                                'block_id' => $blockId,
+                                'from_category' => arraySafeVal($block, 'category'),
+                                'to_category' => 'immature_or_orphan_future_resolved',
+                                'height' => arraySafeVal($block, 'height'),
+                                'userid' => arraySafeVal($block, 'userid'),
+                                'workerid' => arraySafeVal($block, 'workerid'),
+                                'amount' => arraySafeVal($block, 'amount'),
+                                'txhash' => arraySafeVal($block, 'txhash'),
+                                'requires_wallet_rpc_evidence' => true,
+                                'would_call_backend_block_new' => false,
+                        );
+                }
+
+                $plan['block_update_count'] = count($plan['block_updates']);
+                $plan['selected_block_ids_checksum'] = BadpoolGuardReport::checksum($plan['selected_block_ids']);
+                $plan['block_updates_checksum'] = BadpoolGuardReport::checksum($plan['block_updates']);
+                $plan['earning_inserts_checksum'] = BadpoolGuardReport::checksum($plan['earning_inserts']);
+
+                return $plan;
+        }
 
         private function blockAccountingApprovalPackageContextArgs($args)
         {
