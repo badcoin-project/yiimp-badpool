@@ -35,6 +35,10 @@ class BadpoolGuardContext
 		'payment-delay-override-package',
 		'payment-delay-override-package-checksum',
 		'operator-confirms-payment-delay-override',
+		'selector',
+		'first-block-id',
+		'last-block-id',
+		'max-rows',
 	);
 
 	private $dangerousOptions = array(

@@ -7360,13 +7360,14 @@ class BadpoolGuardCommand extends CConsoleCommand
 		if ($maxRows < 1 || $maxRows > 50)
 			$errors[] = '--max-rows must be between 1 and 50.';
 
+		$autoBacklogBounds = false;
 		if ($selector === 'backlog') {
-			if ($first === null)
-				$errors[] = 'backlog selector requires --first-block-id=<positive integer>.';
-			if ($last === null)
-				$errors[] = 'backlog selector requires --last-block-id=<positive integer>.';
+			if (($first === null && $last !== null) || ($first !== null && $last === null))
+				$errors[] = 'backlog selector requires both --first-block-id and --last-block-id when either is supplied.';
 			if ($first !== null && $last !== null && $last < $first)
 				$errors[] = '--last-block-id must be greater than or equal to --first-block-id.';
+			if ($first === null && $last === null)
+				$autoBacklogBounds = true;
 		}
 
 		if ($selector === 'forward') {
@@ -7376,6 +7377,30 @@ class BadpoolGuardCommand extends CConsoleCommand
 		}
 
 		$selectedCount = ($selector === 'backlog' && $first !== null && $last !== null && $last >= $first) ? ($last - $first + 1) : 0;
+
+		if ($selector === 'backlog' && $autoBacklogBounds && count($errors) === 0) {
+			$limit = intval($maxRows);
+			$autoRows = $this->guard->selectAll(
+				"SELECT id FROM blocks WHERE coin_id=:coin_id AND category='new' ORDER BY id LIMIT ".$limit,
+				array(':coin_id'=>$coinId)
+			);
+
+			$autoIds = array();
+			foreach ($autoRows as $autoRow) {
+				$autoId = intval(arraySafeVal($autoRow, 'id', 0));
+				if ($autoId > 0)
+					$autoIds[] = $autoId;
+			}
+
+			if (count($autoIds) < 1) {
+				$errors[] = 'backlog selector found no category=new rows for the requested coin.';
+			} else {
+				$first = min($autoIds);
+				$last = max($autoIds);
+				$selectedCount = count($autoIds);
+			}
+		}
+
 		if ($selector === 'backlog' && $selectedCount > $maxRows)
 			$errors[] = 'backlog selector refuses more than --max-rows block rows.';
 
@@ -7385,6 +7410,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 			'first_block_id' => $first,
 			'last_block_id' => $last,
 			'selected_count_from_bounds' => $selectedCount,
+			'bounds_source' => $autoBacklogBounds ? 'auto-oldest-new-window' : 'explicit',
 			'max_rows' => $maxRows,
 			'category' => 'new',
 		);
@@ -7907,13 +7933,13 @@ class BadpoolGuardCommand extends CConsoleCommand
                 return $report;
         }
 
-
 	private function blockAccountingDryrunContextArgs($args)
 	{
 		$out = array();
 		foreach ($args as $arg) {
-			if (preg_match('/^--(coin-id|format)(=.*)?$/i', $arg))
+			if (preg_match('/^--(coin-id|format|selector|first-block-id|last-block-id|max-rows)=/', $arg)) {
 				$out[] = $arg;
+			}
 		}
 		return $out;
 	}
