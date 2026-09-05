@@ -21,6 +21,8 @@ class BadpoolGuardContext
 	private $allowedOptions = array(
 		'coin-id',
 		'all-coins-preview',
+			'dryrun-report',
+			'retained-dryrun-report',
 		'format',
 		'limit',
 		'selected-payout-ids',

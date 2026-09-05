@@ -7713,7 +7713,7 @@ class BadpoolGuardCommand extends CConsoleCommand
         {
                 $out = array();
                 foreach ($args as $arg) {
-                        if (preg_match('/^--(coin-id|format)(=.*)?$/i', $arg)) {
+                        if (preg_match('/^--(coin-id|format|dryrun-report|retained-dryrun-report)(=.*)?$/i', $arg)) {
                                 $out[] = $arg;
                         }
                 }
@@ -7724,6 +7724,7 @@ class BadpoolGuardCommand extends CConsoleCommand
         {
                 $opts = array(
                         'dryrun-report' => null,
+                        'retained-dryrun-report' => null,
                         'dryrun-report-checksum' => null,
                         'coin-id' => null,
                         'format' => 'json',
@@ -7757,6 +7758,12 @@ class BadpoolGuardCommand extends CConsoleCommand
                         $opts[$name] = $value;
                 }
 
+                if ($opts['dryrun-report'] !== null && $opts['retained-dryrun-report'] !== null) {
+                        $errors[] = 'Use either --dryrun-report or --retained-dryrun-report, not both.';
+                }
+                if ($opts['dryrun-report'] === null && $opts['retained-dryrun-report'] !== null) {
+                        $opts['dryrun-report'] = $opts['retained-dryrun-report'];
+                }
                 if ($opts['dryrun-report'] === null) {
                         $errors[] = 'block-accounting-approval-package requires --dryrun-report=<path>.';
                 }
