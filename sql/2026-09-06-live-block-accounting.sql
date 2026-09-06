@@ -15,7 +15,7 @@ CREATE TABLE `live_block_candidates` (
   `blockhash` varchar(255) NOT NULL,
   `algo` varchar(32) NOT NULL,
   `found_time` int unsigned NOT NULL,
-  `price` double NOT NULL,
+  `price` double NOT NULL DEFAULT 0,
   `share_floor_id` bigint unsigned NOT NULL,
   `share_ceiling_id` bigint unsigned NOT NULL,
   PRIMARY KEY (`block_id`),
