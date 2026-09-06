@@ -212,8 +212,8 @@ void block_prune(YAAMP_DB *db)
 			"WHERE C.algo='%s' GROUP BY IFNULL(CO.price,0),C.last_share_id", blockid, block->coinid, block->hash,
 			g_stratum_algo, (int)block->created, block->coinid, g_stratum_algo);
 		db_query(db, "INSERT INTO live_block_attributions (block_id,userid,difficulty,no_fees,donation) "
-			"SELECT %llu,S.userid,SUM(S.difficulty),A.no_fees,A.donation FROM shares S INNER JOIN live_block_candidates C ON C.block_id=%llu "
-			"INNER JOIN accounts A ON A.id=S.userid WHERE S.id>C.share_floor_id AND S.id<=C.share_ceiling_id AND S.valid=1 AND S.algo='%s' GROUP BY S.userid,A.no_fees,A.donation",
+			"SELECT %llu,S.userid,SUM(S.difficulty),IFNULL(A.no_fees,0),IFNULL(A.donation,0) FROM shares S INNER JOIN live_block_candidates C ON C.block_id=%llu "
+			"INNER JOIN accounts A ON A.id=S.userid WHERE S.id>C.share_floor_id AND S.id<=C.share_ceiling_id AND S.valid=1 AND S.algo='%s' GROUP BY S.userid,IFNULL(A.no_fees,0),IFNULL(A.donation,0)",
 			blockid, blockid, g_stratum_algo);
 		db_query(db, "UPDATE live_block_share_cursors C INNER JOIN live_block_candidates B ON B.block_id=%llu "
 			"SET C.last_share_id=B.share_ceiling_id WHERE C.algo='%s'", blockid, g_stratum_algo);

@@ -23,10 +23,15 @@ $empty=new FixtureStore;$empty->blocks[5]=array('id'=>5,'coin_id'=>1267,'blockha
 $src=file_get_contents(dirname(__FILE__).'/../web/yaamp/core/backend/BadpoolLiveBlockAccounting.php');$insert=file_get_contents(dirname(__FILE__).'/../stratum/share.cpp');$schema=file_get_contents(dirname(__FILE__).'/../sql/2026-09-06-live-block-accounting.sql');
 ok(strpos($insert,'SELECT %llu,%d,\'%s\',\'%s\',%d,CO.price,')===false,'raw nullable price excluded');
 ok(strpos($insert,'IFNULL(CO.price,0)')!==false,'null price normalized');
+ok(strpos($insert,'IFNULL(A.no_fees,0)')!==false,'null no_fees normalized');
+ok(strpos($insert,'IFNULL(A.donation,0)')!==false,'null donation normalized');
+ok(strpos($insert,'GROUP BY S.userid,IFNULL(A.no_fees,0),IFNULL(A.donation,0)')!==false,'attribution grouping uses normalized account fields');
 ok(preg_match('/`price`\s+double\s+NOT NULL\s+DEFAULT 0/i',$schema)===1,'schema price default safe');
 $p0=strpos($insert,'insert into blocks');$p1=strpos($insert,'INSERT INTO live_block_candidates');$p2=strpos($insert,'INSERT INTO live_block_attributions');$p3=strpos($insert,'UPDATE live_block_share_cursors C INNER JOIN live_block_candidates');
 ok($p0!==false&&$p1!==false&&$p2!==false&&$p3!==false&&$p0<$p1&&$p1<$p2&&$p2<$p3,'live insert sequence preserved');
 ok(strpos($insert,'INSERT IGNORE INTO live_block_share_cursors')!==false&&strpos($insert,'last_share_id=B.share_ceiling_id')!==false,'share cursor behavior preserved');
+ok(strpos($insert,'INNER JOIN live_block_candidates C ON C.block_id=%llu')!==false,'live candidate eligibility boundary preserved');
+ok(stripos($insert,"WHERE category='new'")===false,'no historical new-block backlog selection');
 foreach(array('DELETE FROM shares','status=1','status=2','INSERT INTO payouts','sendmany','service ') as $forbidden)ok(stripos($src.$insert,$forbidden)===false,'forbidden '.$forbidden);
 ok(strpos($src,'live_block_candidates')!==false&&strpos($insert,'live_block_candidates')!==false,'durable live ledger');
 if($fail)throw new RuntimeException('FAIL: '.implode('; ',$fail));echo "PASS live front block accounting harness\n";
