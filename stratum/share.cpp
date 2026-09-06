@@ -179,9 +179,6 @@ void share_prune(YAAMP_DB *db)
 
 void block_prune(YAAMP_DB *db)
 {
-	int count = 0;
-	char buffer[128*1024] = "insert into blocks (height, blockhash, coin_id, userid, workerid, category, difficulty, difficulty_user, time, algo, segwit) values ";
-
 	g_list_block.Enter();
 	for(CLI li = g_list_block.first; li; li = li->next)
 	{
@@ -198,17 +195,34 @@ void block_prune(YAAMP_DB *db)
 			continue;
 		}
 
-		if(count) strcat(buffer, ",");
-		sprintf(buffer+strlen(buffer), "(%d, '%s', %d, %d, %d, 'new', %f, %f, %d, '%s', %d)",
+		// A block and its discovery-time attribution are one durable unit.  The
+		// cursor is seeded by the deployment migration, so old `new` rows never
+		// acquire a live candidate record.
+		db_query(db, "START TRANSACTION");
+		db_query(db, "INSERT IGNORE INTO live_block_share_cursors (algo,last_share_id) VALUES ('%s',0)", g_stratum_algo);
+		db_query(db, "UPDATE live_block_share_cursors SET last_share_id=last_share_id WHERE algo='%s'", g_stratum_algo);
+		db_query(db, "insert into blocks (height, blockhash, coin_id, userid, workerid, category, difficulty, difficulty_user, time, algo, segwit) values "
+			"(%d, '%s', %d, %d, %d, 'new', %f, %f, %d, '%s', %d)",
 			block->height, block->hash, block->coinid, block->userid, block->workerid,
 			block->difficulty, block->difficulty_user, (int)block->created, g_stratum_algo, block->segwit?1:0);
+		unsigned long long blockid = mysql_insert_id(&db->mysql);
+		db_query(db, "INSERT INTO live_block_candidates (block_id,coin_id,blockhash,algo,found_time,price,share_floor_id,share_ceiling_id) "
+			"SELECT %llu,%d,'%s','%s',%d,CO.price,C.last_share_id,IFNULL(MAX(S.id),C.last_share_id) "
+			"FROM live_block_share_cursors C INNER JOIN coins CO ON CO.id=%d LEFT JOIN shares S ON S.algo=C.algo AND S.id>C.last_share_id "
+			"WHERE C.algo='%s' GROUP BY CO.price,C.last_share_id", blockid, block->coinid, block->hash,
+			g_stratum_algo, (int)block->created, block->coinid, g_stratum_algo);
+		db_query(db, "INSERT INTO live_block_attributions (block_id,userid,difficulty,no_fees,donation) "
+			"SELECT %llu,S.userid,SUM(S.difficulty),A.no_fees,A.donation FROM shares S INNER JOIN live_block_candidates C ON C.block_id=%llu "
+			"INNER JOIN accounts A ON A.id=S.userid WHERE S.id>C.share_floor_id AND S.id<=C.share_ceiling_id AND S.valid=1 AND S.algo='%s' GROUP BY S.userid,A.no_fees,A.donation",
+			blockid, blockid, g_stratum_algo);
+		db_query(db, "UPDATE live_block_share_cursors C INNER JOIN live_block_candidates B ON B.block_id=%llu "
+			"SET C.last_share_id=B.share_ceiling_id WHERE C.algo='%s'", blockid, g_stratum_algo);
+		db_query(db, "COMMIT");
 
 		object_delete(block);
-		count++;
 	}
 
 	g_list_block.Leave();
-	if(count) db_query(db, buffer);
 }
 
 void block_add(int userid, int workerid, int coinid, int height, double diff, double diff_user, const char *h1, const char *h2, int segwit)
