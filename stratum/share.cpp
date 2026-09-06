@@ -207,9 +207,9 @@ void block_prune(YAAMP_DB *db)
 			block->difficulty, block->difficulty_user, (int)block->created, g_stratum_algo, block->segwit?1:0);
 		unsigned long long blockid = mysql_insert_id(&db->mysql);
 		db_query(db, "INSERT INTO live_block_candidates (block_id,coin_id,blockhash,algo,found_time,price,share_floor_id,share_ceiling_id) "
-			"SELECT %llu,%d,'%s','%s',%d,CO.price,C.last_share_id,IFNULL(MAX(S.id),C.last_share_id) "
+			"SELECT %llu,%d,'%s','%s',%d,IFNULL(CO.price,0),C.last_share_id,IFNULL(MAX(S.id),C.last_share_id) "
 			"FROM live_block_share_cursors C INNER JOIN coins CO ON CO.id=%d LEFT JOIN shares S ON S.algo=C.algo AND S.id>C.last_share_id "
-			"WHERE C.algo='%s' GROUP BY CO.price,C.last_share_id", blockid, block->coinid, block->hash,
+			"WHERE C.algo='%s' GROUP BY IFNULL(CO.price,0),C.last_share_id", blockid, block->coinid, block->hash,
 			g_stratum_algo, (int)block->created, block->coinid, g_stratum_algo);
 		db_query(db, "INSERT INTO live_block_attributions (block_id,userid,difficulty,no_fees,donation) "
 			"SELECT %llu,S.userid,SUM(S.difficulty),A.no_fees,A.donation FROM shares S INNER JOIN live_block_candidates C ON C.block_id=%llu "
