@@ -1,6 +1,7 @@
 <?php
 
 require_once(dirname(__FILE__).'/../core/backend/BadpoolGuardContext.php');
+require_once(dirname(__FILE__).'/../core/backend/BadpoolLiveCaptureEarningsBridge.php');
 require_once(dirname(__FILE__).'/../core/backend/BadpoolStage1Manifest.php');
 require_once(dirname(__FILE__).'/../core/backend/BadpoolBackwardMaturityDryrun.php');
 require_once(dirname(__FILE__).'/../core/backend/BadpoolBackwardMaturityApprovalPackage.php');
@@ -66,7 +67,10 @@ class BadpoolGuardCommand extends CConsoleCommand
 		'account-credit-clear-dryrun',
 		'block-accounting-dryrun',
             'block-accounting-approval-package',
-            'block-accounting-apply',
+		'block-accounting-apply',
+		'live-capture-earnings-dryrun',
+		'live-capture-earnings-approval-package',
+		'live-capture-earnings-apply',
 		'account-credit-clear-approval-package',
 		'account-credit-clear-apply',
 		'safety-scan',
@@ -258,9 +262,14 @@ class BadpoolGuardCommand extends CConsoleCommand
                         case 'block-accounting-approval-package':
                                 $report = $this->blockAccountingApprovalPackageReport($args);
                                 break;
-                        case 'block-accounting-apply':
-                                $report = $this->blockAccountingApplyReport($args);
-                                break;
+			case 'block-accounting-apply':
+				$report = $this->blockAccountingApplyReport($args);
+				break;
+			case 'live-capture-earnings-dryrun':
+			case 'live-capture-earnings-approval-package':
+			case 'live-capture-earnings-apply':
+				$report = $this->liveCaptureEarningsReport($action, $args);
+				break;
 			case 'account-credit-clear-approval-package':
 				$report = $this->accountCreditClearApprovalPackageReport($args);
 				break;
@@ -337,6 +346,9 @@ class BadpoolGuardCommand extends CConsoleCommand
 			"       Retained-package apply additionally requires --retained-dryrun-report=<path> and the package-bound --retained-dryrun-report-checksum=<sha256>; the operator confirmation remains a separate runtime requirement.\n".
 			"       php yaamp/yiic.php badpoolguard account-credit-clear-dryrun --coin-id=<id> [--format=json|text]\n".
 				"       php yaamp/yiic.php badpoolguard block-accounting-dryrun --coin-id=<id> --selector=backlog --first-block-id=<id> --last-block-id=<id> [--max-rows=50] [--format=json|text]\n".
+			"       php yaamp/yiic.php badpoolguard live-capture-earnings-dryrun --coin-id=<id> [--selected-block-ids=<csv>] [--limit=<n>] [--format=json|text]\n".
+			"       php yaamp/yiic.php badpoolguard live-capture-earnings-approval-package --coin-id=<id> [--selected-block-ids=<csv>] [--limit=<n>] --format=json\n".
+			"       ".BadpoolLiveCaptureEarningsBridge::applyCommandShape()."\n".
 			"       php yaamp/yiic.php badpoolguard account-credit-clear-approval-package --coin-id=<id> [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard account-credit-clear-apply --coin-id=<id> --selected-earning-ids=<csv> --approval-package-checksum=<sha256> --selected-earnings-scope-checksum=<sha256> --projected-earnings-mutation-checksum=<sha256> --projected-account-credit-checksum=<sha256> --operator-confirms-account-credit=scrypt_status1_to_status2_balance_increment --format=json\n".
 			"       php yaamp/yiic.php badpoolguard safety-scan --coin-id=<id> [--format=json|text]\n".
@@ -7962,6 +7974,29 @@ class BadpoolGuardCommand extends CConsoleCommand
 				$o[$name] = $m[2];
 		}
 		return $o;
+	}
+
+	private function liveCaptureEarningsReport($action, $args)
+	{
+		$options=array(); foreach($args as $arg) if(preg_match('/^--([^=]+)=(.*)$/',$arg,$m)) $options[strtolower($m[1])]=$m[2];
+		$bridge=new BadpoolLiveCaptureEarningsBridge(new BadpoolYiiLiveCaptureEarningsStore(app()->db));
+		try {
+			$coinId=intval(arraySafeVal($options,'coin-id',0));
+			if($action==='live-capture-earnings-apply') {
+				$path=arraySafeVal($options,'approval-package');$checksum=arraySafeVal($options,'approval-package-checksum');
+				if(!$path||!$checksum||!is_file($path)) throw new InvalidArgumentException('apply requires an approval package path and checksum');
+				$raw=file_get_contents($path); if(!hash_equals(strtolower($checksum),hash('sha256',$raw))) throw new RuntimeException('approval package file checksum mismatch');
+				$package=json_decode($raw,true); if(!is_array($package)||intval(arraySafeVal($package,'coin_id'))!==$coinId) throw new RuntimeException('approval package coin scope mismatch');
+				$provided=array('selected_scope_checksum'=>arraySafeVal($options,'selected-scope-checksum'),'source_live_candidate_checksum'=>arraySafeVal($options,'source-live-candidate-checksum'),'attribution_checksum'=>arraySafeVal($options,'attribution-checksum'),'projected_earnings_checksum'=>arraySafeVal($options,'projected-earnings-checksum'));
+				return $bridge->applyPackage($package,$package['approval_package_checksum'],$provided,arraySafeVal($options,'operator-confirms-live-capture-earnings'));
+			}
+			$ids=BadpoolLiveCaptureEarningsBridge::parseIds(arraySafeVal($options,'selected-block-ids',''));
+			$limit=intval(arraySafeVal($options,'limit',25));
+			return $action==='live-capture-earnings-dryrun'?$bridge->dryrun($coinId,$ids,$limit):$bridge->approvalPackage($coinId,$ids,$limit);
+		} catch(Exception $e) {
+			$this->guard->addError($e->getMessage());
+			return array('schema'=>BadpoolLiveCaptureEarningsBridge::SCHEMA,'version'=>1,'action'=>$action,'status'=>'refused','errors'=>array($e->getMessage()),'db_mutations'=>false,'wallet_sends'=>false);
+		}
 	}
 
 }
