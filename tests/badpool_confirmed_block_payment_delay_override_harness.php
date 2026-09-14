@@ -56,4 +56,21 @@ $badPackages=array('missing earning'=>array(array('earning_id'=>11,'account_id'=
 foreach($badPackages as $name=>$items)delay_expect($scopeMethod->invoke($creditAdapter,array('items'=>array('selected_earnings'=>$items)),$creditLedger,'credit',$coin)===false,$name.' credit package was not refused',$fail);
 @unlink($runDir.'/payment-delay-report.json');@rmdir($runDir);
 @unlink($path);
+
+$guardSource=file_get_contents(__DIR__.'/../web/yaamp/commands/BadpoolGuardCommand.php');
+$creditStart=strpos($guardSource,'private function accountCreditClearDryrunReport');
+$creditEnd=strpos($guardSource,'private function accountCreditClearApprovalPackageReport',$creditStart);
+$creditFn=substr($guardSource,$creditStart,$creditEnd-$creditStart);
+delay_expect(
+    strpos($creditFn,"E.mature_time<:delay")!==false
+    && strpos($creditFn,"$where.=' AND E.id IN (")!==false,
+    'selected credit scope retains payment delay predicate',
+    $fail
+);
+delay_expect(
+    strpos($creditFn,"$where='E.status=1 AND E.coinid=:coin_id AND E.id IN (")===false,
+    'selected credit scope still bypasses payment delay',
+    $fail
+);
+
 if($fail){echo "Badpool confirmed-block payment-delay override harness FAILED\n - ".implode("\n - ",$fail)."\n";exit(1);}echo "Badpool confirmed-block payment-delay override harness passed\n";
