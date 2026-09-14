@@ -2276,11 +2276,17 @@ class BadpoolGuardCommand extends CConsoleCommand
 			$applied = $this->applyPayoutRows($approval);
 			$tx->commit();
 			$after = $this->payoutRowAccountBalances($ids);
-			return BadpoolGuardReport::finalize(array_merge($report, $applied, array('status'=>'pass', 'abort_reason'=>null, 'before_account_balances'=>$before, 'after_account_balances'=>$after, 'wallet_rpc_used'=>false, 'db_mutations'=>'guarded_transaction_committed', 'wallet_sends'=>false, 'withdraw_rows_created'=>false, 'backend_loops_run'=>false, 'shares_deleted'=>false)));
+			return $this->payoutRowCommittedReport($report, $applied, $before, $after);
 		} catch (Exception $e) {
 			if ($tx->active) $tx->rollback();
 			return $this->guardedApplyFail($report, 'mutation_failed_rolled_back', $e->getMessage());
 		}
+	}
+
+	private function payoutRowCommittedReport($report, $applied, $before, $after)
+	{
+		$createdIds = array_values((array)arraySafeVal($applied, 'created_payout_ids', array()));
+		return BadpoolGuardReport::finalize(array_merge($report, $applied, array('status'=>'pass', 'abort_reason'=>null, 'before_account_balances'=>$before, 'after_account_balances'=>$after, 'wallet_rpc_used'=>false, 'db_mutations'=>'guarded_transaction_committed', 'payout_rows_created'=>!empty($createdIds), 'wallet_sends'=>false, 'withdraw_rows_created'=>false, 'backend_loops_run'=>false, 'shares_deleted'=>false)));
 	}
 
 	private function applyPayoutRows($approval)

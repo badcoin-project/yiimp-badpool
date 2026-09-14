@@ -1,6 +1,11 @@
 <?php
+class CConsoleCommand {}
+function arraySafeVal($array, $key, $default=null) { return is_array($array) && array_key_exists($key, $array) ? $array[$key] : $default; }
+if (!defined('YAAMP_ALLOW_EXCHANGE')) define('YAAMP_ALLOW_EXCHANGE', false);
+if (!defined('YAAMP_PAYMENTS_FREQ')) define('YAAMP_PAYMENTS_FREQ', 3600);
 $root = dirname(__DIR__);
 $commandPath = $root.'/web/yaamp/commands/BadpoolGuardCommand.php';
+require_once $commandPath;
 $failures = array();
 function expect_contains($label, $haystack, $needle, &$failures) { if (strpos($haystack, $needle) === false) $failures[] = "$label: missing expected text: $needle"; }
 function expect_not_contains($label, $haystack, $needle, &$failures) { if (strpos($haystack, $needle) !== false) $failures[] = "$label: found forbidden text: $needle"; }
@@ -43,6 +48,7 @@ expect_contains('balance changed refusal', $command, 'selected account balance c
 expect_contains('before balances reported', $command, 'before_account_balances', $failures);
 expect_contains('after balances reported', $command, 'after_account_balances', $failures);
 expect_contains('payout count reported', $command, 'payout_count', $failures);
+expect_contains('committed report derives payout creation from created IDs', $command, "'payout_rows_created'=>!empty(\$createdIds)", $failures);
 expect_contains('withdraw rows not created', $command, 'withdraw_rows_created', $failures);
 expect_contains('payouts not marked completed', $command, 'payouts_marked_completed', $failures);
 expect_contains('old payouts not retried or deleted', $command, 'old_payouts_retried_or_deleted', $failures);
@@ -53,5 +59,35 @@ foreach (array('sendtoaddress','sendmany','wallet-rpc','WalletRPC','BackendPayme
 $schemaPreflight = strpos($command, 'payoutRowApplySchemaError');
 $transactionStart = strpos($command, 'app()->db->beginTransaction()', strpos($command, 'private function payoutRowApplyReport'));
 if ($schemaPreflight === false || $transactionStart === false || $schemaPreflight > $transactionStart) $failures[] = 'schema preflight must exist before payout-row apply transaction begins';
+
+// Exercise report assembly without executing database or wallet operations. This
+// helper is reached by production only after the guarded transaction commits.
+class PayoutReportGuard {
+	public function baseReport($status='ok') { return array('status'=>$status, 'errors'=>array(), 'warnings'=>array()); }
+}
+$reportCommand = new BadpoolGuardCommand;
+$guardProperty = new ReflectionProperty('BadpoolGuardCommand', 'guard');
+$guardProperty->setAccessible(true);
+$guardProperty->setValue($reportCommand, new PayoutReportGuard);
+$baseMethod = new ReflectionMethod('BadpoolGuardCommand', 'guardedApplyBaseReport');
+$baseMethod->setAccessible(true);
+$committedMethod = new ReflectionMethod('BadpoolGuardCommand', 'payoutRowCommittedReport');
+$committedMethod->setAccessible(true);
+$failMethod = new ReflectionMethod('BadpoolGuardCommand', 'guardedApplyFail');
+$failMethod->setAccessible(true);
+$base = $baseMethod->invoke($reportCommand, 'payout-row', array());
+$single = $committedMethod->invoke($reportCommand, $base, array('created_count'=>1, 'created_amount'=>'1.25000000', 'created_payout_ids'=>array(521), 'debited_account_ids'=>array(79), 'payout_rows_inserted'=>1), array(79=>'1.25000000'), array(79=>'0'));
+if ($single['status'] !== 'pass' || $single['db_mutations'] !== true || $single['created_payout_ids'] !== array(521) || $single['payout_rows_created'] !== true) $failures[] = 'single-row committed report is internally inconsistent';
+$multi = $committedMethod->invoke($reportCommand, $base, array('created_count'=>2, 'created_amount'=>'3.00000000', 'created_payout_ids'=>array(601,602), 'debited_account_ids'=>array(81,82), 'payout_rows_inserted'=>2), array(), array());
+if ($multi['created_payout_ids'] !== array(601,602) || $multi['payout_rows_created'] !== true) $failures[] = 'multi-row committed report is internally inconsistent';
+$empty = $committedMethod->invoke($reportCommand, $base, array('created_count'=>0, 'created_amount'=>'0', 'created_payout_ids'=>array(), 'debited_account_ids'=>array(), 'payout_rows_inserted'=>0), array(), array());
+if ($empty['payout_rows_created'] !== false || $empty['created_payout_ids'] !== array()) $failures[] = 'empty committed report falsely claims payout creation';
+$refused = $failMethod->invoke($reportCommand, $base, 'pre_transaction_refusal', 'refused before transaction');
+if ($refused['payout_rows_created'] !== false || $refused['db_mutations'] !== false || array_key_exists('created_payout_ids', $refused)) $failures[] = 'pre-transaction refusal claims committed payout inventory';
+$rolledBack = $failMethod->invoke($reportCommand, $base, 'mutation_failed_rolled_back', 'simulated rollback');
+if ($rolledBack['payout_rows_created'] !== false || $rolledBack['db_mutations'] !== false || array_key_exists('created_payout_ids', $rolledBack)) $failures[] = 'rollback report claims committed payout inventory';
+foreach (array($single,$multi,$empty,$refused,$rolledBack) as $result) {
+	if ($result['wallet_sends'] !== false || $result['withdraw_rows_created'] !== false || $result['backend_loops_run'] !== false || $result['shares_deleted'] !== false) $failures[] = 'payout-row reporting changed wallet/backend/share isolation';
+}
 if (!empty($failures)) { echo "Badpool payout-row apply guard harness FAILED\n"; foreach ($failures as $failure) echo " - $failure\n"; exit(1); }
 echo "Badpool payout-row apply guard harness passed\n";
