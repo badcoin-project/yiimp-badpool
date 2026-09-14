@@ -55,6 +55,7 @@ badpool_expect_contains('maturity block aggregate uses canonical decimal accumul
 badpool_expect_contains('maturity user aggregate uses canonical decimal accumulation', $command, '$totalsByUser[$u][\'amount_total\']=BadpoolStage1Manifest::addAmounts($totalsByUser[$u][\'amount_total\'],$r[\'amount\']);', $failures);
 
 badpool_expect_contains('account credit dryrun selects clearable status1 rows', $command, 'E.status=1 AND E.mature_time<:delay AND E.coinid=:coin_id', $failures);
+badpool_expect_contains('account credit exact scope narrows delayed eligibility', $command, '$where.=\' AND E.id IN (', $failures);
 badpool_expect_contains('account credit uses BackendClearEarnings conversion helper', $command, 'yaamp_convert_amount_user($coin,$r[\'amount\'],$user)', $failures);
 badpool_expect_contains('account credit apply guards selected earnings by identity scope', $command, 'WHERE id=:id AND userid=:uid AND coinid=:cid AND blockid=:bid AND status=1 AND mature_time=:mt', $failures);
 badpool_expect_not_contains('account credit apply must not require exact amount equality', $command, 'WHERE id=:id AND userid=:uid AND coinid=:cid AND blockid=:bid AND amount'.'=:amt'.' AND status=1 AND mature_time=:mt', $failures);
@@ -85,6 +86,55 @@ $applyParserStart = strpos($command, 'private function parseGuardedApplyOptions'
 $applyParserEnd = strpos($command, 'private function guardedApplyBaseReport', $applyParserStart);
 $applyParser = ($applyParserStart === false || $applyParserEnd === false) ? '' : substr($command, $applyParserStart, $applyParserEnd - $applyParserStart);
 badpool_expect_not_contains('new apply parser must not accept limit', $applyParser, "'limit'", $failures);
+
+if (!class_exists('CConsoleCommand')) { class CConsoleCommand {} }
+if (!function_exists('arraySafeVal')) { function arraySafeVal($a,$k,$d=null){return is_array($a)&&array_key_exists($k,$a)?$a[$k]:$d;} }
+if (!defined('YAAMP_ALLOW_EXCHANGE')) define('YAAMP_ALLOW_EXCHANGE', false);
+if (!defined('YAAMP_PAYMENTS_FREQ')) define('YAAMP_PAYMENTS_FREQ', 3600);
+if (!function_exists('getdbo')) { function getdbo($class,$id){return (object)array('id'=>$id);} }
+if (!function_exists('yaamp_convert_amount_user')) { function yaamp_convert_amount_user($coin,$amount,$user){return floatval($amount);} }
+require_once $commandPath;
+
+class AccountCreditSelectionGuardFixture
+{
+	public $rows;
+	public function __construct($rows){$this->rows=$rows;}
+	public function isAllCoinsPreview(){return false;}
+	public function isValid(){return true;}
+	public function getScope(){return array('coin_id'=>1267);}
+	public function baseReport(){return array('scope'=>$this->getScope(),'summary'=>array(),'items'=>array(),'warnings'=>array(),'errors'=>array());}
+	public function finalizeReport($report){return $report;}
+	public function selectAll($sql,$params=array())
+	{
+		$out=array();$selected=array();foreach($params as $key=>$value)if(strpos($key,':selected_id_')===0)$selected[]=intval($value);
+		foreach($this->rows as $row){
+			if(strpos($sql,'E.status=1')!==false&&intval($row['status'])!==1)continue;
+			if(strpos($sql,'E.mature_time<:delay')!==false&&intval($row['mature_time'])>=intval($params[':delay']))continue;
+			if(strpos($sql,'E.coinid=:coin_id')!==false&&intval($row['coinid'])!==intval($params[':coin_id']))continue;
+			if(strpos($sql,'E.id IN (')!==false&&!in_array(intval($row['earning_id']),$selected,true))continue;
+			$out[]=$row;
+		}
+		return $out;
+	}
+}
+
+$threshold=time()-(YAAMP_PAYMENTS_FREQ/2);
+$selectionRows=array(
+	array('earning_id'=>1,'userid'=>9,'coinid'=>1267,'blockid'=>41,'amount'=>'1.0','status'=>1,'mature_time'=>$threshold-1,'coin_price'=>'1.0','account_id'=>9,'account_coinid'=>1267,'account_balance'=>'0'),
+	array('earning_id'=>2,'userid'=>9,'coinid'=>1267,'blockid'=>42,'amount'=>'2.0','status'=>1,'mature_time'=>$threshold+1,'coin_price'=>'1.0','account_id'=>9,'account_coinid'=>1267,'account_balance'=>'0'),
+	array('earning_id'=>3,'userid'=>9,'coinid'=>1268,'blockid'=>43,'amount'=>'3.0','status'=>1,'mature_time'=>$threshold-1,'coin_price'=>'1.0','account_id'=>9,'account_coinid'=>1268,'account_balance'=>'0'),
+	array('earning_id'=>4,'userid'=>9,'coinid'=>1267,'blockid'=>44,'amount'=>'4.0','status'=>0,'mature_time'=>$threshold-1,'coin_price'=>'1.0','account_id'=>9,'account_coinid'=>1267,'account_balance'=>'0'),
+	array('earning_id'=>5,'userid'=>9,'coinid'=>1267,'blockid'=>45,'amount'=>'5.0','status'=>1,'mature_time'=>$threshold-2,'coin_price'=>'1.0','account_id'=>9,'account_coinid'=>1267,'account_balance'=>'0'),
+);
+$selectionGuard=new AccountCreditSelectionGuardFixture($selectionRows);$selectionCommand=new BadpoolGuardCommand;
+$guardProperty=new ReflectionProperty('BadpoolGuardCommand','guard');$guardProperty->setAccessible(true);$guardProperty->setValue($selectionCommand,$selectionGuard);
+$dryrunMethod=new ReflectionMethod('BadpoolGuardCommand','accountCreditClearDryrunReport');$dryrunMethod->setAccessible(true);
+$wide=$dryrunMethod->invoke($selectionCommand);$wideIds=array_column($wide['items']['selected_earnings'],'earning_id');
+if($wideIds!==array(1,5))$failures[]='coin-wide selection did not enforce status, delay, and coin eligibility';
+$exact=$dryrunMethod->invoke($selectionCommand,array(1,2,3,4,5));$exactIds=array_column($exact['items']['selected_earnings'],'earning_id');
+if($exactIds!==array(1,5))$failures[]='selected IDs replaced rather than narrowed normal delay eligibility';
+$eligible=$dryrunMethod->invoke($selectionCommand,array(1));if(array_column($eligible['items']['selected_earnings'],'earning_id')!==array(1))$failures[]='delay-eligible exact selected ID was not selected';
+$immature=$dryrunMethod->invoke($selectionCommand,array(2));if(!empty($immature['items']['selected_earnings']))$failures[]='immature exact selected ID bypassed payment delay';
 
 if (!empty($failures)) {
 	echo "Badpool account-credit guard harness FAILED\n";
