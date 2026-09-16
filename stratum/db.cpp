@@ -97,6 +97,32 @@ void db_query(YAAMP_DB *db, const char *format, ...)
 	free(buffer);
 }
 
+// Transactional callers must be able to roll back instead of allowing a
+// failed statement to be followed by COMMIT.  Unlike db_query(), this helper
+// deliberately does not reconnect: reconnecting would have already discarded
+// the transaction which the caller is responsible for failing atomically.
+bool db_query_transaction(YAAMP_DB *db, const char *format, ...)
+{
+	if(!db) return false;
+
+	va_list arglist;
+	va_start(arglist, format);
+	char *buffer = (char *)malloc(YAAMP_SMALLBUFSIZE+strlen(format));
+	if(!buffer) {
+		va_end(arglist);
+		return false;
+	}
+
+	vsprintf(buffer, format, arglist);
+	va_end(arglist);
+	int res = mysql_query(&db->mysql, buffer);
+	free(buffer);
+	if(!res) return true;
+
+	stratumlog("SQL TRANSACTION ERROR: %d, %s\n", mysql_errno(&db->mysql), mysql_error(&db->mysql));
+	return false;
+}
+
 ///////////////////////////////////////////////////////////////////////
 
 void db_register_stratum(YAAMP_DB *db)

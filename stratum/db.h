@@ -13,6 +13,7 @@ char *db_clean_string(YAAMP_DB *db, char *string);
 
 void db_close(YAAMP_DB *p);
 void db_query(YAAMP_DB *db, const char *format, ...);
+bool db_query_transaction(YAAMP_DB *db, const char *format, ...);
 
 void db_register_stratum(YAAMP_DB *db);
 void db_update_algos(YAAMP_DB *db);
@@ -32,4 +33,3 @@ void db_init_user_coinid(YAAMP_DB *db, YAAMP_CLIENT *client);
 void db_store_stats(YAAMP_DB *db, YAAMP_CLIENT *client, json_value *stats);
 
 void db_update_renters(YAAMP_DB *db);
-
