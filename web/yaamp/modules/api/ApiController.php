@@ -202,7 +202,7 @@ class ApiController extends CommonController
 		$user = getuserparam($wallet);
 		if(!$user || $user->is_locked) return;
 
-		$total_unsold = yaamp_convert_earnings_user($user, "status!=2");
+		$total_unsold = yaamp_convert_earnings_user($user, "status IN (0,1)");
 
 		$t = time() - 24*60*60;
 		$total_paid = bitcoinvaluetoa(controller()->memcache->get_database_scalar("api_wallet_paid-".$user->id,
@@ -239,7 +239,7 @@ class ApiController extends CommonController
 		$user = getuserparam($wallet);
 		if(!$user || $user->is_locked) return;
 
-		$total_unsold = yaamp_convert_earnings_user($user, "status!=2");
+		$total_unsold = yaamp_convert_earnings_user($user, "status IN (0,1)");
 
 		$t = time() - 24*60*60;
 		$total_paid = bitcoinvaluetoa(controller()->memcache->get_database_scalar("api_wallet_paid-".$user->id,
@@ -433,4 +433,3 @@ class ApiController extends CommonController
 	}
 
 }
-

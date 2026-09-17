@@ -89,7 +89,7 @@ function BackendPricesUpdate()
 		}
 
 		$coin->save();
-		dborun("UPDATE earnings SET price={$coin->price} WHERE status!=2 AND coinid={$coin->id}");
+		dborun("UPDATE earnings SET price={$coin->price} WHERE status IN (0,1) AND coinid={$coin->id}");
 		dborun("UPDATE markets SET message=NULL WHERE disabled=0 AND message='disabled from settings'");
 	}
 }

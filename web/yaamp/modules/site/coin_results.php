@@ -16,7 +16,7 @@ $balance = altcoinvaluetoa($coin->balance);
 
 $owed = dboscalar("SELECT SUM(E.amount) AS owed FROM earnings E ".
 	"LEFT JOIN blocks B ON E.blockid = B.id ".
-	"WHERE E.status!=2 AND E.coinid={$coin->id} "//."AND B.category NOT IN ('stake','generated')"
+	"WHERE E.status IN (0,1) AND E.coinid={$coin->id} "//."AND B.category NOT IN ('stake','generated')"
 );
 $owed_btc = bitcoinvaluetoa($owed*$coin->price);
 $owed = altcoinvaluetoa($owed);
@@ -27,7 +27,7 @@ if (!empty($coin->symbol2)) $symbol = $coin->symbol2;
 echo "<br/>";
 if (YAAMP_ALLOW_EXCHANGE) {
 	$reserved2 = bitcoinvaluetoa(dboscalar("SELECT SUM(amount*price) FROM earnings
-		WHERE status!=2 AND userid IN (SELECT id FROM accounts WHERE coinid={$coin->id})"));
+		WHERE status IN (0,1) AND userid IN (SELECT id FROM accounts WHERE coinid={$coin->id})"));
 	echo "Earnings $reserved2 BTC, ";
 }
 echo "Balance (db) $balance $symbol";

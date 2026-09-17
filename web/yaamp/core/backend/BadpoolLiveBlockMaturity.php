@@ -17,7 +17,7 @@ class BadpoolLiveBlockMaturity
 	{
 		if(intval($coinId)!==self::COIN_ID || (string)$algo!==self::ALGO || !self::positiveInteger($after) || !self::positiveInteger($limit) || intval($limit)>10)
 			throw new InvalidArgumentException('coin=1267, algo=scrypt, a positive exclusive --after boundary, and --limit from 1 through 10 are required');
-		$out=array('selected'=>0,'refreshed_immature'=>0,'matured'=>0,'orphan'=>0,'skipped'=>0,'daemon_failed'=>0,'apply_failed'=>0,'failures'=>array());
+		$out=array('selected'=>0,'refreshed_immature'=>0,'matured'=>0,'orphaned'=>0,'skipped'=>0,'daemon_failed'=>0,'apply_failed'=>0,'failures'=>array());
 		$rows=$this->store->candidates(self::COIN_ID,self::ALGO,intval($after),intval($limit));
 		if(!is_array($rows)) throw new RuntimeException('invalid maturity candidate inventory');
 		foreach($rows as $row){
@@ -28,9 +28,8 @@ class BadpoolLiveBlockMaturity
 			if(!is_array($result)||!in_array(arraySafeVal($result,'state'),array('immature','generate','orphan'),true)||!isset($result['confirmations'])||!is_numeric($result['confirmations'])){
 				$out['daemon_failed']++;$this->failure($out,$row,'invalid_daemon_response');continue;
 			}
-			if($result['state']==='orphan'){$out['orphan']++;continue;} // Report only: destructive cleanup is a separate lane.
 			try{$applied=$this->store->apply($row,$result);}catch(Exception $e){$applied=array('status'=>'failed','reason'=>'transaction_exception');}
-			if(is_array($applied)&&arraySafeVal($applied,'status')==='applied')$out[$result['state']==='generate'?'matured':'refreshed_immature']++;
+			if(is_array($applied)&&arraySafeVal($applied,'status')==='applied')$out[$result['state']==='generate'?'matured':($result['state']==='orphan'?'orphaned':'refreshed_immature')]++;
 			elseif(is_array($applied)&&arraySafeVal($applied,'status')==='skipped')$out['skipped']++;
 			else{$out['apply_failed']++;$this->failure($out,$row,is_array($applied)?arraySafeVal($applied,'reason','apply_failure'):'invalid_apply_result');}
 		}
@@ -90,15 +89,21 @@ class BadpoolYiiLiveBlockMaturityStore implements BadpoolLiveBlockMaturityStore
 			if(!$b){$tx->rollback();return array('status'=>'skipped','reason'=>'no_longer_eligible');}
 			$earnings=$this->db->createCommand('SELECT id,status,mature_time FROM earnings WHERE blockid=:id FOR UPDATE')->queryAll(true,array(':id'=>$c['block_id']));
 			if($b['category']==='generate'&&count($earnings)===1&&intval($earnings[0]['status'])===1){$tx->rollback();return array('status'=>'skipped','reason'=>'already_mature');}
-			if($b['category']!=='immature'){ $tx->rollback();return array('status'=>'skipped','reason'=>'block_changed'); }
+			if($b['category']==='orphan'&&count($earnings)===1&&intval($earnings[0]['status'])===-1){$tx->rollback();return array('status'=>'skipped','reason'=>'already_orphaned');}
+			if($b['category']!=='immature')throw new RuntimeException('ambiguous block/earning terminal state');
 			if(count($earnings)!==1||intval($earnings[0]['status'])!==0)throw new RuntimeException('earning state changed');
 			$conf=intval($r['confirmations']);
 			if($r['state']==='immature'){
 				$n=$this->db->createCommand("UPDATE blocks SET confirmations=:conf WHERE id=:id AND coin_id=:coin AND blockhash=:hash AND category='immature'")->execute(array(':conf'=>$conf,':id'=>$c['block_id'],':coin'=>BadpoolLiveBlockMaturity::COIN_ID,':hash'=>$c['block_blockhash']));
 				if($n!==0&&$n!==1)throw new RuntimeException('block refresh failed');
-			} else {
+			} elseif($r['state']==='generate') {
 				$n=$this->db->createCommand("UPDATE blocks SET category='generate',confirmations=:conf WHERE id=:id AND coin_id=:coin AND blockhash=:hash AND category='immature'")->execute(array(':conf'=>$conf,':id'=>$c['block_id'],':coin'=>BadpoolLiveBlockMaturity::COIN_ID,':hash'=>$c['block_blockhash']));if($n!==1)throw new RuntimeException('block transition failed');
 				$n=$this->db->createCommand('UPDATE earnings SET status=1,mature_time=UNIX_TIMESTAMP() WHERE id=:earning AND blockid=:block AND coinid=:coin AND status=0')->execute(array(':earning'=>$earnings[0]['id'],':block'=>$c['block_id'],':coin'=>BadpoolLiveBlockMaturity::COIN_ID));if($n!==1)throw new RuntimeException('earning transition failed');
+			} elseif($r['state']==='orphan') {
+				$n=$this->db->createCommand("UPDATE blocks SET category='orphan',confirmations=:conf WHERE id=:id AND coin_id=:coin AND blockhash=:hash AND category='immature'")->execute(array(':conf'=>$conf,':id'=>$c['block_id'],':coin'=>BadpoolLiveBlockMaturity::COIN_ID,':hash'=>$c['block_blockhash']));if($n!==1)throw new RuntimeException('block orphan transition failed');
+				$n=$this->db->createCommand('UPDATE earnings SET status=-1,mature_time=NULL WHERE id=:earning AND blockid=:block AND coinid=:coin AND status=0')->execute(array(':earning'=>$earnings[0]['id'],':block'=>$c['block_id'],':coin'=>BadpoolLiveBlockMaturity::COIN_ID));if($n!==1)throw new RuntimeException('earning orphan transition failed');
+			} else {
+				throw new RuntimeException('unsupported daemon state');
 			}
 			$tx->commit();return array('status'=>'applied');
 		}catch(Exception $e){if($tx->active)$tx->rollback();error_log('live maturity apply failed for block '.intval($c['block_id']).': '.$e->getMessage());return array('status'=>'failed','reason'=>'transaction_exception');}

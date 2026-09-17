@@ -50,7 +50,7 @@ function sellCoinToExchange($coin)
 	if(empty($deposit_address)) return false;
 	$reserved1 = dboscalar("select sum(balance) from accounts where coinid=$coin->id");
 	$reserved2 = dboscalar("select sum(amount*price) from earnings
-		where status!=2 and userid in (select id from accounts where coinid=$coin->id)");
+		where status IN (0,1) and userid in (select id from accounts where coinid=$coin->id)");
 
 	$reserved = ($reserved1 + $reserved2) * 10;
 	$amount = $info['balance'] - $info['paytxfee'] - $reserved;
@@ -123,5 +123,4 @@ function sellCoinToExchange($coin)
 
 	return;
 }
-
 
