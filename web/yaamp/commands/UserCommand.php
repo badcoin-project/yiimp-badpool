@@ -188,7 +188,8 @@ class UserCommand extends CConsoleCommand
 		$b = $remote->validateaddress($user->username);
 		if(!arraySafeVal($b,'isvalid')) die("Sorry, bad address for this coin!\n");
 
-		$nbUpd = dborun("UPDATE earnings SET status=0 WHERE status=-1 AND coinid=".$coin->id);
+		// Preserve live orphan evidence; only legacy invalid rows not linked to an orphan may be repaired.
+		$nbUpd = dborun("UPDATE earnings E LEFT JOIN blocks B ON B.id=E.blockid SET E.status=0 WHERE E.status=-1 AND E.coinid=".$coin->id." AND (B.id IS NULL OR B.category!='orphan')");
 		$blocks = getdbolist('db_blocks', "coin_id=:coinid AND id IN ".
 			"(SELECT blockid FROM earnings WHERE coinid=:coinid AND userid=:userid)",
 			array(':coinid'=>$coin->id, ':userid'=>$user->id)
@@ -197,7 +198,7 @@ class UserCommand extends CConsoleCommand
 		foreach ($blocks as $b) {
 			if ($b->category == 'generate') {
 				$nbConf += dborun("UPDATE earnings SET status=1, mature_time=:time".
-					" WHERE blockid=:blockid AND userid=:userid AND status<1",
+					" WHERE blockid=:blockid AND userid=:userid AND status=0",
 					array(':time'=>time(), ':blockid'=>$b->id, ':userid'=>$user->id)
 				);
 			}

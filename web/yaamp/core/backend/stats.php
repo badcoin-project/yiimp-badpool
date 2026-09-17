@@ -341,7 +341,7 @@ function BackendStatsUpdate2()
 // 		$pending1 = dboscalar("select sum(amount*price) from earnings where coinid=$refcoin->id and status!=2 and userid=$user->id");
 // 		$pending2 = dboscalar("select sum(amount*price) from earnings where coinid!=$refcoin->id and status!=2 and userid=$user->id");
 
-		$stats->pending = yaamp_convert_earnings_user($user, "status!=2");
+		$stats->pending = yaamp_convert_earnings_user($user, "status IN (0,1)");
 		$stats->pending = bitcoinvaluetoa($stats->pending);
 
 		$stats->balance = $user->balance;
@@ -353,5 +353,4 @@ function BackendStatsUpdate2()
 
 
 }
-
 

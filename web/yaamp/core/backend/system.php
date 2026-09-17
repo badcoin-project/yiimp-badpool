@@ -47,7 +47,8 @@ function BackendQuickClean()
 			id not in (select blockid from earnings where coinid=$coin->id) and id<$id");
 	}
 
-	dborun("delete from earnings where blockid in (select id from blocks where category='orphan')");
+	// status=-1 orphan earnings are retained as non-payable accounting evidence.
+	dborun("delete from earnings where status!=-1 and blockid in (select id from blocks where category='orphan')");
 	dborun("delete from earnings where blockid not in (select id from blocks)");
 	dborun("UPDATE blocks SET amount=0 WHERE category='orphan' AND amount>0");
 }
@@ -328,4 +329,3 @@ function BackendRunCoinActions()
 // 	controller()->memcache->set('stratum_log_size', $filesize);
 // 	system("echo \"$data\" | mail -s \"yiimp server\" ".YAAMP_ADMIN_EMAIL);
 }
-
