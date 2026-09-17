@@ -225,7 +225,7 @@ void block_prune(YAAMP_DB *db)
 		if(capture_ok && normal_attributions == 0) {
 			capture_ok = std::isfinite(block->difficulty_user) && block->difficulty_user > 0;
 			if(capture_ok) capture_ok = db_query_transaction(db, "INSERT INTO live_block_attributions (block_id,userid,difficulty,no_fees,donation) "
-				"SELECT B.id,B.userid,B.difficulty_user,A.no_fees,A.donation FROM blocks B "
+				"SELECT B.id,B.userid,B.difficulty_user,IFNULL(A.no_fees,0),IFNULL(A.donation,0) FROM blocks B "
 				"INNER JOIN live_block_candidates C ON C.block_id=B.id INNER JOIN accounts A ON A.id=B.userid "
 				"WHERE B.id=%llu AND C.share_floor_id=C.share_ceiling_id AND B.userid>0 "
 				"AND B.difficulty_user IS NOT NULL AND B.difficulty_user>0 "
