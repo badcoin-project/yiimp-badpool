@@ -8,6 +8,7 @@ require_once(dirname(__FILE__).'/../core/backend/BadpoolBackwardMaturityDryrun.p
 require_once(dirname(__FILE__).'/../core/backend/BadpoolBackwardMaturityApprovalPackage.php');
 require_once(dirname(__FILE__).'/../core/backend/BadpoolBackwardMaturityApply.php');
 require_once(dirname(__FILE__).'/../core/backend/BadpoolPaymentBatchRunner.php');
+require_once(dirname(__FILE__).'/../core/backend/BadpoolLivePaymentCoordinator.php');
 require_once(dirname(__FILE__).'/../core/backend/BadpoolPaymentBatchPhaseAdapter.php');
 require_once(dirname(__FILE__).'/../core/backend/BadpoolCompletedPayoutBatchCloseout.php');
 require_once(dirname(__FILE__).'/../core/backend/BadpoolConfirmedBlockPaymentDelayOverride.php');
@@ -82,6 +83,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 		'status-runner',
 		'batch-run-preview',
 		'batch-run',
+		'live-payment-coordinator',
 		'completed-payout-batch-closeout',
 	);
 
@@ -300,6 +302,9 @@ class BadpoolGuardCommand extends CConsoleCommand
 			case 'batch-run':
 				$report = $this->paymentBatchRunReport();
 				break;
+			case 'live-payment-coordinator':
+				$report = $this->livePaymentCoordinatorReport();
+				break;
 			case 'completed-payout-batch-closeout':
 				$report = $this->completedPayoutBatchCloseoutReport();
 				break;
@@ -440,6 +445,12 @@ class BadpoolGuardCommand extends CConsoleCommand
 		$proof=function($coinId,$ids){return $this->executePaymentBatchPhaseCommand('wallet-proof-closeout',array('--coin-id='.$coinId,'--selected-payout-ids='.implode(',',$ids),'--format=json'));};
 		$runner=new BadpoolCompletedPayoutBatchCloseout($adapter,$proof);
 		return $runner->preview($batchId);
+	}
+
+	private function livePaymentCoordinatorReport()
+	{
+		$runner=new BadpoolPaymentBatchRunner($this->paymentBatchPhaseAdapter());
+		return (new BadpoolLivePaymentCoordinator($runner))->run();
 	}
 
 	protected function paymentBatchPhaseAdapter()
