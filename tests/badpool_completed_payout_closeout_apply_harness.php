@@ -1,0 +1,18 @@
+<?php
+function arraySafeVal($a,$k,$d=null){return is_array($a)&&array_key_exists($k,$a)?$a[$k]:$d;}
+require_once(dirname(__FILE__).'/../web/yaamp/core/backend/BadpoolLivePaymentCoordinator.php');
+require_once(dirname(__FILE__).'/../web/yaamp/core/backend/BadpoolCompletedPayoutBatchCloseout.php');
+require_once(dirname(__FILE__).'/../web/yaamp/core/backend/BadpoolCompletedPayoutBatchCloseoutApply.php');
+$fail=0;function oka($v,$m){global $fail;if(!$v){echo "FAIL: $m\n";$fail++;}}
+$root=sys_get_temp_dir().'/badpool-closeout-apply-'.bin2hex(random_bytes(5));mkdir($root);$id='20260918T020000Z-abcdefabcdef';mkdir($root.'/'.$id);
+$owner=array('schema'=>BadpoolLivePaymentCoordinator::SCHEMA,'lane'=>BadpoolLivePaymentCoordinator::OWNER,'coin_id'=>1267,'algo'=>'scrypt','block_id_gt'=>29242);
+$ledger=array('batch_id'=>$id,'batch_state'=>'HOLD_COMPLETED_PAYOUT_RECONCILIATION','current_phase'=>6,'coordinator_owner'=>$owner,'created_payout_ids'=>array(901,902));$ledgerPath=$root.'/'.$id.'/ledger.json';file_put_contents($ledgerPath,json_encode($ledger));
+$proof=array('schema'=>BadpoolCompletedPayoutBatchCloseout::SCHEMA,'command'=>'completed-payout-batch-closeout','status'=>'pass','batch_id'=>$id,'created_payout_ids'=>array(901,902),'read_only'=>true,'wallet_sends'=>false,'db_mutations'=>false);$proofPath=$root.'/proof.json';file_put_contents($proofPath,json_encode($proof));$sum=hash_file('sha256',$proofPath);$apply=new BadpoolCompletedPayoutBatchCloseoutApply($root);
+$before=file_get_contents($ledgerPath);$bad=$apply->apply($id,$proofPath,$sum,'wrong');oka($bad['status']==='fail'&&file_get_contents($ledgerPath)===$before,'confirmation required and ledger unchanged');
+$bad=$apply->apply($id,$proofPath,str_repeat('0',64),BadpoolCompletedPayoutBatchCloseoutApply::CONFIRMATION);oka($bad['status']==='fail','exact checksum required');
+$changed=$proof;$changed['created_payout_ids']=array(901);file_put_contents($proofPath,json_encode($changed));$bad=$apply->apply($id,$proofPath,$sum,BadpoolCompletedPayoutBatchCloseoutApply::CONFIRMATION);oka($bad['status']==='fail','modified proof rejected');file_put_contents($proofPath,json_encode($proof));$sum=hash_file('sha256',$proofPath);
+$bad=$apply->apply('20260918T020001Z-abcdefabcdef',$proofPath,$sum,BadpoolCompletedPayoutBatchCloseoutApply::CONFIRMATION);oka($bad['status']==='fail','exact batch required');
+$pass=$apply->apply($id,$proofPath,$sum,BadpoolCompletedPayoutBatchCloseoutApply::CONFIRMATION);$after=json_decode(file_get_contents($ledgerPath),true);oka($pass['status']==='pass'&&$after['batch_state']==='RECONCILED'&&$after['reconciled_payout_ids']===array(901,902)&&$after['reconciliation_proof_checksum']===$sum,'apply records canonical terminal evidence');oka($pass['db_mutations']===false&&$pass['wallet_rpc_used']===false&&$pass['wallet_sends']===false,'apply is ledger-only');
+$again=$apply->apply($id,$proofPath,$sum,BadpoolCompletedPayoutBatchCloseoutApply::CONFIRMATION);oka($again['status']==='pass'&&$again['already_reconciled']===true,'identical apply idempotent');
+$unowned='20260918T020002Z-abcdefabcdef';mkdir($root.'/'.$unowned);$u=$ledger;$u['batch_id']=$unowned;unset($u['coordinator_owner']);file_put_contents($root.'/'.$unowned.'/ledger.json',json_encode($u));$p=$proof;$p['batch_id']=$unowned;$up=$root.'/unowned-proof.json';file_put_contents($up,json_encode($p));$bad=$apply->apply($unowned,$up,hash_file('sha256',$up),BadpoolCompletedPayoutBatchCloseoutApply::CONFIRMATION);oka($bad['status']==='fail','unowned ledger refused');
+echo $fail?"$fail closeout apply checks failed\n":"Badpool completed-payout closeout apply harness passed\n";exit($fail?1:0);

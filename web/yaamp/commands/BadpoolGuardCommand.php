@@ -11,6 +11,7 @@ require_once(dirname(__FILE__).'/../core/backend/BadpoolPaymentBatchRunner.php')
 require_once(dirname(__FILE__).'/../core/backend/BadpoolLivePaymentCoordinator.php');
 require_once(dirname(__FILE__).'/../core/backend/BadpoolPaymentBatchPhaseAdapter.php');
 require_once(dirname(__FILE__).'/../core/backend/BadpoolCompletedPayoutBatchCloseout.php');
+require_once(dirname(__FILE__).'/../core/backend/BadpoolCompletedPayoutBatchCloseoutApply.php');
 require_once(dirname(__FILE__).'/../core/backend/BadpoolConfirmedBlockPaymentDelayOverride.php');
 require_once(dirname(__FILE__).'/../core/rpc/wallet-rpc.php');
 
@@ -85,6 +86,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 		'batch-run',
 		'live-payment-coordinator',
 		'completed-payout-batch-closeout',
+		'completed-payout-batch-closeout-apply',
 	);
 
 	public function run($args)
@@ -308,6 +310,9 @@ class BadpoolGuardCommand extends CConsoleCommand
 			case 'completed-payout-batch-closeout':
 				$report = $this->completedPayoutBatchCloseoutReport();
 				break;
+			case 'completed-payout-batch-closeout-apply':
+				$report = $this->completedPayoutBatchCloseoutApplyReport();
+				break;
 			default:
 				$this->guard->addError("Unhandled action: $action");
 				$report = $this->guard->refusalReport();
@@ -349,6 +354,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 			"       ".implode(' ', BadpoolStage1Manifest::applyCommandShape())."\n".
 			"       php yaamp/yiic.php badpoolguard batch-run --resume-batch-id=<id> --payment-delay-override-package=<path> --payment-delay-override-package-checksum=<file-sha256> --operator-confirms-payment-delay-override=".BadpoolConfirmedBlockPaymentDelayOverride::CONFIRMATION." --format=json\n".
 			"       php yaamp/yiic.php badpoolguard completed-payout-batch-closeout --batch-id=<id> --format=json\n".
+			"       php yaamp/yiic.php badpoolguard completed-payout-batch-closeout-apply --batch-id=<id> --closeout-proof=<path> --closeout-proof-checksum=<sha256> --operator-confirms-closeout=".BadpoolCompletedPayoutBatchCloseoutApply::CONFIRMATION." --format=json\n".
 			"       php yaamp/yiic.php badpoolguard forward-catchup-stage1-apply --coin-id=<id> --limit=<approved_n> --selected-count=<approved_n> --approval-package-checksum=<sha256> --batch-scope-checksum=<sha256> --projected-mutation-checksum=<sha256> --projected-earnings-checksum=<sha256> --operator-confirms-attribution-model=block_userid_single_recipient --format=json\n".
 			"       php yaamp/yiic.php badpoolguard earnings-maturity-transition-dryrun --coin-id=<id> [--selected-block-ids=<csv>] [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard backward-maturity-transition-dryrun --coin-id=1267 --selected-earning-ids=<explicit-csv> --selected-block-ids=<explicit-csv> --expected-inventory-checksum=<sha256> --format=json\n".
@@ -451,6 +457,12 @@ class BadpoolGuardCommand extends CConsoleCommand
 	{
 		$runner=new BadpoolPaymentBatchRunner($this->paymentBatchPhaseAdapter());
 		return (new BadpoolLivePaymentCoordinator($runner))->run();
+	}
+
+	private function completedPayoutBatchCloseoutApplyReport()
+	{
+		$apply=new BadpoolCompletedPayoutBatchCloseoutApply();
+		return $apply->apply((string)$this->guard->getOption('batch-id',''),(string)$this->guard->getOption('closeout-proof',''),(string)$this->guard->getOption('closeout-proof-checksum',''),(string)$this->guard->getOption('operator-confirms-closeout',''));
 	}
 
 	protected function paymentBatchPhaseAdapter()
@@ -7174,7 +7186,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 
 	private function finalizeCommandReport($report)
 	{
-		$closeoutErrors = arraySafeVal($report, 'command') === 'completed-payout-batch-closeout' ? arraySafeVal($report, 'errors', array()) : null;
+		$closeoutErrors = in_array(arraySafeVal($report, 'command'),array('completed-payout-batch-closeout','completed-payout-batch-closeout-apply'),true) ? arraySafeVal($report, 'errors', array()) : null;
 		$report = $this->guard->finalizeReport($report);
 		// Closeout lane HOLD reasons are domain validation results, not parser
 		// errors held by BadpoolGuardContext. Preserve them through finalization.
