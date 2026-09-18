@@ -31,17 +31,17 @@ $duplicateScope=$scope;$duplicateScope['selected_earning_ids']=array(11,11);dela
 
 $context=file_get_contents($root.'/web/yaamp/core/backend/BadpoolGuardContext.php');delay_expect(strpos($context,'Duplicate option refused: --')!==false,'CLI duplicate option refusal missing',$fail);
 $runDir=sys_get_temp_dir().'/badpool-delay-phase-'.getmypid();@mkdir($runDir);
-$phaseLedger=array_merge($ledger,array('run_directory'=>$runDir));
+$phaseLedger=array_merge($ledger,array('run_directory'=>$runDir,'selected_work_by_coin'=>array('1267'=>array('earning_ids'=>array(11,12),'block_ids'=>array(44)))));
 function delay_executor($earningIds){return function($command,$args)use($earningIds){$items=array();foreach($earningIds as $id)$items[]=array('earning_id'=>$id);return array('status'=>'pass','items'=>array('selected_earnings'=>$items));};}
 $exactAdapter=new BadpoolPaymentBatchPhaseAdapter($guard,delay_executor(array(11,12)));$exact=$exactAdapter->paymentDelayCheck($phaseLedger,array());
 delay_expect($exact['status']==='pass'&&$exact['payment_delay_override_used']===false,'default exact delayed eligibility did not pass without override',$fail);
 $supersetAdapter=new BadpoolPaymentBatchPhaseAdapter($guard,delay_executor(array(10,11,12,13)));$superset=$supersetAdapter->paymentDelayCheck($phaseLedger,array());
-delay_expect($superset['status']==='pass'&&$superset['payment_delay_override_used']===false,'default delayed eligibility superset did not pass without reading an override package',$fail);
+delay_expect($superset['status']==='hold','default delayed eligibility superset did not fail closed',$fail);
 $missingAdapter=new BadpoolPaymentBatchPhaseAdapter($guard,delay_executor(array(11)));$default=$missingAdapter->paymentDelayCheck($phaseLedger,array());
 delay_expect($default['status']==='hold','default 12-hour delay did not hold when a selected earning was missing',$fail);
 delay_package($path,time(),$scope);$liveOptions=delay_options($path);$override=$missingAdapter->paymentDelayCheck($phaseLedger,$liveOptions);
 delay_expect($override['status']==='pass'&&$override['payment_delay_override_used']===true,'explicit confirmed-block override did not pass phase 4 when selected delayed eligibility was missing',$fail);
-$creditLedger=array_merge($phaseLedger,array('selected_work_by_coin'=>array('1267'=>array('earning_ids'=>array(11,12),'block_ids'=>array(44))),'selected_accounts_by_coin'=>array('1267'=>array('account_ids'=>array(9))),'phase_results'=>array(array('phase_number'=>4,'status'=>'pass','payment_delay_override_used'=>true))));
+$creditLedger=array_merge($phaseLedger,array('payment_delay_qualified_earning_ids'=>array(11,12),'selected_accounts_by_coin'=>array('1267'=>array('account_ids'=>array(9))),'phase_results'=>array(array('phase_number'=>4,'status'=>'pass','payment_delay_override_used'=>true))));
 $creditCalls=array();$creditExecutor=function($command,$args)use(&$creditCalls){$creditCalls[]=array($command,$args);$base=array('status'=>'pass','items'=>array('selected_earnings'=>array()));if($command==='account-credit-clear-approval-package'&&in_array('--selected-earning-ids=11,12',$args,true))return array_merge($base,array('items'=>array('selected_earnings'=>array(array('earning_id'=>11,'account_id'=>9,'coin_id'=>1267),array('earning_id'=>12,'account_id'=>9,'coin_id'=>1267))),'approval_package_checksum'=>array('value'=>str_repeat('b',64)),'apply_command_args'=>array('badpoolguard','account-credit-clear-apply','--approval-package-checksum=<approval_package_checksum>','--format=json')));return $base;};
 $creditAdapter=new BadpoolPaymentBatchPhaseAdapter($guard,$creditExecutor);$credited=$creditAdapter->creditAccounts($creditLedger,array());
 delay_expect($credited['status']==='pass','override-authorized phase 5 did not accept the exact durable credit package',$fail);
