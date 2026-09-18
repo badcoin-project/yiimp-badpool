@@ -26,9 +26,20 @@ mutations.
 wallet-free, read-only description and its default all-active-payout-coins scope
 does not require `--coin-id`.
 
-Phase 1 first inventories eligible maturity work read-only, then binds an exact
-block selection that fits the durable `batch_size`. Later approval packages are
-refused if they contain earnings or accounts outside that ledger selection.
+Automatic mode is the coin 1267/Scrypt live lane. Phase 1 directly selects
+status-1 earnings joined to `generate` blocks and matching
+`live_block_candidates` after the fixed commissioning boundary (`block_id >
+29242`), in earning-ID order and bounded by `batch_size`. It persists the exact
+earning, block, and account IDs. Phases 2–3 record that maturity is owned by the
+live maturity timer and do not attempt a second status transition. `catchup` and
+`normal` retain the explicitly separate legacy status-0 maturity workflow.
+
+Phase 4 sends each durable per-coin earning list to
+`account-credit-clear-dryrun --selected-earning-ids=<exact IDs>` and requires
+exact equality. Missing, extra, malformed, or duplicate returned IDs hold the
+batch. The exact delay-qualified list is persisted and must equal the durable
+Phase 1 list before Phase 5 can package account credit. Later approval packages
+are refused if they contain earnings or accounts outside that ledger selection.
 This prevents a fresh approval-package query from widening a resumed batch.
 Both the legacy `apply_command_shape` and standardized `apply_command_args`
 contracts are accepted, while the adapter substitutes only the package's own

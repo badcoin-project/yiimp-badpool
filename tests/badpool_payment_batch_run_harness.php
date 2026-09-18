@@ -46,7 +46,7 @@ expect_batch($zero['status']==='hold'&&$zero['batch_state']==='HOLD','zero payou
 expect_batch($zero['created_payout_ids']===array()&&$zero['selected_counts']['payouts']===0,'zero payout id not persisted as selected payout',$fail);
 expect_batch(strpos(json_encode($zero),'READY_FOR_WALLET_APPROVAL')===false,'zero payout id cannot reach wallet approval',$fail);
 
-class ProductionFixtureGuard {public function selectAll($sql,$params){return array(array('id'=>1267,'symbol'=>'BAD','algo'=>'scrypt','enable'=>1,'installed'=>1,'visible'=>1,'auto_ready'=>1,'payout_min'=>null));}}
+class ProductionFixtureGuard {public function selectAll($sql,$params){if(strpos($sql,'FROM earnings E')!==false)return array(array('earning_id'=>11,'block_id'=>29243,'account_id'=>9,'coin_id'=>1267),array('earning_id'=>12,'block_id'=>29244,'account_id'=>9,'coin_id'=>1267));return array(array('id'=>1267,'symbol'=>'BAD','algo'=>'scrypt','enable'=>1,'installed'=>1,'visible'=>1,'auto_ready'=>1,'payout_min'=>null));}}
 class ProductionFixtureExecutor {
 	public $calls=array();
 	public function run($command,$args){$this->calls[]=array($command,$args);$base=array('status'=>'pass','items'=>array());
@@ -65,13 +65,13 @@ expect_batch($production['selected_counts']['accounts']===1,'repeated credited a
 $productionLedger=json_decode(file_get_contents($production['ledger_path']),true);
 expect_batch($productionLedger['selected_account_ids']===array(9),'repeated credited account persisted once',$fail);
 expect_batch($productionLedger['selected_accounts_by_coin']['1267']['account_ids']===array(9),'repeated credited per-coin account persisted once',$fail);
-expect_batch(in_array('earnings-maturity-transition-apply',$productionCommands,true)&&in_array('account-credit-clear-apply',$productionCommands,true)&&in_array('payout-row-apply',$productionCommands,true),'guarded production applies invoked',$fail);
+expect_batch(!in_array('earnings-maturity-transition-apply',$productionCommands,true)&&in_array('account-credit-clear-apply',$productionCommands,true)&&in_array('payout-row-apply',$productionCommands,true),'live batch rematured rows or omitted guarded financial applies',$fail);
 expect_batch(!in_array('wallet-send-apply',$productionCommands,true)&&count($production['phase_results'])===7,'production adapter wallet boundary',$fail);
-$maturityPackageCall=array_values(array_filter($productionExec->calls,function($call){return $call[0]==='earnings-maturity-transition-approval-package';}));expect_batch(strpos(implode(' ',$maturityPackageCall[0][1]),'--selected-block-ids=4')!==false,'maturity package bound to selected blocks',$fail);
+$delayCall=array_values(array_filter($productionExec->calls,function($call){return $call[0]==='account-credit-clear-dryrun';}));expect_batch(count($delayCall)===1&&in_array('--selected-earning-ids=11,12',$delayCall[0][1],true),'payment delay dry-run was not bound to exact durable earning IDs',$fail);
 $creditPackageCall=array_values(array_filter($productionExec->calls,function($call){return $call[0]==='account-credit-clear-approval-package';}));expect_batch(count($creditPackageCall)===1&&in_array('--selected-earning-ids=11,12',$creditPackageCall[0][1],true),'normal post-delay credit package was not bound to coin 1267 durable earning IDs',$fail);
 
 class MixedPayoutFixtureGuard extends ProductionFixtureGuard {
-	public function selectAll($sql,$params){$rows=array();foreach(array(1266,1267,1268,1269,1270) as $id)$rows[]=array('id'=>$id,'symbol'=>'BAD','algo'=>'scrypt','enable'=>1,'installed'=>1,'visible'=>1,'auto_ready'=>1,'payout_min'=>null);return $rows;}
+	public function selectAll($sql,$params){if(strpos($sql,'FROM earnings E')!==false)return array(array('earning_id'=>11,'block_id'=>29243,'account_id'=>79,'coin_id'=>1267),array('earning_id'=>12,'block_id'=>29244,'account_id'=>79,'coin_id'=>1267));$rows=array();foreach(array(1266,1267,1268,1269,1270) as $id)$rows[]=array('id'=>$id,'symbol'=>'BAD','algo'=>'scrypt','enable'=>1,'installed'=>1,'visible'=>1,'auto_ready'=>1,'payout_min'=>null);return $rows;}
 }
 class MixedPayoutFixtureExecutor extends ProductionFixtureExecutor {
 	public function run($command,$args){
@@ -94,8 +94,9 @@ $emptySelectedAccountArg=false;foreach($mixedApplyCalls as $call)if(in_array('--
 expect_batch(!$emptySelectedAccountArg,'empty payout package invoked an apply with empty selected account IDs',$fail);
 expect_batch($mixed['batch_state']==='READY_FOR_WALLET_APPROVAL'&&$mixed['created_payout_ids']===array(77)&&$mixedApplyReport[0]['payout_rows_inserted']===1&&$mixedApplyReport[0]['created_payout_ids']===array(77),'mixed payout packages did not capture the successful apply report',$fail);
 expect_batch(!in_array('wallet-send-apply',$mixedCommands,true)&&!in_array('wallet-rpc-send',$mixedCommands,true)&&!in_array('payout-row-complete',$mixedCommands,true),'mixed payout flow crossed the guarded wallet boundary',$fail);
-class EmptyPayoutFixtureGuard extends ProductionFixtureGuard {public function selectAll($sql,$params){return array(array('id'=>1266,'symbol'=>'BAD','algo'=>'scrypt','enable'=>1,'installed'=>1,'visible'=>1,'auto_ready'=>1,'payout_min'=>null));}}
-$emptyRoot=$root.'-empty-payout';$emptyExec=new MixedPayoutFixtureExecutor();$empty=(new BadpoolPaymentBatchRunner(new BadpoolPaymentBatchPhaseAdapter(new EmptyPayoutFixtureGuard(),array($emptyExec,'run')),$emptyRoot))->run(array('mode'=>'auto','scope'=>'all-active-payout-coins','only'=>'scrypt','batch_size'=>2));$emptyCommands=array_map(function($call){return $call[0];},$emptyExec->calls);
+class EmptyPayoutFixtureGuard extends ProductionFixtureGuard {public function selectAll($sql,$params){if(strpos($sql,'FROM earnings E')!==false)return array();return array(array('id'=>1267,'symbol'=>'BAD','algo'=>'scrypt','enable'=>1,'installed'=>1,'visible'=>1,'auto_ready'=>1,'payout_min'=>null));}}
+class EmptyPayoutFixtureExecutor extends MixedPayoutFixtureExecutor {public function run($command,$args){if(in_array($command,array('account-credit-clear-approval-package','payout-row-approval-package'),true)){$this->calls[]=array($command,$args);return array('status'=>'pass','items'=>array($command==='payout-row-approval-package'?'selected_accounts':'selected_earnings'=>array()),'approval_package_checksum'=>array('value'=>str_repeat('c',64)),'apply_command_shape'=>array('badpoolguard',$command==='payout-row-approval-package'?'payout-row-apply':'account-credit-clear-apply','--approval-package-checksum=<approval_package_checksum>','--format=json'));}return parent::run($command,$args);}}
+$emptyRoot=$root.'-empty-payout';$emptyExec=new EmptyPayoutFixtureExecutor();$empty=(new BadpoolPaymentBatchRunner(new BadpoolPaymentBatchPhaseAdapter(new EmptyPayoutFixtureGuard(),array($emptyExec,'run')),$emptyRoot))->run(array('mode'=>'auto','scope'=>'all-active-payout-coins','only'=>'scrypt','batch_size'=>2));$emptyCommands=array_map(function($call){return $call[0];},$emptyExec->calls);
 expect_batch($empty['batch_state']==='READY_FOR_WALLET_APPROVAL'&&$empty['created_payout_ids']===array(),'all-empty payout scope did not use the existing successful no-work phase convention',$fail);
 expect_batch(!in_array('payout-row-apply',$emptyCommands,true)&&strpos(json_encode($emptyExec->calls),'--selected-account-ids=')===false,'all-empty payout scope attempted guarded payout-row apply',$fail);
 
@@ -139,7 +140,7 @@ function run_strict_batch($mode,&$commands){
 		array('id'=>1267,'symbol'=>'BAD','algo'=>'scrypt','enable'=>1,'installed'=>1,'visible'=>1,'auto_ready'=>1,'payout_min'=>null),
 		array('id'=>1268,'symbol'=>'BAD','algo'=>'scrypt','enable'=>0,'installed'=>1,'visible'=>1,'auto_ready'=>0,'payout_min'=>null),
 	));
-	$r=(new BadpoolPaymentBatchRunner(new BadpoolPaymentBatchPhaseAdapter($guard,array($exec,'run')),$root.'-strict-'.($mode===null?'ok':$mode)))->run(array('mode'=>'auto','scope'=>'all-active-payout-coins','only'=>'scrypt','batch_size'=>2));
+	$r=(new BadpoolPaymentBatchRunner(new BadpoolPaymentBatchPhaseAdapter($guard,array($exec,'run')),$root.'-strict-'.($mode===null?'ok':$mode)))->run(array('mode'=>'normal','scope'=>'all-active-payout-coins','only'=>'scrypt','batch_size'=>2));
 	$commands=array_map(function($call){return $call[0];},$exec->calls);
 	return $r;
 }

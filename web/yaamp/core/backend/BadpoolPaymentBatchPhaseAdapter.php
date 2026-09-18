@@ -10,6 +10,9 @@ require_once(dirname(__FILE__).'/BadpoolConfirmedBlockPaymentDelayOverride.php')
  */
 class BadpoolPaymentBatchPhaseAdapter
 {
+	const LIVE_COIN_ID = 1267;
+	const LIVE_ALGO = 'scrypt';
+	const LIVE_BLOCK_ID_BOUNDARY = 29242;
 	private $guard;
 	private $execute;
 
@@ -33,6 +36,29 @@ class BadpoolPaymentBatchPhaseAdapter
 	}
 
 	public function selectEligibleWork($ledger, $options)
+	{
+		if ((string)arraySafeVal($ledger,'mode',arraySafeVal($options,'mode')) === 'auto') return $this->selectLiveStatus1Work($ledger,$options);
+		return $this->selectLegacyMaturityWork($ledger,$options);
+	}
+
+	/** Automatic Scrypt batches consume the status1 output owned by the live maturity timer. */
+	private function selectLiveStatus1Work($ledger,$options)
+	{
+		$limit=intval(arraySafeVal($options,'batch_size',0));
+		if($limit<1)return $this->hold('Live status1 selection requires a positive batch size.');
+		$sql="SELECT E.id earning_id,E.blockid block_id,E.userid account_id,E.coinid coin_id FROM earnings E INNER JOIN blocks B ON B.id=E.blockid AND B.coin_id=E.coinid INNER JOIN live_block_candidates C ON C.block_id=B.id AND C.coin_id=B.coin_id AND C.algo=:algo AND C.blockhash=B.blockhash INNER JOIN accounts A ON A.id=E.userid AND A.coinid=:coin WHERE E.coinid=:coin AND E.status=1 AND E.mature_time IS NOT NULL AND B.coin_id=:coin AND B.id>:boundary AND B.category='generate' ORDER BY E.id LIMIT ".intval($limit);
+		$params=array(':coin'=>self::LIVE_COIN_ID,':algo'=>self::LIVE_ALGO,':boundary'=>self::LIVE_BLOCK_ID_BOUNDARY);
+		$rows=$this->guard->selectAll($sql,$params);if(!is_array($rows))return $this->hold('Live status1 selection did not return a row set.');
+		$earnings=array();$blocks=array();$accounts=array();$items=array();
+		foreach($rows as $row){$eid=$this->positiveId(arraySafeVal($row,'earning_id'));$bid=$this->positiveId(arraySafeVal($row,'block_id'));$aid=$this->positiveId(arraySafeVal($row,'account_id'));if($eid===null||$bid===null||$aid===null||intval(arraySafeVal($row,'coin_id'))!==self::LIVE_COIN_ID)return $this->hold('Live status1 selection returned malformed or cross-coin evidence.');$earnings[]=$eid;$blocks[]=$bid;$accounts[]=$aid;$items[]=array('earning_id'=>$eid,'block_id'=>$bid,'account_id'=>$aid,'coin_id'=>self::LIVE_COIN_ID);}
+		$normalized=$this->normalizeIdList($earnings);if($normalized===null||$normalized!==$earnings)return $this->hold('Live status1 selection was not unique and ordered by earning ID.');
+		$blocks=$this->uniqueIdList($blocks);$accounts=$this->uniqueIdList($accounts);$work=array('selection_mode'=>'live_status1','earning_ids'=>$normalized,'block_ids'=>$blocks,'account_ids'=>$accounts);
+		$report=array('status'=>'pass','read_only'=>true,'selection_mode'=>'live_status1','scope'=>array('coin_id'=>self::LIVE_COIN_ID,'algo'=>self::LIVE_ALGO,'block_id_gt'=>self::LIVE_BLOCK_ID_BOUNDARY,'earning_status'=>1,'block_category'=>'generate'),'batch_size'=>$limit,'selected_count'=>count($normalized),'items'=>array('selected_earnings'=>$items));
+		return $this->artifact($ledger,1,'eligible-work-report.json',array($report),array('selected_earning_ids'=>$normalized,'selected_block_ids'=>$blocks,'selected_account_ids'=>$accounts,'selected_accounts_by_coin'=>array((string)self::LIVE_COIN_ID=>array('account_ids'=>$accounts)),'selected_work_by_coin'=>array((string)self::LIVE_COIN_ID=>$work)));
+	}
+
+	/** Catchup/normal modes retain the explicitly separate legacy status0 maturity workflow. */
+	private function selectLegacyMaturityWork($ledger, $options)
 	{
 		$reports=array(); $earnings=array(); $blocks=array(); $accounts=array(); $accountsByCoin=array(); $byCoin=array();
 		$remaining=intval(arraySafeVal($options,'batch_size',0));
@@ -62,26 +88,29 @@ class BadpoolPaymentBatchPhaseAdapter
 		return $this->artifact($ledger,1,'eligible-work-report.json',$reports,array('selected_earning_ids'=>$this->normalizeIdList($earnings),'selected_block_ids'=>$this->normalizeIdList($blocks),'selected_account_ids'=>$this->uniqueIdList($accounts),'selected_accounts_by_coin'=>$accountsByCoin,'selected_work_by_coin'=>$byCoin));
 	}
 
-	public function packageMaturity($ledger, $options) { return $this->packages($ledger,2,'earnings-maturity-transition-approval-package','maturity-packages.json','maturity'); }
-	public function applyMaturity($ledger, $options) { return $this->applyPackages($ledger,2,3,'earnings-maturity-transition-apply','maturity-apply-report.json'); }
+	public function packageMaturity($ledger, $options) { if($this->isLiveBatch($ledger))return $this->artifact($ledger,2,'maturity-packages.json',array(array('status'=>'pass','read_only'=>true,'selection_mode'=>'live_status1','maturity_owned_by'=>'live_maturity_timer')),array(),true);return $this->packages($ledger,2,'earnings-maturity-transition-approval-package','maturity-packages.json','maturity'); }
+	public function applyMaturity($ledger, $options) { if($this->isLiveBatch($ledger))return $this->artifact($ledger,3,'maturity-apply-report.json',array(array('status'=>'pass','mutation_count'=>0,'selection_mode'=>'live_status1','maturity_owned_by'=>'live_maturity_timer')));return $this->applyPackages($ledger,2,3,'earnings-maturity-transition-apply','maturity-apply-report.json'); }
 
 	public function paymentDelayCheck($ledger, $options)
 	{
-		$reports=array(); $eligible=array(); foreach((array)$ledger['selected_coin_scope'] as $coin){
-			$r=$this->command('account-credit-clear-dryrun',array('--coin-id='.$coin['id'],'--format=json'));
-			if(!$this->passed($r))return $this->hold('Payment delay check did not pass for coin '.$coin['id'].'.',$reports); $reports[]=$r;
-			foreach($this->items($r,'selected_earnings') as $row){$id=$this->positiveId(arraySafeVal($row,'earning_id'));if($id!==null)$eligible[]=$id;}
+		$expected=$this->normalizeIdList((array)arraySafeVal($ledger,'selected_earning_ids',array()));if($expected===null)return $this->hold('Durable payment-delay earning scope is malformed or duplicated.');
+		if($expected===array())return $this->artifact($ledger,4,'payment-delay-report.json',array(array('status'=>'pass','read_only'=>true,'selected_earning_ids'=>array())),array('payment_delay_override_used'=>false,'payment_delay_qualified_earning_ids'=>array()));
+		$reports=array();$eligible=array();foreach((array)$ledger['selected_coin_scope'] as $coin){$work=(array)arraySafeVal((array)arraySafeVal($ledger,'selected_work_by_coin',array()),(string)$coin['id'],array());$ids=$this->normalizeIdList((array)arraySafeVal($work,'earning_ids',array()));if($ids===null)return $this->hold('Durable per-coin payment-delay scope is malformed or duplicated.',$reports);if(!$ids)continue;
+			$r=$this->command('account-credit-clear-dryrun',array('--coin-id='.$coin['id'],'--selected-earning-ids='.implode(',',$ids),'--format=json'));
+			if(!$this->passed($r))return $this->hold('Payment delay check did not pass for coin '.$coin['id'].'.',$reports);$reports[]=$r;
+			$actual=$this->idsFromRows($this->items($r,'selected_earnings'),'earning_id');if($actual===null)return $this->hold('Payment delay check returned malformed or duplicate earning IDs.',$reports);if(array_diff($actual,$ids))return $this->hold('Payment delay check returned earnings outside the exact requested scope.',$reports);$eligible=array_merge($eligible,$actual);
 		}
-		$expected=$this->normalizeIdList((array)arraySafeVal($ledger,'selected_earning_ids',array()));$eligible=$this->normalizeIdList($eligible);
-		if($expected!==null&&$eligible!==null&&array_diff($expected,$eligible)===array())return $this->artifact($ledger,4,'payment-delay-report.json',$reports,array('payment_delay_override_used'=>false));
+		$eligible=$this->normalizeIdList($eligible);
+		if($eligible===$expected)return $this->artifact($ledger,4,'payment-delay-report.json',$reports,array('payment_delay_override_used'=>false,'payment_delay_qualified_earning_ids'=>$eligible));
 		$override=BadpoolConfirmedBlockPaymentDelayOverride::validate($options,$ledger,$this->guard);
 		if(arraySafeVal($override,'status')!=='pass')return $this->hold('The default payment delay remains active; selected earnings are not all older than the 12-hour threshold.',$reports,(array)arraySafeVal($override,'errors',array()));
 		$reports[]=array('status'=>'pass','read_only'=>true,'payment_delay_override'=>$override);
-		return $this->artifact($ledger,4,'payment-delay-report.json',$reports,array('payment_delay_override_used'=>true,'payment_delay_override_reason'=>arraySafeVal($override,'reason')));
+		return $this->artifact($ledger,4,'payment-delay-report.json',$reports,array('payment_delay_override_used'=>true,'payment_delay_override_reason'=>arraySafeVal($override,'reason'),'payment_delay_qualified_earning_ids'=>$expected));
 	}
 
 	public function creditAccounts($ledger, $options)
 	{
+		$durable=$this->normalizeIdList((array)arraySafeVal($ledger,'selected_earning_ids',array()));$qualified=$this->normalizeIdList((array)arraySafeVal($ledger,'payment_delay_qualified_earning_ids',array()));if($durable===null||$qualified===null||$durable!==$qualified)return $this->hold('Account credit requires exact equality between durable and payment-delay-qualified earning IDs.');
 		$packaged=$this->packages($ledger,5,'account-credit-clear-approval-package','account-credit-packages.json','credit'); if(!$this->passed($packaged))return $packaged;
 		$applied=$this->applyPackages($ledger,5,5,'account-credit-clear-apply','account-credit-apply-report.json',$packaged['package_path'],$packaged['checksums']); if(!$this->passed($applied))return $applied;
 		$accounts=array(); $byCoin=array(); foreach($this->readArtifact($packaged['package_path']) as $package){$coinId=$this->packageCoinId($package);foreach($this->items($package,'selected_earnings') as $row){$id=$this->positiveId(arraySafeVal($row,'account_id',arraySafeVal($row,'userid')));if($id!==null){$accounts[]=$id;if($coinId!==null)$byCoin[(string)$coinId][]=$id;}}}
@@ -113,12 +142,14 @@ class BadpoolPaymentBatchPhaseAdapter
 
 	private function coins($options)
 	{
-		$ids=array(1266,1267,1268,1269,1270);$params=array();$p=array();foreach($ids as $i=>$id){$key=':id'.$i;$p[]=$key;$params[$key]=$id;}
+		$ids=arraySafeVal($options,'mode')==='auto'?array(self::LIVE_COIN_ID):array(1266,1267,1268,1269,1270);$params=array();$p=array();foreach($ids as $i=>$id){$key=':id'.$i;$p[]=$key;$params[$key]=$id;}
 		$sql='SELECT id,symbol,algo FROM coins WHERE id IN ('.implode(',',$p).') AND IFNULL(enable,0)=1 AND IFNULL(installed,0)=1 AND IFNULL(visible,0)=1 AND IFNULL(auto_ready,0)=1';
-		$only=arraySafeVal($options,'only'); if($only){$sql.=' AND LOWER(algo)=LOWER(:algo)';$params[':algo']=$only;}
+		$only=arraySafeVal($options,'only');if(arraySafeVal($options,'mode')==='auto'){$sql.=' AND LOWER(algo)=LOWER(:live_algo)';$params[':live_algo']=self::LIVE_ALGO;}elseif($only){$sql.=' AND LOWER(algo)=LOWER(:algo)';$params[':algo']=$only;}
 		$sql.=' ORDER BY id';$rows=$this->guard->selectAll($sql,$params);$out=array();
 		foreach($rows as $r)$out[]=array('coin_id'=>intval($r['id']),'id'=>intval($r['id']),'symbol'=>(string)$r['symbol'],'algo'=>(string)$r['algo']);return $out;
 	}
+
+	private function isLiveBatch($ledger){return (string)arraySafeVal($ledger,'mode')==='auto';}
 
 	private function packages($ledger,$phase,$command,$file,$kind)
 	{
