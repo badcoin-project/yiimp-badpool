@@ -129,7 +129,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 		elseif ($action === 'earnings-maturity-transition-dryrun' || $action === 'earnings-maturity-transition-approval-package') {
 			$actionArgs = $this->maturitySelectionContextArgs($args);
 		}
-		elseif ($action === 'account-credit-clear-approval-package') {
+		elseif ($action === 'account-credit-clear-dryrun' || $action === 'account-credit-clear-approval-package') {
 			$actionArgs = $this->accountCreditSelectionContextArgs($args);
 		}
 		elseif ($action === 'backward-maturity-transition-dryrun' || $action === 'backward-maturity-transition-approval-package') {
@@ -262,7 +262,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 				$report = $this->earningsMaturityTransitionApplyReport($args);
 				break;
 			case 'account-credit-clear-dryrun':
-				$report = $this->accountCreditClearDryrunReport();
+				$report = $this->accountCreditClearDryrunFromArgs($args);
 				break;
 			case 'block-accounting-dryrun':
 				$report = $this->blockAccountingDryrunReport($args);
@@ -364,7 +364,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 			"       php yaamp/yiic.php badpoolguard earnings-maturity-transition-approval-package --coin-id=<id> [--selected-block-ids=<csv>] [--format=json|text]  (fresh generation)\n".
 			"       php yaamp/yiic.php badpoolguard earnings-maturity-transition-apply --coin-id=<id> --selected-earning-ids=<csv> [--selection-mode=exact-blocks --selected-block-ids=<csv>] --approval-package-checksum=<sha256> --selected-scope-checksum=<sha256> --projected-block-mutation-checksum=<sha256> --projected-earnings-mutation-checksum=<sha256> --operator-confirms-maturity-transition=scrypt_status0_to_status1 --format=json\n".
 			"       Retained-package apply additionally requires --retained-dryrun-report=<path> and the package-bound --retained-dryrun-report-checksum=<sha256>; the operator confirmation remains a separate runtime requirement.\n".
-			"       php yaamp/yiic.php badpoolguard account-credit-clear-dryrun --coin-id=<id> [--format=json|text]\n".
+			"       php yaamp/yiic.php badpoolguard account-credit-clear-dryrun --coin-id=<id> [--selected-earning-ids=<csv>] [--format=json|text]\n".
 				"       php yaamp/yiic.php badpoolguard block-accounting-dryrun --coin-id=<id> --selector=backlog --first-block-id=<id> --last-block-id=<id> [--max-rows=50] [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard live-capture-block-enrichment-dryrun --coin-id=<id> --algo=<algo> [--selected-block-ids=<csv>] [--limit=<n>] --format=json\n".
 			"       php yaamp/yiic.php badpoolguard live-capture-block-enrichment-approval-package --coin-id=<id> --algo=<algo> [--selected-block-ids=<csv>] [--limit=<n>] --format=json\n".
@@ -3277,6 +3277,13 @@ class BadpoolGuardCommand extends CConsoleCommand
 		$report=$this->guard->finalizeReport($report); $report['dryrun_report_checksum']=BadpoolGuardReport::checksum($report); return $report;
 	}
 
+	private function accountCreditClearDryrunFromArgs($args)
+	{
+		$selection=$this->parseAccountCreditSelection($args);
+		if($selection['status']==='fail'){$this->guard->addError($selection['message']);return $this->guard->refusalReport();}
+		return $this->accountCreditClearDryrunReport($selection['selected_earning_ids']);
+	}
+
 	private function accountCreditClearApprovalPackageReport($args=array())
 	{
 		$selection=$this->parseAccountCreditSelection($args);if($selection['status']==='fail'){$this->guard->addError($selection['message']);return $this->guard->refusalReport();}
@@ -3381,7 +3388,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 	private function guardedApplyContextArgs($args){ $out=array(); foreach($args as $arg){ if(preg_match('/^--(coin-id|format)(=.*)?$/i',$arg)) $out[]=$arg; } return $out; }
 	private function maturitySelectionContextArgs($args){$out=array();foreach($args as $arg)if(preg_match('/^--(coin-id|format)(=.*)?$/i',$arg))$out[]=$arg;return $out;}
 	private function accountCreditSelectionContextArgs($args){$out=array();foreach($args as $arg)if(preg_match('/^--(coin-id|format)(=.*)?$/i',$arg))$out[]=$arg;return $out;}
-	private function parseAccountCreditSelection($args){$seen=false;$raw=null;foreach($args as $arg){if(strpos($arg,'--selected-earning-ids=')===0){if($seen)return array('status'=>'fail','message'=>'Duplicate --selected-earning-ids is refused.');$seen=true;$raw=substr($arg,23);}elseif(strpos($arg,'--selected-earning-ids')===0)return array('status'=>'fail','message'=>'Exact earning selection requires --selected-earning-ids=<csv>.');elseif(!preg_match('/^--(coin-id|format)=/',$arg))return array('status'=>'fail','message'=>'Unknown option refused for account-credit approval package.');}if(!$seen)return array('status'=>'pass','selected_earning_ids'=>null);if($raw===''||!preg_match('/^[1-9][0-9]*(,[1-9][0-9]*)*$/',$raw))return array('status'=>'fail','message'=>'--selected-earning-ids must be a non-empty comma-separated list of canonical positive integers.');$ids=array_map('intval',explode(',',$raw));if(count($ids)!==count(array_unique($ids)))return array('status'=>'fail','message'=>'Duplicate earning IDs are refused.');sort($ids,SORT_NUMERIC);return array('status'=>'pass','selected_earning_ids'=>$ids);}
+	private function parseAccountCreditSelection($args){$seen=false;$raw=null;foreach($args as $arg){if(strpos($arg,'--selected-earning-ids=')===0){if($seen)return array('status'=>'fail','message'=>'Duplicate --selected-earning-ids is refused.');$seen=true;$raw=substr($arg,23);}elseif(strpos($arg,'--selected-earning-ids')===0)return array('status'=>'fail','message'=>'Exact earning selection requires --selected-earning-ids=<csv>.');elseif(!preg_match('/^--(coin-id|format)=/',$arg))return array('status'=>'fail','message'=>'Unknown option refused for account-credit command.');}if(!$seen)return array('status'=>'pass','selected_earning_ids'=>null);if($raw===''||!preg_match('/^[1-9][0-9]*(,[1-9][0-9]*)*$/',$raw))return array('status'=>'fail','message'=>'--selected-earning-ids must be a non-empty comma-separated list of canonical positive integers.');$ids=array_map('intval',explode(',',$raw));if(count($ids)!==count(array_unique($ids)))return array('status'=>'fail','message'=>'Duplicate earning IDs are refused.');sort($ids,SORT_NUMERIC);return array('status'=>'pass','selected_earning_ids'=>$ids);}
 	private function backwardMaturityContextArgs($args){$out=array();foreach($args as $arg)if(preg_match('/^--(coin-id|format)(=.*)?$/i',$arg))$out[]=$arg;return $out;}
 	private function parseMaturitySelection($args){$seen=false;$raw=null;foreach($args as $arg){if(strpos($arg,'--selected-block-ids=')===0){if($seen)return array('status'=>'fail','message'=>'Duplicate --selected-block-ids is refused.');$seen=true;$raw=substr($arg,21);}elseif(strpos($arg,'--selected-block-ids')===0)return array('status'=>'fail','message'=>'Exact block selection requires --selected-block-ids=<csv>.');}if(!$seen)return array('status'=>'pass','mode'=>'coin-wide','requested_block_ids'=>array());if($raw===''||!preg_match('/^[1-9][0-9]*(,[1-9][0-9]*)*$/',$raw))return array('status'=>'fail','message'=>'--selected-block-ids must be a non-empty comma-separated list of canonical positive integers.');$ids=array_map('intval',explode(',',$raw));if(count($ids)!==count(array_unique($ids)))return array('status'=>'fail','message'=>'Duplicate block IDs are refused.');sort($ids,SORT_NUMERIC);return array('status'=>'pass','mode'=>'exact-blocks','requested_block_ids'=>$ids);}
 	private function parseGuardedApplyOptions($args){ $allowed=array('coin-id','format','selected-earning-ids','selected-block-ids','selection-mode','approval-package-checksum','selected-scope-checksum','projected-block-mutation-checksum','projected-earnings-mutation-checksum','retained-dryrun-report','retained-dryrun-report-checksum','operator-confirms-maturity-transition','selected-earnings-scope-checksum','projected-account-credit-checksum','operator-confirms-account-credit'); $o=array(); foreach($args as $arg){ if(!preg_match('/^--([^=]+)=(.*)$/',$arg,$m)){ $o['__parse_error']='Unknown argument refused: '.$arg; continue; } $n=strtolower($m[1]); if(!in_array($n,$allowed,true)) $o['__parse_error']='Unknown option refused: --'.$m[1]; elseif(isset($o[$n])) $o['__parse_error']='Duplicate option refused: --'.$m[1]; else $o[$n]=$m[2]; } return $o; }

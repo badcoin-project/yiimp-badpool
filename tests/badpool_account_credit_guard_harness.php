@@ -125,16 +125,30 @@ $selectionRows=array(
 	array('earning_id'=>3,'userid'=>9,'coinid'=>1268,'blockid'=>43,'amount'=>'3.0','status'=>1,'mature_time'=>$threshold-1,'coin_price'=>'1.0','account_id'=>9,'account_coinid'=>1268,'account_balance'=>'0'),
 	array('earning_id'=>4,'userid'=>9,'coinid'=>1267,'blockid'=>44,'amount'=>'4.0','status'=>0,'mature_time'=>$threshold-1,'coin_price'=>'1.0','account_id'=>9,'account_coinid'=>1267,'account_balance'=>'0'),
 	array('earning_id'=>5,'userid'=>9,'coinid'=>1267,'blockid'=>45,'amount'=>'5.0','status'=>1,'mature_time'=>$threshold-2,'coin_price'=>'1.0','account_id'=>9,'account_coinid'=>1267,'account_balance'=>'0'),
+	array('earning_id'=>6,'userid'=>9,'coinid'=>1267,'blockid'=>46,'amount'=>'6.0','status'=>2,'mature_time'=>$threshold-1,'coin_price'=>'1.0','account_id'=>9,'account_coinid'=>1267,'account_balance'=>'0'),
 );
 $selectionGuard=new AccountCreditSelectionGuardFixture($selectionRows);$selectionCommand=new BadpoolGuardCommand;
 $guardProperty=new ReflectionProperty('BadpoolGuardCommand','guard');$guardProperty->setAccessible(true);$guardProperty->setValue($selectionCommand,$selectionGuard);
 $dryrunMethod=new ReflectionMethod('BadpoolGuardCommand','accountCreditClearDryrunReport');$dryrunMethod->setAccessible(true);
+$selectionMethod=new ReflectionMethod('BadpoolGuardCommand','parseAccountCreditSelection');$selectionMethod->setAccessible(true);
+$parsed=$selectionMethod->invoke($selectionCommand,array('--coin-id=1267','--selected-earning-ids=15621,15620','--format=json'));
+if($parsed['status']!=='pass'||$parsed['selected_earning_ids']!==array(15620,15621))$failures[]='account-credit selected earning IDs were not parsed as an exact positive unique set';
+foreach(array('', 'x', '0', '-1', '1,', '01') as $invalid){$parsed=$selectionMethod->invoke($selectionCommand,array('--coin-id=1267','--selected-earning-ids='.$invalid,'--format=json'));if($parsed['status']!=='fail')$failures[]='malformed selected earning IDs were accepted: '.$invalid;}
+$parsed=$selectionMethod->invoke($selectionCommand,array('--coin-id=1267','--selected-earning-ids=15620,15620','--format=json'));if($parsed['status']!=='fail')$failures[]='duplicate selected earning IDs were accepted';
+$parsed=$selectionMethod->invoke($selectionCommand,array('--coin-id=1267','--format=json'));if($parsed['status']!=='pass'||$parsed['selected_earning_ids']!==null)$failures[]='omitted selected earning IDs did not retain coin-wide selection';
 $wide=$dryrunMethod->invoke($selectionCommand);$wideIds=array_column($wide['items']['selected_earnings'],'earning_id');
 if($wideIds!==array(1,5))$failures[]='coin-wide selection did not enforce status, delay, and coin eligibility';
 $exact=$dryrunMethod->invoke($selectionCommand,array(1,2,3,4,5));$exactIds=array_column($exact['items']['selected_earnings'],'earning_id');
 if($exactIds!==array(1,5))$failures[]='selected IDs replaced rather than narrowed normal delay eligibility';
 $eligible=$dryrunMethod->invoke($selectionCommand,array(1));if(array_column($eligible['items']['selected_earnings'],'earning_id')!==array(1))$failures[]='delay-eligible exact selected ID was not selected';
 $immature=$dryrunMethod->invoke($selectionCommand,array(2));if(!empty($immature['items']['selected_earnings']))$failures[]='immature exact selected ID bypassed payment delay';
+$status0=$dryrunMethod->invoke($selectionCommand,array(4));if(!empty($status0['items']['selected_earnings']))$failures[]='status0 exact selected ID bypassed status eligibility';
+$status2=$dryrunMethod->invoke($selectionCommand,array(6));if(!empty($status2['items']['selected_earnings']))$failures[]='status2 exact selected ID bypassed status eligibility';
+$wrongCoin=$dryrunMethod->invoke($selectionCommand,array(3));if(!empty($wrongCoin['items']['selected_earnings']))$failures[]='wrong-coin exact selected ID bypassed coin eligibility';
+$multiple=$dryrunMethod->invoke($selectionCommand,array(1,5));if(array_column($multiple['items']['selected_earnings'],'earning_id')!==array(1,5))$failures[]='multiple eligible selected IDs did not return exactly the requested scope';
+$nonSelected=$dryrunMethod->invoke($selectionCommand,array(1));if(array_column($nonSelected['items']['selected_earnings'],'earning_id')!==array(1))$failures[]='eligible non-selected earning broadened exact scope';
+$unrelated=BadpoolGuardContext::fromArgs('overview',array('--all-coins-preview','--selected-earning-ids=15620,15621','--format=json'));
+if($unrelated->isValid())$failures[]='unrelated command accepted account-credit selected earning IDs';
 
 if (!empty($failures)) {
 	echo "Badpool account-credit guard harness FAILED\n";
