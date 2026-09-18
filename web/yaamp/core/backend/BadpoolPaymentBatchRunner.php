@@ -36,6 +36,7 @@ class BadpoolPaymentBatchRunner
 				'selected_coin_scope'=>array(), 'selected_earning_ids'=>array(), 'selected_block_ids'=>array(),
 				'selected_account_ids'=>array(), 'selected_accounts_by_coin'=>array(), 'created_payout_ids'=>array(), 'selected_work_by_coin'=>array(), 'payment_delay_qualified_earning_ids'=>array(), 'approval_package_paths'=>array(),
 				'dryrun_report_paths'=>array(), 'checksums'=>array(), 'phase_results'=>array(), 'warnings'=>array(), 'errors'=>array());
+			if (isset($options['coordinator_owner'])) $ledger['coordinator_owner']=$options['coordinator_owner'];
 			if (!is_dir($dir) && !@mkdir($dir, 0770, true)) return $this->refusal($options, $id, 'Unable to create batch run directory.');
 			$this->save($ledger);
 		}

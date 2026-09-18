@@ -26,7 +26,7 @@ closeout_expect($report['status']==='pass'&&$report['completed_payout_reconcilia
 closeout_expect($report['wallet_reads']==='proof_only'&&$report['wallet_sends']===false&&$report['db_mutations']===false,'closeout was not proof-only',$failures);
 closeout_expect($report['next_safe_lane_or_STOP']==='STOP','valid proof did not stop',$failures);
 closeout_expect($report['do_not_rerun']===array('wallet-send-apply','payout-row-apply','account-credit-apply'),'apply rerun prohibitions changed',$failures);
-closeout_expect($report['ledger_only_apply_mode_available']===false&&hash_file('sha256',$dir.'/ledger.json')===$ledgerChecksum,'preview exposed an apply mode or mutated the ledger',$failures);
+closeout_expect($report['ledger_only_apply_mode_available']===true&&hash_file('sha256',$dir.'/ledger.json')===$ledgerChecksum,'preview did not advertise the separate apply lane or mutated the ledger',$failures);
 closeout_expect($proofCalls===array(array(1267,array(520))),'completed payout did not route exclusively to wallet proof',$failures);
 closeout_expect(strpos(json_encode($proofCalls),'wallet-send')===false,'proof-valid payout emitted wallet-send command',$failures);
 

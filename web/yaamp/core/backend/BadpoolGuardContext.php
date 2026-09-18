@@ -32,6 +32,9 @@ class BadpoolGuardContext
 		'stop-before-wallet-send',
 		'resume-batch-id',
 		'batch-id',
+		'closeout-proof',
+		'closeout-proof-checksum',
+		'operator-confirms-closeout',
 		'payment-delay-override-package',
 		'payment-delay-override-package-checksum',
 		'operator-confirms-payment-delay-override',
@@ -128,7 +131,7 @@ class BadpoolGuardContext
 			}
 		}
 
-		if ($this->command === 'completed-payout-batch-closeout') {
+		if (in_array($this->command,array('completed-payout-batch-closeout','completed-payout-batch-closeout-apply'),true)) {
 			if (!isset($options['batch-id'])) {
 				$this->addError('completed-payout-batch-closeout requires --batch-id=<id>.');
 				return;
@@ -137,6 +140,9 @@ class BadpoolGuardContext
 				$this->addError('Invalid --batch-id. Expected a nonempty batch identifier.');
 				return;
 			}
+		}
+		if ($this->command === 'completed-payout-batch-closeout-apply') {
+			foreach(array('closeout-proof','closeout-proof-checksum','operator-confirms-closeout') as $required)if(!isset($options[$required])||!is_string($options[$required])||$options[$required]==='')$this->addError('completed-payout-batch-closeout-apply requires --'.$required.'=<value>.');
 		}
 
 		$this->options = $options;
@@ -358,16 +364,25 @@ class BadpoolGuardContext
 				$this->addError("Option --$name is only available for live capture bridge commands.");
 				return array();
 			}
+			$closeoutApplyOptions=array('batch-id','closeout-proof','closeout-proof-checksum','operator-confirms-closeout','format');
 			if ($this->command === 'completed-payout-batch-closeout' && !in_array($lower, array('batch-id', 'format'), true)) {
 				$this->addError("Option --$name is not available for completed-payout-batch-closeout.");
+				return array();
+			}
+			if ($this->command === 'completed-payout-batch-closeout-apply' && !in_array($lower,$closeoutApplyOptions,true)) {
+				$this->addError("Option --$name is not available for completed-payout-batch-closeout-apply.");
 				return array();
 			}
 			if (in_array($lower, $batchOptions, true) && !in_array($this->command, array('batch-run-preview','batch-run'), true)) {
 				$this->addError("Option --$name is only available for payment batch commands.");
 				return array();
 			}
-			if ($lower === 'batch-id' && $this->command !== 'completed-payout-batch-closeout') {
-				$this->addError("Option --$name is only available for completed-payout-batch-closeout.");
+			if ($lower === 'batch-id' && !in_array($this->command,array('completed-payout-batch-closeout','completed-payout-batch-closeout-apply'),true)) {
+				$this->addError("Option --$name is only available for completed-payout closeout commands.");
+				return array();
+			}
+			if (in_array($lower,array('closeout-proof','closeout-proof-checksum','operator-confirms-closeout'),true)&&$this->command!=='completed-payout-batch-closeout-apply') {
+				$this->addError("Option --$name is only available for completed-payout-batch-closeout-apply.");
 				return array();
 			}
 			if (isset($options[$lower])) {
@@ -402,7 +417,7 @@ class BadpoolGuardContext
 			return;
 		}
 		if (!$hasCoinId && !$allCoins) {
-			if ($this->command === 'status-runner' || $this->command === 'batch-run-preview' || $this->command === 'batch-run' || $this->command === 'completed-payout-batch-closeout') {
+			if ($this->command === 'status-runner' || $this->command === 'batch-run-preview' || $this->command === 'batch-run' || $this->command === 'completed-payout-batch-closeout' || $this->command === 'completed-payout-batch-closeout-apply' || $this->command === 'live-payment-coordinator') {
 				$allCoins = true;
 			} else {
 				$this->addError('Refusing implicit all-coin preview. Pass --coin-id=<id> or --all-coins-preview.');
