@@ -12,6 +12,7 @@ require_once(dirname(__FILE__).'/../core/backend/BadpoolLivePaymentCoordinator.p
 require_once(dirname(__FILE__).'/../core/backend/BadpoolPaymentBatchPhaseAdapter.php');
 require_once(dirname(__FILE__).'/../core/backend/BadpoolCompletedPayoutBatchCloseout.php');
 require_once(dirname(__FILE__).'/../core/backend/BadpoolCompletedPayoutBatchCloseoutApply.php');
+require_once(dirname(__FILE__).'/../core/backend/BadpoolWalletFundingGuard.php');
 require_once(dirname(__FILE__).'/../core/backend/BadpoolConfirmedBlockPaymentDelayOverride.php');
 require_once(dirname(__FILE__).'/../core/rpc/wallet-rpc.php');
 
@@ -45,6 +46,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 		'payout-row-apply',
 		'wallet-send-dryrun',
 		'wallet-send-approval-package',
+		'wallet-funding-preflight',
 		'wallet-send-apply',
 		'wallet-proof-closeout',
 		'payable-source-reconciliation-preview',
@@ -195,6 +197,9 @@ class BadpoolGuardCommand extends CConsoleCommand
 			case 'wallet-send-approval-package':
 				$report = $this->walletSendApprovalPackageReport();
 				break;
+			case 'wallet-funding-preflight':
+				$report = $this->walletFundingPreflightReport();
+				break;
 			case 'wallet-send-apply':
 				$report = $this->walletSendApplyReport($args);
 				break;
@@ -336,6 +341,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 			"       php yaamp/yiic.php badpoolguard payout-row-approval-package --coin-id=<id> [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard payout-row-apply --coin-id=<id> --selected-account-ids=<csv> --approval-package-checksum=<sha256> --selected-scope-checksum=<sha256> --projected-payout-row-checksum=<sha256> --projected-account-debit-checksum=<sha256> --operator-confirms-payout-row-creation=scrypt_balance_to_payout_rows_no_wallet_send --format=json\n".
 			"       php yaamp/yiic.php badpoolguard wallet-send-dryrun --coin-id=<id> --selected-payout-ids=<csv> --format=json\n".
+			"       php yaamp/yiic.php badpoolguard wallet-funding-preflight --coin-id=<id> --selected-payout-ids=<csv> --format=json\n".
 			"       php yaamp/yiic.php badpoolguard wallet-send-approval-package --coin-id=<id> --selected-payout-ids=<csv> --format=json\n".
 			"       php yaamp/yiic.php badpoolguard wallet-send-apply --coin-id=<id> --selected-payout-ids=<csv> --approval-package-checksum=<sha256> --row-inventory-checksum=<sha256> --destination-plan-checksum=<sha256> --projected-total=<decimal> --projected-total-checksum=<sha256> --wallet-send-total=<decimal8> --wallet-send-total-checksum=<sha256> --wallet-send-destination-plan-checksum=<sha256> --operator-confirms-wallet-send=<confirmation-text> --format=json\n".
 			"       php yaamp/yiic.php badpoolguard wallet-proof-closeout --coin-id=<id> --selected-payout-ids=<csv> --format=json\n".
@@ -1841,7 +1847,10 @@ class BadpoolGuardCommand extends CConsoleCommand
 		if ((string)$opts['wallet-send-total'] !== (string)$approval['wallet_send_total']) return $this->walletSendApplyFail($report, 'wallet_send_total_mismatch', 'Wallet-send total changed before apply.');
 		$destinationPlan = arraySafeVal($approval, 'wallet_send_destination_plan', array()); if (empty($destinationPlan)) return $this->walletSendApplyFail($report, 'empty_destination_plan', 'wallet-send-apply refuses an empty destination plan.');
 		$duplicateRecipient = $this->walletSendApplyDuplicateRecipient($destinationPlan); if ($duplicateRecipient !== null) return $this->walletSendApplyFail($report, 'duplicate_recipient_destination_refused', 'wallet-send-apply refuses duplicate recipient destination before wallet RPC send: '.$duplicateRecipient);
-		$dests = $this->walletSendApplyDestinationMap($destinationPlan); $coin = $this->walletSendApplyRpcCoin(intval($opts['coin-id'])); if (!$coin) return $this->walletSendApplyFail($report, 'wallet_rpc_coin_unavailable', 'Unable to load wallet RPC coin fields for apply.'); $remote = new WalletRPC($coin); $txid = $remote->badpoolGuardedSendmanyApply((string)$coin->account, $dests);
+		$dests = $this->walletSendApplyDestinationMap($destinationPlan); $coin = $this->walletSendApplyRpcCoin(intval($opts['coin-id'])); if (!$coin) return $this->walletSendApplyFail($report, 'wallet_rpc_coin_unavailable', 'Unable to load wallet RPC coin fields for apply.'); $remote = new WalletRPC($coin); $walletAccount=(string)$coin->account;
+		$funding=$this->walletFundingCheck($remote,intval($opts['coin-id']),(string)$approval['wallet_send_total'],$walletAccount); $report=array_merge($report,$funding);
+		if ($funding['funding_classification'] !== 'PASS / WALLET FUNDING SUFFICIENT') return $this->walletSendApplyFail($report, 'wallet_funding_hold', $funding['funding_classification']);
+		$txid = $remote->badpoolGuardedSendmanyApply($walletAccount, $dests);
 		if (!$txid || !is_string($txid)) return $this->walletSendApplyFail($report, 'wallet_rpc_send_failed', 'Wallet RPC sendmany failed or returned no txid: '.json_encode($remote->error));
 		$tx = null;
 		try {
@@ -1990,6 +1999,35 @@ class BadpoolGuardCommand extends CConsoleCommand
 	private function walletProofSelectedPayoutRows($ids) { $params=array(); $ph=array(); foreach($ids as $i=>$id){$k=':payout_id_'.$i; $ph[]=$k; $params[$k]=$id;} return $this->guard->selectAll('SELECT P.id AS payout_id, P.account_id, P.idcoin AS payout_idcoin, CAST(P.amount AS CHAR) AS amount, P.completed, P.tx, A.username, A.coinid AS account_coinid, CAST(A.balance AS CHAR) AS account_balance FROM payouts P INNER JOIN accounts A ON A.id=P.account_id WHERE P.id IN ('.implode(',', $ph).') ORDER BY P.id', $params); }
 	private function walletProofWithdrawRows($row) { if (!$this->guard->tableExists('withdraws')) return array('checked'=>true,'present'=>false,'rows'=>array()); $cols=array('id','time','account_id','amount','tx','txid','address','market'); $select=$this->guard->selectColumns('withdraws',$cols); $params=array(':account_id'=>intval(arraySafeVal($row,'account_id'))); if ($this->guard->columnExists('withdraws','account_id')) $rows=$this->guard->selectAll('SELECT '.$select.' FROM withdraws WHERE account_id=:account_id ORDER BY id DESC LIMIT 20',$params); else $rows=$this->guard->selectAll('SELECT '.$select.' FROM withdraws ORDER BY id DESC LIMIT 20'); return array('checked'=>true,'present'=>!empty($rows),'rows'=>$rows); }
 
+
+
+	private function walletFundingCheck($remote,$coinId,$sendTotal,$walletAccount)
+	{
+		// This is called at apply time directly adjacent to, and before, sendmany.
+		$balance=$remote->badpoolGuardedSpendableBalance($walletAccount);
+		$result=BadpoolWalletFundingGuard::evaluate($balance,$sendTotal,BadpoolWalletFundingGuard::configuredReserve($coinId));
+		$result['wallet_reads']=1;
+		$result['wallet_account']=(string)$walletAccount;
+		$result['wallet_balance_scope']='same account used as sendmany fromaccount';
+		$result['wallet_balance_primitive']='Bitcoin getbalance(account, 1)';
+		$result['wallet_balance_definition']='confirmed account-scoped balance for the exact sendmany source account, excluding immature and zero-confirmation funds';
+		$result['wallet_balance_transport']='exact decimal token parsed from EasyBitcoin raw_response; decoded PHP float is not used for authorization arithmetic';
+		$result['reserve_configuration']='YAAMP_BADPOOL_MINIMUM_WALLET_RESERVES[coin_id] exact non-negative decimal string';
+		return $result;
+	}
+
+	private function walletFundingPreflightReport()
+	{
+		$package=$this->walletSendBuildReadOnlyPackage(false);
+		if(!$this->guard->isValid())return $package;
+		$report=array('schema'=>BadpoolWalletFundingGuard::SCHEMA,'command'=>'wallet-funding-preflight','status'=>'hold','coin_id'=>$package['coin_id'],'selected_payout_ids'=>$package['selected_payout_ids'],'selected_payout_count'=>$package['selected_payout_count'],'wallet_account'=>(string)$package['wallet_account'],'wallet_balance_scope'=>'same account used as sendmany fromaccount','wallet_reads'=>1,'wallet_sends'=>false,'db_mutations'=>false,'read_only'=>true,'service_actions'=>false);
+		$coin=$this->walletSendApplyRpcCoin($package['coin_id']);
+		if(!$coin){$funding=BadpoolWalletFundingGuard::evaluate(false,$package['wallet_send_total'],BadpoolWalletFundingGuard::configuredReserve($package['coin_id']));$report['wallet_reads']=0;}
+		else{$remote=new WalletRPC($coin);$walletAccount=(string)$coin->account;$funding=$this->walletFundingCheck($remote,$package['coin_id'],$package['wallet_send_total'],$walletAccount);}
+		$report=array_merge($report,$funding);
+		$report['status']=$funding['funding_classification']==='PASS / WALLET FUNDING SUFFICIENT'?'pass':'hold';
+		return BadpoolGuardReport::finalize($report);
+	}
 
 	private function walletSendDryrunReport()
 	{
