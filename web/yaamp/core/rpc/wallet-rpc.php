@@ -5,6 +5,17 @@
 require_once(dirname(__FILE__).'/wallet-send-guard.php');
 
 class WalletRPC {
+	/** Bitcoin getbalance("*", 1): confirmed spendable balance used by sendmany. */
+	function badpoolGuardedSpendableBalance()
+	{
+		if($this->type!=='Bitcoin'){$this->error='guarded spendable balance semantics are unvalidated for wallet type '.$this->type;return false;}
+		$res=$this->rpc->getbalance('*',1);$this->error=$this->rpc->error;
+		if($res===false||$res===null||$this->error)return false;
+		if(is_int($res))return(string)$res;
+		if(is_float($res)&&is_finite($res)&&$res>=0)return number_format($res,8,'.','');
+		if(is_string($res)&&preg_match('/^\d+(?:\.\d{1,8})?$/',$res))return$res;
+		$this->error='malformed getbalance response';return false;
+	}
 
 	public $type = 'Bitcoin';
 	protected $rpc;
