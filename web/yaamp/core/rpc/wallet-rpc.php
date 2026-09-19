@@ -5,16 +5,25 @@
 require_once(dirname(__FILE__).'/wallet-send-guard.php');
 
 class WalletRPC {
-	/** Bitcoin getbalance("*", 1): confirmed spendable balance used by sendmany. */
-	function badpoolGuardedSpendableBalance()
+	/** Exact account-scoped Bitcoin getbalance(account, 1), matching sendmany's source account. */
+	function badpoolGuardedSpendableBalance($account)
 	{
 		if($this->type!=='Bitcoin'){$this->error='guarded spendable balance semantics are unvalidated for wallet type '.$this->type;return false;}
-		$res=$this->rpc->getbalance('*',1);$this->error=$this->rpc->error;
+		$res=$this->rpc->getbalance((string)$account,1);$this->error=$this->rpc->error;
 		if($res===false||$res===null||$this->error)return false;
-		if(is_int($res))return(string)$res;
-		if(is_float($res)&&is_finite($res)&&$res>=0)return number_format($res,8,'.','');
-		if(is_string($res)&&preg_match('/^\d+(?:\.\d{1,8})?$/',$res))return$res;
-		$this->error='malformed getbalance response';return false;
+		// EasyBitcoin json_decode() exposes JSON numbers as PHP floats. Authorize from
+		// its retained raw response token instead, so no monetary arithmetic uses float.
+		$exact=self::badpoolExactBalanceFromRawResponse($this->rpc->raw_response);
+		if($exact!==false)return$exact;
+		$this->error='malformed or inexact getbalance response';return false;
+	}
+
+	public static function badpoolExactBalanceFromRawResponse($raw)
+	{
+		if(!is_string($raw)||!preg_match('/"result"\s*:\s*(0|[1-9][0-9]*)(\.[0-9]+)?\s*[,}]/',$raw,$m))return false;
+		$value=$m[1].(isset($m[2])?$m[2]:'');
+		if(!preg_match('/^\d+(?:\.\d{1,8})?$/',$value))return false;
+		return$value;
 	}
 
 	public $type = 'Bitcoin';

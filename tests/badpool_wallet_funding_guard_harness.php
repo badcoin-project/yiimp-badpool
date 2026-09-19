@@ -1,6 +1,7 @@
 <?php
 function arraySafeVal($a,$k,$d=null){return is_array($a)&&array_key_exists($k,$a)?$a[$k]:$d;}
 require_once dirname(__DIR__).'/web/yaamp/core/backend/BadpoolWalletFundingGuard.php';
+require_once dirname(__DIR__).'/web/yaamp/core/rpc/wallet-rpc.php';
 $fail=array(); function ok($v,$m){global $fail;if(!$v)$fail[]=$m;}
 function funding($balance,$send,$reserve,$configured=true){return BadpoolWalletFundingGuard::evaluate($balance,$send,array('configured'=>$configured,'value'=>$reserve,'error'=>'fixture'));}
 $greater=funding('100.00000000','20.12345678','10'); ok($greater['funding_classification']==='PASS / WALLET FUNDING SUFFICIENT','greater balance');
@@ -23,5 +24,15 @@ $apply=substr($src,strpos($src,'private function walletSendApplyReport'),strpos(
 $read=strpos($apply,'walletFundingCheck');$send=strpos($apply,'badpoolGuardedSendmanyApply');ok($read!==false&&$send!==false&&$read<$send,'fresh funding read precedes send');
 ok(strpos($apply,"funding_classification'] !== 'PASS / WALLET FUNDING SUFFICIENT'")<$send,'funding hold precedes send');
 ok(strpos($apply,'beginTransaction()')>$send,'no DB mutation before funding/send');
-$rpc=file_get_contents(dirname(__DIR__).'/web/yaamp/core/rpc/wallet-rpc.php');ok(strpos($rpc,"getbalance('*',1)")!==false,'confirmed spendable primitive');
+$rpc=file_get_contents(dirname(__DIR__).'/web/yaamp/core/rpc/wallet-rpc.php');ok(strpos($rpc,'getbalance((string)$account,1)')!==false,'account-scoped confirmed spendable primitive');
+ok(strpos($rpc,"getbalance('*',1)")===false,'wildcard balance cannot authorize account send');
+ok(WalletRPC::badpoolExactBalanceFromRawResponse('{"result":0.00000001,"error":null,"id":1}')==='0.00000001','one atomic unit transport');
+ok(WalletRPC::badpoolExactBalanceFromRawResponse('{"result":57728046.75500000,"error":null,"id":1}')==='57728046.75500000','eight-decimal raw token retained');
+ok(WalletRPC::badpoolExactBalanceFromRawResponse('{"result":1.000000001,"error":null,"id":1}')===false,'greater than eight decimals refused');
+class FundingRpcFixture{public$error=null;public$raw_response='{"result":30.00000000,"error":null,"id":1}';public$calls=array();function getbalance($account,$minconf){$this->calls[]=array($account,$minconf);return 30.0;}}
+$wallet=(new ReflectionClass('WalletRPC'))->newInstanceWithoutConstructor();$fixture=new FundingRpcFixture();$property=(new ReflectionClass('WalletRPC'))->getProperty('rpc');$property->setAccessible(true);$property->setValue($wallet,$fixture);
+ok($wallet->badpoolGuardedSpendableBalance('')==='30.00000000'&&$fixture->calls===array(array('',1)),'empty send account remains exact balance scope');
+$accountHold=funding($wallet->badpoolGuardedSpendableBalance(''),'25','10');ok($accountHold['funding_classification']==='HOLD / WALLET FUNDING INSUFFICIENT'&&funding('100','25','10')['funding_classification']==='PASS / WALLET FUNDING SUFFICIENT','account insufficient holds despite hypothetical wildcard sufficiency');
+ok(strpos($apply,'$walletAccount=(string)$coin->account')!==false&&strpos($apply,'walletFundingCheck($remote,intval($opts[\'coin-id\']),(string)$approval[\'wallet_send_total\'],$walletAccount)')!==false&&strpos($apply,'badpoolGuardedSendmanyApply($walletAccount, $dests)')!==false,'apply balance and send share one account variable');
+ok(strpos($src,"'wallet_balance_scope'=>'same account used as sendmany fromaccount'")!==false,'preflight reports account scope');
 if($fail){echo "Badpool wallet funding guard harness FAILED\n";foreach($fail as$f)echo" - $f\n";exit(1);}echo"Badpool wallet funding guard harness passed\n";
