@@ -25,7 +25,7 @@ expect_contains('dedicated context helper used', $command, '$actionArgs = $this-
 expect_not_contains('wallet-send-apply must not use generic guarded context', section_between($command, 'if ($action === \'wallet-send-apply\')', 'elseif ($action ==='), '$this->guardedApplyContextArgs($args)', $failures);
 foreach(array('coin-id','format','selected-payout-ids') as $opt) expect_contains('context preserves '.$opt, $context, $opt, $failures);
 expect_not_contains('context excludes operator confirmation', $context, 'operator-confirms-wallet-send', $failures);
-foreach(array('selected-payout-ids','approval-package-checksum','row-inventory-checksum','destination-plan-checksum','projected-total','projected-total-checksum','wallet-send-total','wallet-send-total-checksum','wallet-send-destination-plan-checksum','operator-confirms-wallet-send') as $opt) expect_contains('requires '.$opt, $apply, $opt, $failures);
+foreach(array('selected-payout-ids','approval-package-checksum','wallet-account-checksum','row-inventory-checksum','destination-plan-checksum','projected-total','projected-total-checksum','wallet-send-total','wallet-send-total-checksum','wallet-send-destination-plan-checksum','operator-confirms-wallet-send') as $opt) expect_contains('requires '.$opt, $apply, $opt, $failures);
 expect_contains('json only', $apply, 'wallet-send-apply supports --format=json only.', $failures);
 expect_contains('broad scope refused', $apply, 'refuses broad/all-coin scope', $failures);
 expect_contains('empty payout list refused', $apply, 'refuses empty or missing --selected-payout-ids', $failures);
@@ -34,6 +34,9 @@ expect_contains('operator confirmation exact', $apply, 'selected_payout_rows_', 
 expect_contains('full approval package recompute helper', $apply, 'walletSendApprovalPackageForIds($ids)', $failures);
 expect_contains('full approval package includes checksum', $approvalForIds, 'walletSendApprovalPackageReport()', $failures);
 expect_contains('approval checksum verified', $apply, "'approval-package-checksum'=>'approval_package_checksum", $failures);
+expect_contains('wallet account checksum verified', $apply, "'wallet-account-checksum'=>'wallet_account_checksum", $failures);
+expect_contains('fresh authoritative wallet account compared', $apply, '$walletAccount !== (string)$approval[\'wallet_account\']', $failures);
+
 expect_contains('wallet send total checksum verified', $apply, "'wallet-send-total-checksum'=>'wallet_send_total_checksum", $failures);
 expect_contains('wallet send destination plan checksum verified', $apply, "'wallet-send-destination-plan-checksum'=>'wallet_send_destination_plan_checksum", $failures);
 expect_contains('wallet send total value verified', $apply, "wallet_send_total_mismatch", $failures);

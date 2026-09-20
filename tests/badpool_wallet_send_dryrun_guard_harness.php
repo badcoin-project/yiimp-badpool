@@ -53,7 +53,7 @@ expect_contains('approval row inventory checksum', $command, 'row_inventory_chec
 expect_contains('approval destination plan checksum', $command, 'destination_plan_checksum', $failures);
 expect_contains('approval package checksum', $command, 'approval_package_checksum', $failures);
 expect_contains('approval exact total sample', $command, 'selected_payout_rows_', $failures);
-expect_contains('approval checksum uses deterministic scope binding', $command, "'approval_package_type', 'scope_binding', 'selected_payout_ids', 'row_inventory_checksum'", $failures);
+expect_contains('approval checksum uses deterministic scope binding', $command, "'approval_package_type', 'scope_binding', 'wallet_account', 'wallet_account_checksum', 'selected_payout_ids', 'row_inventory_checksum'", $failures);
 expect_contains('approval package scope binding present', $command, "'source' => 'walletSendBuildReadOnlyPackage'", $failures);
 expect_contains('approval apply shape includes projected total option', $command, "'--projected-total='."."$"."report['projected_total']", $failures);
 expect_contains('approval apply shape includes projected total checksum option', $command, "'--projected-total-checksum='.arraySafeVal("."$"."report['projected_total_checksum'], 'value')", $failures);
