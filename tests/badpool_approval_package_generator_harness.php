@@ -36,13 +36,15 @@ class ApprovalPackageFixtureGuard
 	public function isValid() { return empty($this->errors); }
 	public function getFormat() { return 'json'; }
 	public function getScope() { return array('all_coins_preview'=>false, 'coin_id'=>1267, 'coin'=>array('id'=>1267, 'symbol'=>'BAD', 'algo'=>'scrypt')); }
-	public function getCoin() { return array('id'=>1267, 'account'=>'', 'rpcencoding'=>'POW'); }
+	public function getCoin() { return array('id'=>1267, 'rpcencoding'=>'POW'); }
 	public function getOption($name, $default=null) { return $name === 'selected-payout-ids' ? '517' : $default; }
 	public function addError($message) { $this->errors[] = $message; }
 	public function addWarning($message) { $this->warnings[] = $message; }
 	public function tableExists($table) { return true; }
 	public function columnExists($table, $column) { return true; }
 	public function coinWhere($alias, $column) { return array('sql'=>$alias.'.'.$column.'=:coin_id', 'params'=>array(':coin_id'=>1267)); }
+	public function qcol($column) { return $column; }
+	public function qtable($table) { return $table; }
 
 	public function baseReport($status='ok')
 	{
@@ -101,13 +103,28 @@ class ApprovalPackageFixtureGuard
 		}
 		if (strpos($sql, 'FROM payouts P INNER JOIN accounts A') !== false) {
 			return array(array(
-				'payout_id'=>517, 'account_id'=>79, 'payout_idcoin'=>1267, 'amount'=>'12.500000000000',
+				'payout_id'=>517, 'account_id'=>79, 'payout_idcoin'=>1267, 'amount'=>'54153.75343761001',
 				'completed'=>0, 'tx'=>null, 'username'=>'Bfixture', 'account_coinid'=>1267,
 				'coin_id'=>1267, 'symbol'=>'BAD', 'rpcencoding'=>'POW',
 			));
 		}
 		return array();
 	}
+	public function selectRow($sql, $params=array())
+	{
+		$this->readQueries[] = array('sql'=>$sql, 'params'=>$params);
+		if (strpos($sql, 'FROM coins') !== false) return array('id'=>1267, 'symbol'=>'BAD', 'algo'=>'scrypt', 'rpcencoding'=>'POW', 'rpcuser'=>'fixture', 'rpcpasswd'=>'fixture', 'rpchost'=>'127.0.0.1', 'rpcport'=>1234, 'account'=>'pool-scrypt', 'hasgetinfo'=>1, 'master_wallet'=>'');
+		return null;
+	}
+}
+
+class EmptyWalletAccountFixtureGuard extends ApprovalPackageFixtureGuard
+{
+	public function selectRow($sql, $params=array()) { $row=parent::selectRow($sql,$params); if(is_array($row))$row['account']=''; return $row; }
+}
+class MissingWalletAccountFixtureGuard extends ApprovalPackageFixtureGuard
+{
+	public function selectRow($sql, $params=array()) { $row=parent::selectRow($sql,$params); if(is_array($row))unset($row['account']); return $row; }
 }
 
 function approval_expect($condition, $message, &$failures)
@@ -176,8 +193,8 @@ $cases = array(
 		'type'=>'wallet-send',
 		'apply'=>'wallet-send-apply',
 		'id_field'=>'payout_id', 'id'=>517,
-		'checksum_fields'=>array('approval_package_checksum','row_inventory_checksum','destination_plan_checksum','projected_total_checksum','wallet_send_total_checksum','wallet_send_destination_plan_checksum'),
-		'stable_keys'=>array('approval_package_type','scope_binding','selected_payout_ids','row_inventory_checksum','destination_plan_checksum','projected_total','projected_total_checksum','wallet_send_destination_plan_checksum','wallet_send_total','wallet_send_total_checksum','dry_run_safety_flags','apply_command_shape','operator_confirmation','selected_records','checksums','apply_command_args'),
+		'checksum_fields'=>array('approval_package_checksum','wallet_account_checksum','row_inventory_checksum','destination_plan_checksum','projected_total_checksum','wallet_send_total_checksum','wallet_send_destination_plan_checksum'),
+		'stable_keys'=>array('approval_package_type','scope_binding','wallet_account','wallet_account_checksum','selected_payout_ids','row_inventory_checksum','destination_plan_checksum','projected_total','projected_total_checksum','wallet_send_destination_plan_checksum','wallet_send_total','wallet_send_total_checksum','dry_run_safety_flags','apply_command_shape','operator_confirmation','selected_records','checksums','apply_command_args'),
 	),
 );
 
@@ -207,6 +224,25 @@ foreach ($cases as $label => $case) {
 	$recomputed = approval_recomputed_checksum($tampered, $case['stable_keys']);
 	approval_expect($recomputed['value'] !== $first['approval_package_checksum']['value'], $label.' selected-scope tampering did not invalidate the approval checksum', $failures);
 }
+
+$walletPackage = approval_generate('walletSendApprovalPackageReport', 'wallet-send-approval-package', $guards);
+approval_expect($walletPackage['wallet_account'] === 'pool-scrypt', 'wallet package did not report authoritative pool-scrypt account', $failures);
+approval_expect($walletPackage['wallet_account'] !== '' && $walletPackage['wallet_account'] !== '*', 'wallet package used empty or wildcard account', $failures);
+approval_expect($walletPackage['selected_amount'] === '54153.75343761001', 'wallet selected_amount lost its exact source decimal', $failures);
+approval_expect($walletPackage['wallet_send_total'] === '54153.75343761', 'wallet total did not retain intended eight-decimal projection', $failures);
+$changedAccount = $walletPackage;
+$changedAccount['wallet_account'] = 'different-account';
+$changedAccount['wallet_account_checksum'] = BadpoolGuardReport::checksum(array('coin_id'=>1267, 'wallet_account'=>'different-account'));
+$changedChecksum = approval_recomputed_checksum($changedAccount, $cases['wallet']['stable_keys']);
+approval_expect($changedAccount['wallet_account_checksum']['value'] !== $walletPackage['wallet_account_checksum']['value'], 'wallet account change did not change account checksum', $failures);
+approval_expect($changedChecksum['value'] !== $walletPackage['approval_package_checksum']['value'], 'wallet account change did not change approval checksum', $failures);
+$emptyGuard = new EmptyWalletAccountFixtureGuard('wallet-send-approval-package');
+$command = new BadpoolGuardCommand(); $property = new ReflectionProperty('BadpoolGuardCommand', 'guard'); $property->setAccessible(true); $property->setValue($command, $emptyGuard);
+$emptyPackage = approval_private_method('walletSendApprovalPackageReport')->invoke($command);
+approval_expect(arraySafeVal($emptyPackage, 'wallet_account', null) === '', 'authoritative empty wallet account was not representable', $failures);
+$missingGuard = new MissingWalletAccountFixtureGuard('wallet-send-approval-package');
+$property->setValue($command, $missingGuard); $missingPackage = approval_private_method('walletSendApprovalPackageReport')->invoke($command);
+approval_expect(!$missingGuard->isValid() && !isset($missingPackage['approval_package_checksum']), 'missing authoritative wallet account did not fail closed', $failures);
 
 $maturityPreview = approval_generate('earningsMaturityTransitionDryrunReport', 'earnings-maturity-transition-dryrun', $guards);
 $walletPreview = approval_generate('walletSendDryrunReport', 'wallet-send-dryrun', $guards);
