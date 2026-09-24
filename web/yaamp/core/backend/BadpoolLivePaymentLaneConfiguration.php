@@ -24,10 +24,12 @@ class BadpoolLivePaymentLaneConfiguration
 	public function operationalAlgo() { return $this->get('operational_algo'); }
 	public function blockBoundary() { return $this->get('block_id_gt'); }
 	public function batchLimit() { return $this->get('batch_max_earnings'); }
+	public function maturityBlockLimit() { return $this->get('maturity_max_blocks'); }
 	public function runtimeRoot() { return $this->get('runtime_root'); }
 	public function statePath($root=null) { return ($root?:$this->runtimeRoot()).'/'.$this->get('state_filename'); }
 	public function lockPath($root=null) { return ($root?:$this->runtimeRoot()).'/'.$this->get('lock_filename'); }
 	public function isCommissioned() { return $this->get('accounting_enabled')===true && $this->get('payout_preparation_enabled')===true; }
+	public function isMaturityCommissioned() { return $this->isCommissioned() && $this->get('maturity_enabled')===true; }
 
 	public function ownershipEnvelope()
 	{
@@ -51,7 +53,7 @@ class BadpoolLivePaymentLaneConfiguration
 		if (!isset($v['coin_id']) || !is_int($v['coin_id']) || $v['coin_id']<1) throw new InvalidArgumentException('A positive integer coin ID is required.');
 		foreach (array('db_algo','operational_algo','wallet_binding_identity','wallet_source_account') as $key)
 			if (!isset($v[$key]) || !is_string($v[$key]) || !preg_match('/^[a-z0-9][a-z0-9._-]*$/',$v[$key])) throw new InvalidArgumentException('Invalid or missing '.$key.'.');
-		foreach (array('accounting_enabled','payout_preparation_enabled','wallet_send_enabled') as $key)
+		foreach (array('accounting_enabled','maturity_enabled','payout_preparation_enabled','wallet_send_enabled') as $key)
 			if (!array_key_exists($key,$v) || !is_bool($v[$key])) throw new InvalidArgumentException('Explicit boolean '.$key.' is required.');
 		if ($v['wallet_binding_identity']!==$v['operational_algo']) throw new InvalidArgumentException('Wallet binding must match the explicit operational identity.');
 		if ($v['wallet_source_account']!=='pool-'.$v['operational_algo']) throw new InvalidArgumentException('Wallet source account is inconsistent with the operational identity.');
@@ -62,8 +64,10 @@ class BadpoolLivePaymentLaneConfiguration
 		if ($v['state_filename']===$v['lock_filename']) throw new InvalidArgumentException('State and lock paths collide.');
 		$commissioningValues = isset($v['block_id_gt']) && is_int($v['block_id_gt']) && $v['block_id_gt']>0 && isset($v['batch_max_earnings']) && is_int($v['batch_max_earnings']) && $v['batch_max_earnings']>0;
 		if ($this->isCommissioned() && !$commissioningValues) throw new InvalidArgumentException('Enabled lanes require a boundary and positive batch limit.');
-		if (!$this->isCommissioned() && ($v['accounting_enabled'] || $v['payout_preparation_enabled'] || $v['wallet_send_enabled'])) throw new InvalidArgumentException('Partial lane activation is refused.');
-		if (!$this->isCommissioned() && (array_key_exists('block_id_gt',$v) && $v['block_id_gt']!==null || array_key_exists('batch_max_earnings',$v) && $v['batch_max_earnings']!==null)) throw new InvalidArgumentException('Uncommissioned lanes must not imply activation values.');
+		if (!$this->isCommissioned() && ($v['accounting_enabled'] || $v['maturity_enabled'] || $v['payout_preparation_enabled'] || $v['wallet_send_enabled'])) throw new InvalidArgumentException('Partial lane activation is refused.');
+		if (!$this->isCommissioned() && (array_key_exists('block_id_gt',$v) && $v['block_id_gt']!==null || array_key_exists('batch_max_earnings',$v) && $v['batch_max_earnings']!==null || array_key_exists('maturity_max_blocks',$v) && $v['maturity_max_blocks']!==null)) throw new InvalidArgumentException('Uncommissioned lanes must not imply activation values.');
+		if ($v['maturity_enabled'] && (!isset($v['maturity_max_blocks']) || !is_int($v['maturity_max_blocks']) || $v['maturity_max_blocks']<1)) throw new InvalidArgumentException('Maturity-enabled lanes require a positive block limit.');
+		if (!$v['maturity_enabled'] && array_key_exists('maturity_max_blocks',$v) && $v['maturity_max_blocks']!==null) throw new InvalidArgumentException('Maturity-disabled lanes must not imply a block limit.');
 		foreach (array('minimum_reserve_policy','payment_delay_policy') as $key) if (!isset($v[$key]) || !is_string($v[$key]) || trim($v[$key])==='') throw new InvalidArgumentException('Missing '.$key.'.');
 	}
 }
@@ -88,7 +92,7 @@ class BadpoolLivePaymentLaneRegistry
 	{
 		$root=dirname(__FILE__).'/../../../../runtime/badpool-payment-batches';
 		$base=array('schema'=>BadpoolLivePaymentLaneConfiguration::SCHEMA,'version'=>1,'ownership_schema'=>BadpoolLivePaymentLaneConfiguration::OWNERSHIP_SCHEMA,'runtime_root'=>$root,'minimum_reserve_policy'=>'YAAMP_BADPOOL_MINIMUM_WALLET_RESERVES[coin_id]','payment_delay_policy'=>'existing_guarded_account_credit_delay','rpc_config_identity'=>null,'wallet_datadir_identity'=>null,'service_timer_identity'=>null);
-		$enabled=array_merge($base,array('lane_id'=>'live-scrypt-v1','coin_id'=>1267,'db_algo'=>'scrypt','operational_algo'=>'scrypt','block_id_gt'=>29242,'batch_max_earnings'=>25,'state_filename'=>'live-scrypt-coordinator.json','lock_filename'=>'live-scrypt-coordinator.lock','wallet_binding_identity'=>'scrypt','wallet_source_account'=>'pool-scrypt','rpc_config_identity'=>'/etc/badcoin/pool-scrypt.conf','wallet_datadir_identity'=>'/var/lib/badcoin-pool-scrypt','service_timer_identity'=>'badpool-live-payment.timer','accounting_enabled'=>true,'payout_preparation_enabled'=>true,'wallet_send_enabled'=>true));
+		$enabled=array_merge($base,array('lane_id'=>'live-scrypt-v1','coin_id'=>1267,'db_algo'=>'scrypt','operational_algo'=>'scrypt','block_id_gt'=>29242,'batch_max_earnings'=>25,'maturity_max_blocks'=>10,'state_filename'=>'live-scrypt-coordinator.json','lock_filename'=>'live-scrypt-coordinator.lock','wallet_binding_identity'=>'scrypt','wallet_source_account'=>'pool-scrypt','rpc_config_identity'=>'/etc/badcoin/pool-scrypt.conf','wallet_datadir_identity'=>'/var/lib/badcoin-pool-scrypt','service_timer_identity'=>'badpool-live-payment.timer','accounting_enabled'=>true,'maturity_enabled'=>true,'payout_preparation_enabled'=>true,'wallet_send_enabled'=>true));
 		$disabled=array(
 			array('lane_id'=>'uncommissioned-yescrypt','coin_id'=>1266,'db_algo'=>'yescrypt','operational_algo'=>'yescrypt'),
 			array('lane_id'=>'uncommissioned-skein','coin_id'=>1268,'db_algo'=>'skein','operational_algo'=>'skein'),
@@ -96,7 +100,7 @@ class BadpoolLivePaymentLaneRegistry
 			array('lane_id'=>'uncommissioned-sha256d','coin_id'=>1270,'db_algo'=>'sha256','operational_algo'=>'sha256d'),
 		);
 		$out=array(new BadpoolLivePaymentLaneConfiguration($enabled));
-		foreach($disabled as $lane){$op=$lane['operational_algo'];$out[]=new BadpoolLivePaymentLaneConfiguration($base+$lane+array('block_id_gt'=>null,'batch_max_earnings'=>null,'state_filename'=>$lane['lane_id'].'-coordinator.json','lock_filename'=>$lane['lane_id'].'-coordinator.lock','wallet_binding_identity'=>$op,'wallet_source_account'=>'pool-'.$op,'accounting_enabled'=>false,'payout_preparation_enabled'=>false,'wallet_send_enabled'=>false));}
+		foreach($disabled as $lane){$op=$lane['operational_algo'];$out[]=new BadpoolLivePaymentLaneConfiguration($base+$lane+array('block_id_gt'=>null,'batch_max_earnings'=>null,'maturity_max_blocks'=>null,'state_filename'=>$lane['lane_id'].'-coordinator.json','lock_filename'=>$lane['lane_id'].'-coordinator.lock','wallet_binding_identity'=>$op,'wallet_source_account'=>'pool-'.$op,'accounting_enabled'=>false,'maturity_enabled'=>false,'payout_preparation_enabled'=>false,'wallet_send_enabled'=>false));}
 		return $out;
 	}
 
