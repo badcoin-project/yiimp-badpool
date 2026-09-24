@@ -7,11 +7,12 @@ $registry=new BadpoolLivePaymentLaneRegistry();$scrypt=$registry->get('live-scry
 lane_ok($scrypt->get('schema')==='badpool.live_payment_lane_configuration.v1'&&$scrypt->get('version')===1,'configuration schema/version changed');
 lane_ok($scrypt->laneId()==='live-scrypt-v1'&&$scrypt->coinId()===1267&&$scrypt->dbAlgo()==='scrypt'&&$scrypt->operationalAlgo()==='scrypt','Scrypt identity changed');
 lane_ok($scrypt->blockBoundary()===29242&&$scrypt->batchLimit()===25,'Scrypt boundary or batch ceiling changed');
+lane_ok($scrypt->isMaturityCommissioned()&&$scrypt->maturityBlockLimit()===10,'Scrypt maturity commissioning or block ceiling changed');
 lane_ok(basename($scrypt->statePath())==='live-scrypt-coordinator.json'&&basename($scrypt->lockPath())==='live-scrypt-coordinator.lock','Scrypt state/lock binding changed');
 lane_ok($scrypt->get('wallet_binding_identity')==='scrypt'&&$scrypt->get('wallet_source_account')==='pool-scrypt','Scrypt wallet binding changed');
 
 $disabled=array('uncommissioned-yescrypt','uncommissioned-skein','uncommissioned-groestl','uncommissioned-sha256d');
-foreach($disabled as $id){$lane=$registry->get($id);lane_ok(!$lane->isCommissioned()&&$lane->blockBoundary()===null&&$lane->batchLimit()===null&&!$lane->get('accounting_enabled')&&!$lane->get('payout_preparation_enabled')&&!$lane->get('wallet_send_enabled'),$id.' was accidentally commissioned');}
+foreach($disabled as $id){$lane=$registry->get($id);lane_ok(!$lane->isCommissioned()&&!$lane->isMaturityCommissioned()&&$lane->blockBoundary()===null&&$lane->batchLimit()===null&&$lane->maturityBlockLimit()===null&&!$lane->get('accounting_enabled')&&!$lane->get('maturity_enabled')&&!$lane->get('payout_preparation_enabled')&&!$lane->get('wallet_send_enabled'),$id.' was accidentally commissioned');}
 $groestl=$registry->get('uncommissioned-groestl');lane_ok($groestl->operationalAlgo()==='groestl'&&$groestl->dbAlgo()==='badcoin-groestl','Groestl operational/DB mapping collapsed');
 $sha=$registry->get('uncommissioned-sha256d');lane_ok($sha->operationalAlgo()==='sha256d'&&$sha->dbAlgo()==='sha256','SHA256d operational/DB mapping collapsed');
 
@@ -22,6 +23,8 @@ foreach(array(
 	'db_algo'=>array('db_algo'=>''),
 	'boundary'=>array('block_id_gt'=>0),
 	'batch_limit'=>array('batch_max_earnings'=>0),
+	'maturity_limit'=>array('maturity_max_blocks'=>0),
+	'maturity_enabled'=>array('maturity_enabled'=>'yes'),
 	'state_path'=>array('state_filename'=>'../state.json'),
 	'lock_path'=>array('lock_filename'=>'../state.lock'),
 	'wallet_binding'=>array('wallet_binding_identity'=>'sha256d'),
