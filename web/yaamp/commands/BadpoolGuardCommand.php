@@ -461,8 +461,9 @@ class BadpoolGuardCommand extends CConsoleCommand
 
 	private function livePaymentCoordinatorReport()
 	{
+		$lane=BadpoolLivePaymentLaneRegistry::scryptCompatibility();
 		$runner=new BadpoolPaymentBatchRunner($this->paymentBatchPhaseAdapter());
-		return (new BadpoolLivePaymentCoordinator($runner))->run();
+		return (new BadpoolLivePaymentCoordinator($runner,null,$lane))->run();
 	}
 
 	private function completedPayoutBatchCloseoutApplyReport()
