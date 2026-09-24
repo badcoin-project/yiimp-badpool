@@ -58,7 +58,10 @@ class YAAMP_BLOCK: public YAAMP_OBJECT
 public:
 	time_t created;
 	bool confirmed;
+	bool durable;
 	bool segwit;
+	unsigned int persistence_attempts;
+	unsigned long long blockid;
 
 	int userid;
 	int workerid;
