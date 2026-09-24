@@ -1,6 +1,7 @@
 <?php
 
 require_once(dirname(__FILE__).'/BadpoolConfirmedBlockPaymentDelayOverride.php');
+require_once(dirname(__FILE__).'/BadpoolLivePaymentLaneConfiguration.php');
 
 /**
  * Production phase adapter for the guarded payment batch coordinator.
@@ -10,9 +11,6 @@ require_once(dirname(__FILE__).'/BadpoolConfirmedBlockPaymentDelayOverride.php')
  */
 class BadpoolPaymentBatchPhaseAdapter
 {
-	const LIVE_COIN_ID = 1267;
-	const LIVE_ALGO = 'scrypt';
-	const LIVE_BLOCK_ID_BOUNDARY = 29242;
 	private $guard;
 	private $execute;
 
@@ -44,17 +42,18 @@ class BadpoolPaymentBatchPhaseAdapter
 	/** Automatic Scrypt batches consume the status1 output owned by the live maturity timer. */
 	private function selectLiveStatus1Work($ledger,$options)
 	{
+		$lane=$this->lane($options);if(!$lane->isCommissioned())return $this->hold('Live-payment lane is disabled and uncommissioned.');
 		$limit=intval(arraySafeVal($options,'batch_size',0));
-		if($limit<1)return $this->hold('Live status1 selection requires a positive batch size.');
+		if($limit<1||$limit>$lane->batchLimit())return $this->hold('Live status1 selection requires a configured positive batch size.');
 		$sql="SELECT E.id earning_id,E.blockid block_id,E.userid account_id,E.coinid coin_id FROM earnings E INNER JOIN blocks B ON B.id=E.blockid AND B.coin_id=E.coinid INNER JOIN live_block_candidates C ON C.block_id=B.id AND C.coin_id=B.coin_id AND C.algo=:algo AND C.blockhash=B.blockhash INNER JOIN accounts A ON A.id=E.userid AND A.coinid=:coin WHERE E.coinid=:coin AND E.status=1 AND E.mature_time IS NOT NULL AND B.coin_id=:coin AND B.id>:boundary AND B.category='generate' ORDER BY E.id LIMIT ".intval($limit);
-		$params=array(':coin'=>self::LIVE_COIN_ID,':algo'=>self::LIVE_ALGO,':boundary'=>self::LIVE_BLOCK_ID_BOUNDARY);
+		$params=array(':coin'=>$lane->coinId(),':algo'=>$lane->dbAlgo(),':boundary'=>$lane->blockBoundary());
 		$rows=$this->guard->selectAll($sql,$params);if(!is_array($rows))return $this->hold('Live status1 selection did not return a row set.');
 		$earnings=array();$blocks=array();$accounts=array();$items=array();
-		foreach($rows as $row){$eid=$this->positiveId(arraySafeVal($row,'earning_id'));$bid=$this->positiveId(arraySafeVal($row,'block_id'));$aid=$this->positiveId(arraySafeVal($row,'account_id'));if($eid===null||$bid===null||$aid===null||intval(arraySafeVal($row,'coin_id'))!==self::LIVE_COIN_ID)return $this->hold('Live status1 selection returned malformed or cross-coin evidence.');$earnings[]=$eid;$blocks[]=$bid;$accounts[]=$aid;$items[]=array('earning_id'=>$eid,'block_id'=>$bid,'account_id'=>$aid,'coin_id'=>self::LIVE_COIN_ID);}
+		foreach($rows as $row){$eid=$this->positiveId(arraySafeVal($row,'earning_id'));$bid=$this->positiveId(arraySafeVal($row,'block_id'));$aid=$this->positiveId(arraySafeVal($row,'account_id'));if($eid===null||$bid===null||$aid===null||intval(arraySafeVal($row,'coin_id'))!==$lane->coinId())return $this->hold('Live status1 selection returned malformed or cross-coin evidence.');$earnings[]=$eid;$blocks[]=$bid;$accounts[]=$aid;$items[]=array('earning_id'=>$eid,'block_id'=>$bid,'account_id'=>$aid,'coin_id'=>$lane->coinId());}
 		$normalized=$this->normalizeIdList($earnings);if($normalized===null||$normalized!==$earnings)return $this->hold('Live status1 selection was not unique and ordered by earning ID.');
 		$blocks=$this->uniqueIdList($blocks);$accounts=$this->uniqueIdList($accounts);$work=array('selection_mode'=>'live_status1','earning_ids'=>$normalized,'block_ids'=>$blocks,'account_ids'=>$accounts);
-		$report=array('status'=>'pass','read_only'=>true,'selection_mode'=>'live_status1','scope'=>array('coin_id'=>self::LIVE_COIN_ID,'algo'=>self::LIVE_ALGO,'block_id_gt'=>self::LIVE_BLOCK_ID_BOUNDARY,'earning_status'=>1,'block_category'=>'generate'),'batch_size'=>$limit,'selected_count'=>count($normalized),'items'=>array('selected_earnings'=>$items));
-		return $this->artifact($ledger,1,'eligible-work-report.json',array($report),array('selected_earning_ids'=>$normalized,'selected_block_ids'=>$blocks,'selected_account_ids'=>$accounts,'selected_accounts_by_coin'=>array((string)self::LIVE_COIN_ID=>array('account_ids'=>$accounts)),'selected_work_by_coin'=>array((string)self::LIVE_COIN_ID=>$work)));
+		$report=array('status'=>'pass','read_only'=>true,'selection_mode'=>'live_status1','scope'=>array('coin_id'=>$lane->coinId(),'algo'=>$lane->dbAlgo(),'block_id_gt'=>$lane->blockBoundary(),'earning_status'=>1,'block_category'=>'generate'),'batch_size'=>$limit,'selected_count'=>count($normalized),'items'=>array('selected_earnings'=>$items));
+		return $this->artifact($ledger,1,'eligible-work-report.json',array($report),array('selected_earning_ids'=>$normalized,'selected_block_ids'=>$blocks,'selected_account_ids'=>$accounts,'selected_accounts_by_coin'=>array((string)$lane->coinId()=>array('account_ids'=>$accounts)),'selected_work_by_coin'=>array((string)$lane->coinId()=>$work)));
 	}
 
 	/** Catchup/normal modes retain the explicitly separate legacy status0 maturity workflow. */
@@ -142,14 +141,16 @@ class BadpoolPaymentBatchPhaseAdapter
 
 	private function coins($options)
 	{
-		$ids=arraySafeVal($options,'mode')==='auto'?array(self::LIVE_COIN_ID):array(1266,1267,1268,1269,1270);$params=array();$p=array();foreach($ids as $i=>$id){$key=':id'.$i;$p[]=$key;$params[$key]=$id;}
+		$lane=$this->lane($options);if(arraySafeVal($options,'mode')==='auto'&&!$lane->isCommissioned())return array();
+		$ids=arraySafeVal($options,'mode')==='auto'?array($lane->coinId()):array(1266,1267,1268,1269,1270);$params=array();$p=array();foreach($ids as $i=>$id){$key=':id'.$i;$p[]=$key;$params[$key]=$id;}
 		$sql='SELECT id,symbol,algo FROM coins WHERE id IN ('.implode(',',$p).') AND IFNULL(enable,0)=1 AND IFNULL(installed,0)=1 AND IFNULL(visible,0)=1 AND IFNULL(auto_ready,0)=1';
-		$only=arraySafeVal($options,'only');if(arraySafeVal($options,'mode')==='auto'){$sql.=' AND LOWER(algo)=LOWER(:live_algo)';$params[':live_algo']=self::LIVE_ALGO;}elseif($only){$sql.=' AND LOWER(algo)=LOWER(:algo)';$params[':algo']=$only;}
+		$only=arraySafeVal($options,'only');if(arraySafeVal($options,'mode')==='auto'){$sql.=' AND LOWER(algo)=LOWER(:live_algo)';$params[':live_algo']=$lane->dbAlgo();}elseif($only){$sql.=' AND LOWER(algo)=LOWER(:algo)';$params[':algo']=$only;}
 		$sql.=' ORDER BY id';$rows=$this->guard->selectAll($sql,$params);$out=array();
 		foreach($rows as $r)$out[]=array('coin_id'=>intval($r['id']),'id'=>intval($r['id']),'symbol'=>(string)$r['symbol'],'algo'=>(string)$r['algo']);return $out;
 	}
 
 	private function isLiveBatch($ledger){return (string)arraySafeVal($ledger,'mode')==='auto';}
+	private function lane($options){$lane=arraySafeVal($options,'lane_configuration');if($lane instanceof BadpoolLivePaymentLaneConfiguration)return $lane;if(is_array($lane))return new BadpoolLivePaymentLaneConfiguration($lane);return BadpoolLivePaymentLaneRegistry::scryptCompatibility();}
 
 	private function packages($ledger,$phase,$command,$file,$kind)
 	{

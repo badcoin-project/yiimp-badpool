@@ -1,0 +1,12 @@
+{
+  "schema": "badpool.live_payment_coordinator.v1",
+  "version": 1,
+  "lane": "live-scrypt-v1",
+  "coin_id": 1267,
+  "algo": "scrypt",
+  "block_id_gt": 29242,
+  "active_batch_id": "20260920T120829Z-414141f5f7d0",
+  "last_observed_batch_state": "READY_FOR_WALLET_APPROVAL",
+  "last_observed_phase": 6,
+  "human_wallet_approval_required": true
+}

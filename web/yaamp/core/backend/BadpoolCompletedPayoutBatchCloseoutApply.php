@@ -1,5 +1,7 @@
 <?php
 
+require_once(dirname(__FILE__).'/BadpoolLivePaymentLaneConfiguration.php');
+
 /** Explicit ledger-only authority which records a successfully proven closeout. */
 class BadpoolCompletedPayoutBatchCloseoutApply
 {
@@ -26,7 +28,7 @@ class BadpoolCompletedPayoutBatchCloseoutApply
 		$proofIds=$this->positiveIds(arraySafeVal($proof,'created_payout_ids'));if($proofIds===null||empty($proofIds))return $this->fail($r,'proof_payout_ids_invalid');
 		$path=$this->root.'/'.$batchId.'/ledger.json';$ledger=is_file($path)&&!is_link($path)?json_decode(file_get_contents($path),true):null;
 		if(!is_array($ledger)||arraySafeVal($ledger,'batch_id')!==$batchId)return $this->fail($r,'batch_ledger_missing_or_invalid');
-		$owner=arraySafeVal($ledger,'coordinator_owner',array());if(!is_array($owner)||arraySafeVal($owner,'schema')!==BadpoolLivePaymentCoordinator::SCHEMA||arraySafeVal($owner,'lane')!==BadpoolLivePaymentCoordinator::OWNER)return $this->fail($r,'coordinator_ownership_required');
+		$owner=arraySafeVal($ledger,'coordinator_owner',array());$lane=(new BadpoolLivePaymentLaneRegistry())->fromOwnershipEnvelope($owner);if(!$lane)return $this->fail($r,'coordinator_ownership_required');
 		$ledgerIds=$this->positiveIds(arraySafeVal($ledger,'created_payout_ids'));if($ledgerIds===null||$ledgerIds!==$proofIds)return $this->fail($r,'proof_payout_ids_mismatch');
 		if(arraySafeVal($ledger,'batch_state')==='RECONCILED'){
 			if(arraySafeVal($ledger,'reconciliation_proof_checksum')!==$actual||$this->positiveIds(arraySafeVal($ledger,'reconciled_payout_ids'))!==$proofIds)return $this->fail($r,'reconciled_evidence_mismatch');
