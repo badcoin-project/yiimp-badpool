@@ -1,6 +1,176 @@
 
 #include "stratum.h"
 #include <cmath>
+#include <cctype>
+#include <cerrno>
+
+#define BLOCK_DURABILITY_SCHEMA "badpool.stratum.blockdurability.v1"
+
+static const char *block_operational_algo()
+{
+	if(!strcmp(g_stratum_algo, "badcoin-groestl")) return "groestl";
+	if(!strcmp(g_stratum_algo, "sha256")) return "sha256d";
+	return g_stratum_algo;
+}
+
+static bool block_hash_is_canonical(const char *hash)
+{
+	if(!hash || strlen(hash) != 64) return false;
+	for(const unsigned char *p = (const unsigned char *)hash; *p; ++p)
+		if(!isxdigit(*p)) return false;
+	return true;
+}
+
+static bool block_hash_is_optional_pow(const char *hash)
+{
+	return !hash || !hash[0] || block_hash_is_canonical(hash);
+}
+
+static bool block_log_attempt(unsigned int attempt)
+{
+	return attempt <= 3 || attempt == 5 || attempt == 10 || attempt == 30 || !(attempt % 60);
+}
+
+// The live share cursor row is locked before this lookup.  It serializes
+// capture for one DB algorithm across stratum processes without requiring a
+// second accounting authority or a schema migration.
+static bool block_find_durable(YAAMP_DB *db, YAAMP_BLOCK *block,
+	unsigned long long *blockid, bool *candidate_exists, bool *ambiguous)
+{
+	char query[4096];
+	snprintf(query, sizeof(query),
+		"SELECT B.id,B.height,C.block_id FROM blocks B "
+		"LEFT JOIN live_block_candidates C ON C.block_id=B.id AND C.coin_id=B.coin_id "
+		"AND C.algo=B.algo AND C.blockhash=B.blockhash "
+		"WHERE B.coin_id=%d AND B.algo='%s' AND B.blockhash='%s' "
+		"ORDER BY B.id LIMIT 2 FOR UPDATE",
+		block->coinid, g_stratum_algo, block->hash);
+	if(mysql_query(&db->mysql, query)) {
+		stratumlog("BLOCK_DURABILITY_LOOKUP_FAILED schema=%s coin_id=%d db_algo=%s operational_algo=%s "
+			"height=%d canonical_blockhash=%s pow_hash=%s mysql_error=%d\n",
+			BLOCK_DURABILITY_SCHEMA, block->coinid, g_stratum_algo, block_operational_algo(),
+			block->height, block->hash, block->hash2, mysql_errno(&db->mysql));
+		return false;
+	}
+
+	MYSQL_RES *result = mysql_store_result(&db->mysql);
+	if(!result) return false;
+	my_ulonglong rows = mysql_num_rows(result);
+	*ambiguous = rows > 1;
+	*blockid = 0;
+	*candidate_exists = false;
+	MYSQL_ROW row = mysql_fetch_row(result);
+	if(row) {
+		errno = 0;
+		*blockid = strtoull(row[0], NULL, 10);
+		if(errno || !*blockid || !row[1] || atoi(row[1]) != block->height)
+			*ambiguous = true;
+		*candidate_exists = row[2] != NULL;
+	}
+	mysql_free_result(result);
+	return true;
+}
+
+static bool block_persist_accepted(YAAMP_DB *db, YAAMP_BLOCK *block)
+{
+	block->persistence_attempts++;
+	if(!block_hash_is_canonical(block->hash) || !block_hash_is_optional_pow(block->hash2)) {
+		if(block_log_attempt(block->persistence_attempts))
+			stratumlog("BLOCK_DURABILITY_REFUSED schema=%s coin_id=%d db_algo=%s operational_algo=%s "
+				"height=%d canonical_blockhash=%s pow_hash=%s attempt=%u reason=invalid_hash_identity\n",
+				BLOCK_DURABILITY_SCHEMA, block->coinid, g_stratum_algo, block_operational_algo(),
+				block->height, block->hash, block->hash2, block->persistence_attempts);
+		return false;
+	}
+
+	if(block_log_attempt(block->persistence_attempts))
+		stratumlog("BLOCK_DURABILITY_ATTEMPT schema=%s coin_id=%d db_algo=%s operational_algo=%s "
+			"height=%d canonical_blockhash=%s pow_hash=%s userid=%d workerid=%d found_time=%d attempt=%u\n",
+			BLOCK_DURABILITY_SCHEMA, block->coinid, g_stratum_algo, block_operational_algo(),
+			block->height, block->hash, block->hash2, block->userid, block->workerid,
+			(int)block->created, block->persistence_attempts);
+
+	bool capture_ok = db_query_transaction(db, "START TRANSACTION");
+	if(capture_ok) capture_ok = db_query_transaction(db,
+		"INSERT IGNORE INTO live_block_share_cursors (algo,last_share_id) VALUES ('%s',0)", g_stratum_algo);
+	if(capture_ok) capture_ok = db_query_transaction(db,
+		"UPDATE live_block_share_cursors SET last_share_id=last_share_id WHERE algo='%s'", g_stratum_algo);
+
+	unsigned long long blockid = 0;
+	bool candidate_exists = false;
+	bool ambiguous = false;
+	if(capture_ok) capture_ok = block_find_durable(db, block, &blockid, &candidate_exists, &ambiguous);
+	if(capture_ok && ambiguous) capture_ok = false;
+	if(capture_ok && blockid) {
+		capture_ok = db_query_transaction(db, "COMMIT");
+		if(capture_ok) {
+			block->blockid = blockid;
+			block->durable = true;
+			stratumlog("BLOCK_DURABILITY_DUPLICATE schema=%s coin_id=%d db_algo=%s operational_algo=%s "
+				"height=%d canonical_blockhash=%s pow_hash=%s block_id=%llu candidate_exists=%d action=reused\n",
+				BLOCK_DURABILITY_SCHEMA, block->coinid, g_stratum_algo, block_operational_algo(),
+				block->height, block->hash, block->hash2, blockid, candidate_exists?1:0);
+			return true;
+		}
+	}
+
+	if(capture_ok) capture_ok = db_query_transaction(db, "insert into blocks (height, blockhash, coin_id, userid, workerid, category, difficulty, difficulty_user, time, algo, segwit) values "
+		"(%d, '%s', %d, %d, %d, 'new', %f, %f, %d, '%s', %d)",
+		block->height, block->hash, block->coinid, block->userid, block->workerid,
+		block->difficulty, block->difficulty_user, (int)block->created, g_stratum_algo, block->segwit?1:0);
+	if(capture_ok) blockid = mysql_insert_id(&db->mysql);
+	if(capture_ok) capture_ok = blockid > 0 && db_query_transaction(db,
+		"INSERT INTO live_block_candidates (block_id,coin_id,blockhash,algo,found_time,price,share_floor_id,share_ceiling_id) "
+		"SELECT %llu,%d,'%s','%s',%d,IFNULL(CO.price,0),C.last_share_id,IFNULL(MAX(S.id),C.last_share_id) "
+		"FROM live_block_share_cursors C INNER JOIN coins CO ON CO.id=%d LEFT JOIN shares S ON S.algo=C.algo AND S.id>C.last_share_id "
+		"WHERE C.algo='%s' GROUP BY IFNULL(CO.price,0),C.last_share_id",
+		blockid, block->coinid, block->hash, g_stratum_algo, (int)block->created, block->coinid, g_stratum_algo);
+	if(capture_ok) capture_ok = mysql_affected_rows(&db->mysql) == 1;
+	if(capture_ok) capture_ok = db_query_transaction(db,
+		"INSERT INTO live_block_attributions (block_id,userid,difficulty,no_fees,donation) "
+		"SELECT %llu,S.userid,SUM(S.difficulty),IFNULL(A.no_fees,0),IFNULL(A.donation,0) FROM shares S "
+		"INNER JOIN live_block_candidates C ON C.block_id=%llu INNER JOIN accounts A ON A.id=S.userid "
+		"WHERE S.id>C.share_floor_id AND S.id<=C.share_ceiling_id AND S.valid=1 AND S.algo='%s' "
+		"GROUP BY S.userid,IFNULL(A.no_fees,0),IFNULL(A.donation,0)",
+		blockid, blockid, g_stratum_algo);
+	my_ulonglong normal_attributions = capture_ok ? mysql_affected_rows(&db->mysql) : 0;
+	if(capture_ok && normal_attributions == 0) {
+		capture_ok = std::isfinite(block->difficulty_user) && block->difficulty_user > 0;
+		if(capture_ok) capture_ok = db_query_transaction(db,
+			"INSERT INTO live_block_attributions (block_id,userid,difficulty,no_fees,donation) "
+			"SELECT B.id,B.userid,B.difficulty_user,IFNULL(A.no_fees,0),IFNULL(A.donation,0) FROM blocks B "
+			"INNER JOIN live_block_candidates C ON C.block_id=B.id INNER JOIN accounts A ON A.id=B.userid "
+			"WHERE B.id=%llu AND C.share_floor_id=C.share_ceiling_id AND B.userid>0 "
+			"AND B.difficulty_user IS NOT NULL AND B.difficulty_user>0 "
+			"AND NOT EXISTS (SELECT 1 FROM live_block_attributions X WHERE X.block_id=B.id)", blockid);
+		capture_ok = capture_ok && mysql_affected_rows(&db->mysql) == 1;
+	}
+	if(capture_ok) capture_ok = db_query_transaction(db,
+		"UPDATE live_block_share_cursors C INNER JOIN live_block_candidates B ON B.block_id=%llu "
+		"SET C.last_share_id=B.share_ceiling_id WHERE C.algo='%s'", blockid, g_stratum_algo);
+	if(capture_ok) capture_ok = db_query_transaction(db, "COMMIT");
+	if(!capture_ok) {
+		db_query_transaction(db, "ROLLBACK");
+		if(block_log_attempt(block->persistence_attempts))
+			stratumlog("BLOCK_DURABILITY_FAILED schema=%s coin_id=%d db_algo=%s operational_algo=%s "
+				"height=%d canonical_blockhash=%s pow_hash=%s userid=%d workerid=%d attempt=%u "
+				"state=retained_in_memory timeout_discard_allowed=false\n",
+				BLOCK_DURABILITY_SCHEMA, block->coinid, g_stratum_algo, block_operational_algo(),
+				block->height, block->hash, block->hash2, block->userid, block->workerid,
+				block->persistence_attempts);
+		return false;
+	}
+
+	block->blockid = blockid;
+	block->durable = true;
+	stratumlog("BLOCK_DURABILITY_SUCCEEDED schema=%s coin_id=%d db_algo=%s operational_algo=%s "
+		"height=%d canonical_blockhash=%s pow_hash=%s userid=%d workerid=%d found_time=%d "
+		"block_id=%llu category=new candidate_state=created\n",
+		BLOCK_DURABILITY_SCHEMA, block->coinid, g_stratum_algo, block_operational_algo(),
+		block->height, block->hash, block->hash2, block->userid, block->workerid,
+		(int)block->created, blockid);
+	return true;
+}
 
 //void check_job(YAAMP_JOB *job)
 //{
@@ -184,71 +354,43 @@ void block_prune(YAAMP_DB *db)
 	for(CLI li = g_list_block.first; li; li = li->next)
 	{
 		YAAMP_BLOCK *block = (YAAMP_BLOCK *)li->data;
+		// Decred's regenerated header path does not establish the canonical chain
+		// identity until notification; retain its existing confirmation gate.
+		if(!block->durable && !block->confirmed && !strcmp(g_stratum_algo, "decred")) {
+			if((block->created + 60 * 15) < time(NULL)) object_delete(block);
+			continue;
+		}
+		if(!block->durable && !block_persist_accepted(db, block))
+			continue;
+
 		if(!block->confirmed)
 		{
 			int elapsed = 30;
 			// slow block time...
 			if(g_stratum_algo && !strcmp(g_stratum_algo, "decred")) elapsed = 60 * 15; // 15mn
 
-			if((block->created + elapsed) < time(NULL))
+			if((block->created + elapsed) < time(NULL)) {
+				stratumlog("BLOCK_TRACKING_TIMEOUT schema=%s coin_id=%d db_algo=%s operational_algo=%s "
+					"height=%d canonical_blockhash=%s pow_hash=%s block_id=%llu "
+					"durable=true discard_state=in_memory_only\n",
+					BLOCK_DURABILITY_SCHEMA, block->coinid, g_stratum_algo, block_operational_algo(),
+					block->height, block->hash, block->hash2, block->blockid);
 				object_delete(block);
+			}
 
 			continue;
 		}
-
-		// A block and its discovery-time attribution are one durable unit.  The
-		// cursor is seeded by the deployment migration, so old `new` rows never
-		// acquire a live candidate record.
-		bool capture_ok = db_query_transaction(db, "START TRANSACTION");
-		if(capture_ok) capture_ok = db_query_transaction(db, "INSERT IGNORE INTO live_block_share_cursors (algo,last_share_id) VALUES ('%s',0)", g_stratum_algo);
-		if(capture_ok) capture_ok = db_query_transaction(db, "UPDATE live_block_share_cursors SET last_share_id=last_share_id WHERE algo='%s'", g_stratum_algo);
-		if(capture_ok) capture_ok = db_query_transaction(db, "insert into blocks (height, blockhash, coin_id, userid, workerid, category, difficulty, difficulty_user, time, algo, segwit) values "
-			"(%d, '%s', %d, %d, %d, 'new', %f, %f, %d, '%s', %d)",
-			block->height, block->hash, block->coinid, block->userid, block->workerid,
-			block->difficulty, block->difficulty_user, (int)block->created, g_stratum_algo, block->segwit?1:0);
-		unsigned long long blockid = mysql_insert_id(&db->mysql);
-		if(capture_ok) capture_ok = blockid > 0 && db_query_transaction(db, "INSERT INTO live_block_candidates (block_id,coin_id,blockhash,algo,found_time,price,share_floor_id,share_ceiling_id) "
-			"SELECT %llu,%d,'%s','%s',%d,IFNULL(CO.price,0),C.last_share_id,IFNULL(MAX(S.id),C.last_share_id) "
-			"FROM live_block_share_cursors C INNER JOIN coins CO ON CO.id=%d LEFT JOIN shares S ON S.algo=C.algo AND S.id>C.last_share_id "
-			"WHERE C.algo='%s' GROUP BY IFNULL(CO.price,0),C.last_share_id", blockid, block->coinid, block->hash,
-			g_stratum_algo, (int)block->created, block->coinid, g_stratum_algo);
-		if(capture_ok) capture_ok = mysql_affected_rows(&db->mysql) == 1;
-		if(capture_ok) capture_ok = db_query_transaction(db, "INSERT INTO live_block_attributions (block_id,userid,difficulty,no_fees,donation) "
-			"SELECT %llu,S.userid,SUM(S.difficulty),IFNULL(A.no_fees,0),IFNULL(A.donation,0) FROM shares S INNER JOIN live_block_candidates C ON C.block_id=%llu "
-			"INNER JOIN accounts A ON A.id=S.userid WHERE S.id>C.share_floor_id AND S.id<=C.share_ceiling_id AND S.valid=1 AND S.algo='%s' GROUP BY S.userid,IFNULL(A.no_fees,0),IFNULL(A.donation,0)",
-			blockid, blockid, g_stratum_algo);
-		my_ulonglong normal_attributions = capture_ok ? mysql_affected_rows(&db->mysql) : 0;
-
-		// A zero-width interval has no shares by definition.  Attribute only the
-		// discovery difficulty to the actual finder, and only when every captured
-		// value needed by that attribution is independently valid.
-		if(capture_ok && normal_attributions == 0) {
-			capture_ok = std::isfinite(block->difficulty_user) && block->difficulty_user > 0;
-			if(capture_ok) capture_ok = db_query_transaction(db, "INSERT INTO live_block_attributions (block_id,userid,difficulty,no_fees,donation) "
-				"SELECT B.id,B.userid,B.difficulty_user,IFNULL(A.no_fees,0),IFNULL(A.donation,0) FROM blocks B "
-				"INNER JOIN live_block_candidates C ON C.block_id=B.id INNER JOIN accounts A ON A.id=B.userid "
-				"WHERE B.id=%llu AND C.share_floor_id=C.share_ceiling_id AND B.userid>0 "
-				"AND B.difficulty_user IS NOT NULL AND B.difficulty_user>0 "
-				"AND NOT EXISTS (SELECT 1 FROM live_block_attributions X WHERE X.block_id=B.id)", blockid);
-			capture_ok = capture_ok && mysql_affected_rows(&db->mysql) == 1;
-		}
-
-		if(capture_ok) capture_ok = db_query_transaction(db, "UPDATE live_block_share_cursors C INNER JOIN live_block_candidates B ON B.block_id=%llu "
-			"SET C.last_share_id=B.share_ceiling_id WHERE C.algo='%s'", blockid, g_stratum_algo);
-		if(capture_ok) capture_ok = db_query_transaction(db, "COMMIT");
-		if(!capture_ok) {
-			db_query_transaction(db, "ROLLBACK");
-			stratumlog("live block capture refused for %s\n", block->hash);
-			continue;
-		}
-
+		stratumlog("BLOCK_CHAIN_CONFIRMED schema=%s coin_id=%d db_algo=%s operational_algo=%s "
+			"height=%d canonical_blockhash=%s pow_hash=%s block_id=%llu durable=true\n",
+			BLOCK_DURABILITY_SCHEMA, block->coinid, g_stratum_algo, block_operational_algo(),
+			block->height, block->hash, block->hash2, block->blockid);
 		object_delete(block);
 	}
 
 	g_list_block.Leave();
 }
 
-void block_add(int userid, int workerid, int coinid, int height, double diff, double diff_user, const char *h1, const char *h2, int segwit)
+bool block_add(int userid, int workerid, int coinid, int height, double diff, double diff_user, const char *h1, const char *h2, int segwit)
 {
 	YAAMP_BLOCK *block = new YAAMP_BLOCK;
 	memset(block, 0, sizeof(YAAMP_BLOCK));
@@ -262,10 +404,23 @@ void block_add(int userid, int workerid, int coinid, int height, double diff, do
 	block->difficulty_user = diff_user;
 	block->segwit = segwit;
 
+	strcpy(block->hash, h1);
 	strcpy(block->hash1, h1);
 	strcpy(block->hash2, h2);
 
+	// Accepted submits run on client threads, which already share g_db behind
+	// g_db_mutex for user and worker writes. Capture the accepted block before
+	// returning from that path; block_prune() remains the retry owner if this
+	// connection cannot complete the transaction. Decred still needs its
+	// notification-derived canonical identity and keeps the existing gate.
+	if(strcmp(g_stratum_algo, "decred")) {
+		CommonLock(&g_db_mutex);
+		block_persist_accepted(g_db, block);
+		CommonUnlock(&g_db_mutex);
+	}
+
 	g_list_block.AddTail(block);
+	return block->durable;
 }
 
 // called from blocknotify tool
@@ -334,7 +489,12 @@ bool block_confirm(int coinid, const char *blockhash)
 			if(strcmp(block->hash1, hash) && strcmp(block->hash2, hash)) continue;
 			if (!block->confirmed) {
 				debuglog("*** CONFIRMED %d : %s\n", block->height, block->hash2);
-				strncpy(block->hash, blockhash, 65);
+				if(!block->durable) strncpy(block->hash, blockhash, 65);
+				else if(strcmp(block->hash, blockhash))
+					stratumlog("BLOCK_CHAIN_HASH_MISMATCH schema=%s coin_id=%d db_algo=%s operational_algo=%s "
+						"height=%d durable_blockhash=%s notified_blockhash=%s pow_hash=%s block_id=%llu\n",
+						BLOCK_DURABILITY_SCHEMA, block->coinid, g_stratum_algo, block_operational_algo(),
+						block->height, block->hash, blockhash, block->hash2, block->blockid);
 				block->confirmed = true;
 			}
 			return true;

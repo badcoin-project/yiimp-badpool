@@ -10,6 +10,7 @@ struct BLOCK_PATH_CONTEXT
 {
 	char trace_id[64];
 	char algo[64];
+	char db_algo[64];
 	int coin_id;
 	int height;
 	int jobid;
@@ -60,7 +61,10 @@ static void block_path_context_init(BLOCK_PATH_CONTEXT *ctx, YAAMP_CLIENT *clien
 	memset(ctx, 0, sizeof(*ctx));
 	unsigned long long sequence = block_path_trace_sequence.fetch_add(1) + 1;
 	snprintf(ctx->trace_id, sizeof(ctx->trace_id), "%d-%llu", (int)getpid(), sequence);
-	snprintf(ctx->algo, sizeof(ctx->algo), "%s", g_current_algo? g_current_algo->name: g_stratum_algo);
+	const char *operational_algo = !strcmp(g_stratum_algo, "badcoin-groestl")? "groestl":
+		(!strcmp(g_stratum_algo, "sha256")? "sha256d": g_stratum_algo);
+	snprintf(ctx->algo, sizeof(ctx->algo), "%s", operational_algo);
+	snprintf(ctx->db_algo, sizeof(ctx->db_algo), "%s", g_stratum_algo);
 	ctx->coin_id = job && job->coind? job->coind->id: 0;
 	ctx->height = job && job->templ? job->templ->height: 0;
 	ctx->jobid = job? job->id: 0;
@@ -97,16 +101,16 @@ static void block_path_log_target(const BLOCK_PATH_CONTEXT *ctx)
 {
 	if(!ctx->full_block_target && !g_debuglog_block_path) return;
 	const char *format =
-		"STRATUM_BLOCK_TARGET_DIAG schema=%s trace_id=%s algo=%s coin_id=%d height=%d jobid=%x "
+		"STRATUM_BLOCK_TARGET_DIAG schema=%s trace_id=%s algo=%s db_algo=%s coin_id=%d height=%d jobid=%x "
 		"userid=%d workerid=%d nbits=%s target_compare=nbits_256 target_hex=%s hash_be=%s "
 		"hash_int_legacy=%016llx coin_target_legacy=%016llx full_block_target=%d\n";
 	if(ctx->full_block_target)
-		stratumlog(format, BLOCK_PATH_SCHEMA, ctx->trace_id, ctx->algo, ctx->coin_id, ctx->height, ctx->jobid,
+		stratumlog(format, BLOCK_PATH_SCHEMA, ctx->trace_id, ctx->algo, ctx->db_algo, ctx->coin_id, ctx->height, ctx->jobid,
 			ctx->userid, ctx->workerid, ctx->nbits, ctx->target_hex, ctx->hash_be,
 			(unsigned long long)ctx->hash_int_legacy,
 			(unsigned long long)ctx->coin_target_legacy, 1);
 	else
-		debuglog(format, BLOCK_PATH_SCHEMA, ctx->trace_id, ctx->algo, ctx->coin_id, ctx->height, ctx->jobid,
+		debuglog(format, BLOCK_PATH_SCHEMA, ctx->trace_id, ctx->algo, ctx->db_algo, ctx->coin_id, ctx->height, ctx->jobid,
 			ctx->userid, ctx->workerid, ctx->nbits, ctx->target_hex, ctx->hash_be,
 			(unsigned long long)ctx->hash_int_legacy,
 			(unsigned long long)ctx->coin_target_legacy, 0);
@@ -115,11 +119,11 @@ static void block_path_log_target(const BLOCK_PATH_CONTEXT *ctx)
 static void block_path_log_candidate(const BLOCK_PATH_CONTEXT *ctx)
 {
 	stratumlog(
-		"STRATUM_BLOCK_CANDIDATE_DETECTED schema=%s trace_id=%s algo=%s coin_id=%d height=%d jobid=%x "
+		"STRATUM_BLOCK_CANDIDATE_DETECTED schema=%s trace_id=%s algo=%s db_algo=%s coin_id=%d height=%d jobid=%x "
 		"userid=%d workerid=%d nbits=%s target_compare=nbits_256 target_hex=%s hash_be=%s "
 		"hash_int_legacy=%016llx coin_target_legacy=%016llx full_block_target=1 block_hex_len=0 "
 		"block_hex_state=not_built submit_method=%s\n",
-		BLOCK_PATH_SCHEMA, ctx->trace_id, ctx->algo, ctx->coin_id, ctx->height, ctx->jobid,
+		BLOCK_PATH_SCHEMA, ctx->trace_id, ctx->algo, ctx->db_algo, ctx->coin_id, ctx->height, ctx->jobid,
 		ctx->userid, ctx->workerid, ctx->nbits, ctx->target_hex, ctx->hash_be,
 		(unsigned long long)ctx->hash_int_legacy,
 		(unsigned long long)ctx->coin_target_legacy, ctx->submit_method);
@@ -129,10 +133,10 @@ static void block_path_log_submit_begin(const BLOCK_PATH_CONTEXT *ctx, size_t bl
 {
 	block_path_submit_begins.fetch_add(1);
 	stratumlog(
-		"STRATUM_COIND_SUBMIT_BEGIN schema=%s trace_id=%s algo=%s coin_id=%d height=%d jobid=%x "
+		"STRATUM_COIND_SUBMIT_BEGIN schema=%s trace_id=%s algo=%s db_algo=%s coin_id=%d height=%d jobid=%x "
 		"userid=%d workerid=%d nbits=%s target_compare=nbits_256 target_hex=%s hash_be=%s "
 		"full_block_target=1 block_hex_len=%zu submit_method=%s rpc_returned=pending accepted=pending\n",
-		BLOCK_PATH_SCHEMA, ctx->trace_id, ctx->algo, ctx->coin_id, ctx->height, ctx->jobid,
+		BLOCK_PATH_SCHEMA, ctx->trace_id, ctx->algo, ctx->db_algo, ctx->coin_id, ctx->height, ctx->jobid,
 		ctx->userid, ctx->workerid, ctx->nbits, ctx->target_hex, ctx->hash_be,
 		block_hex_len, ctx->submit_method);
 }
@@ -146,11 +150,11 @@ static void block_path_log_submit_returned(const BLOCK_PATH_CONTEXT *ctx, size_t
 	if(!observation || !observation->rpc_returned) block_path_submit_no_answer.fetch_add(1);
 
 	stratumlog(
-		"STRATUM_COIND_SUBMIT_RETURNED schema=%s trace_id=%s algo=%s coin_id=%d height=%d jobid=%x "
+		"STRATUM_COIND_SUBMIT_RETURNED schema=%s trace_id=%s algo=%s db_algo=%s coin_id=%d height=%d jobid=%x "
 		"userid=%d workerid=%d nbits=%s target_compare=nbits_256 target_hex=%s hash_be=%s "
 		"full_block_target=1 block_hex_len=%zu submit_method=%s rpc_returned=%d accepted=%d "
 		"result_type=%s result_value=%s error_type=%s error_code=%s error_message=%s elapsed_us=%llu\n",
-		BLOCK_PATH_SCHEMA, ctx->trace_id, ctx->algo, ctx->coin_id, ctx->height, ctx->jobid,
+		BLOCK_PATH_SCHEMA, ctx->trace_id, ctx->algo, ctx->db_algo, ctx->coin_id, ctx->height, ctx->jobid,
 		ctx->userid, ctx->workerid, ctx->nbits, ctx->target_hex, ctx->hash_be,
 		block_hex_len, observation? block_path_nonempty(observation->method): ctx->submit_method,
 		(observation && observation->rpc_returned)? 1: 0,
@@ -167,19 +171,20 @@ static void block_path_log_block_add_begin(const BLOCK_PATH_CONTEXT *ctx)
 {
 	block_path_block_add_calls.fetch_add(1);
 	stratumlog(
-		"STRATUM_BLOCK_ADD_BEGIN schema=%s trace_id=%s algo=%s coin_id=%d height=%d jobid=%x "
-		"userid=%d workerid=%d queue_state=append_pending db_write_performed=false\n",
-		BLOCK_PATH_SCHEMA, ctx->trace_id, ctx->algo, ctx->coin_id, ctx->height, ctx->jobid,
+		"STRATUM_BLOCK_ADD_BEGIN schema=%s trace_id=%s algo=%s db_algo=%s coin_id=%d height=%d jobid=%x "
+		"userid=%d workerid=%d queue_state=append_pending durable_state=pending\n",
+		BLOCK_PATH_SCHEMA, ctx->trace_id, ctx->algo, ctx->db_algo, ctx->coin_id, ctx->height, ctx->jobid,
 		ctx->userid, ctx->workerid);
 }
 
-static void block_path_log_block_add_returned(const BLOCK_PATH_CONTEXT *ctx)
+static void block_path_log_block_add_returned(const BLOCK_PATH_CONTEXT *ctx, bool durable)
 {
 	stratumlog(
-		"STRATUM_BLOCK_ADD_RETURNED schema=%s trace_id=%s algo=%s coin_id=%d height=%d jobid=%x "
-		"userid=%d workerid=%d queue_state=appended_in_memory db_write_performed=false\n",
-		BLOCK_PATH_SCHEMA, ctx->trace_id, ctx->algo, ctx->coin_id, ctx->height, ctx->jobid,
-		ctx->userid, ctx->workerid);
+		"STRATUM_BLOCK_ADD_RETURNED schema=%s trace_id=%s algo=%s db_algo=%s coin_id=%d height=%d jobid=%x "
+		"userid=%d workerid=%d queue_state=appended_in_memory durable_state=%s persistence_owner=%s\n",
+		BLOCK_PATH_SCHEMA, ctx->trace_id, ctx->algo, ctx->db_algo, ctx->coin_id, ctx->height, ctx->jobid,
+		ctx->userid, ctx->workerid, durable? "committed": "pending_retry",
+		durable? "accepted_submit": "block_prune");
 }
 
 void block_path_maybe_log_summary()
@@ -209,11 +214,13 @@ void block_path_maybe_log_summary()
 	if(!(shares_accepted || shares_rejected || target_checks || candidates ||
 		submit_begins || submit_returns || block_add_calls)) return;
 	stratumlog(
-		"STRATUM_BLOCK_PATH_SUMMARY schema=%s algo=%s coin_id=%d height=%d interval_seconds=%lld "
+		"STRATUM_BLOCK_PATH_SUMMARY schema=%s algo=%s db_algo=%s coin_id=%d height=%d interval_seconds=%lld "
 		"shares_accepted=%llu shares_rejected=%llu block_target_checks=%llu block_target_false=%llu "
 		"candidates_detected=%llu submit_begins=%llu submit_returns=%llu submit_accepts=%llu "
 		"submit_rejects=%llu submit_no_answer=%llu block_add_calls=%llu\n",
-		BLOCK_PATH_SCHEMA, g_current_algo? g_current_algo->name: g_stratum_algo,
+		BLOCK_PATH_SCHEMA,
+		!strcmp(g_stratum_algo, "badcoin-groestl")? "groestl": (!strcmp(g_stratum_algo, "sha256")? "sha256d": g_stratum_algo),
+		g_stratum_algo,
 		block_path_last_coin_id.load(), block_path_last_height.load(), now - previous,
 		shares_accepted, shares_rejected, target_checks, target_false, candidates,
 		submit_begins, submit_returns, submit_accepts, submit_rejects,
@@ -523,6 +530,10 @@ static void client_do_submit(YAAMP_CLIENT *client, YAAMP_JOB *job, YAAMP_JOB_VAL
 			//if (g_current_algo->merkle_func)
 			//	merkle_hash = g_current_algo->merkle_func;
 
+			// Bitcoin-derived multi-algorithm chains identify the chain block by
+			// the double-SHA256 header hash even when the submitted PoW hash uses a
+			// different algorithm.  Keep both identities distinct for persistence
+			// and notification correlation.
 			merkle_hash((char *)submitvalues->header_bin, doublehash2, strlen(submitvalues->header_be)/2);
 
 			char hash1[1024];
@@ -536,10 +547,10 @@ static void client_do_submit(YAAMP_CLIENT *client, YAAMP_JOB *job, YAAMP_JOB_VAL
 			}
 
 			block_path_log_block_add_begin(&block_path);
-			block_add(client->userid, client->workerid, coind->id, templ->height,
+			bool durable = block_add(client->userid, client->workerid, coind->id, templ->height,
 				target_to_diff(coin_target), target_to_diff(hash_int),
 				hash1, submitvalues->hash_be, templ->has_segwit_txs);
-			block_path_log_block_add_returned(&block_path);
+			block_path_log_block_add_returned(&block_path, durable);
 
 			if(!strcmp("DCR", coind->rpcencoding)) {
 				// delay between dcrd and dcrwallet
