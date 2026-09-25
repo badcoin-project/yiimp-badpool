@@ -177,13 +177,14 @@ static void block_path_log_block_add_begin(const BLOCK_PATH_CONTEXT *ctx)
 		ctx->userid, ctx->workerid);
 }
 
-static void block_path_log_block_add_returned(const BLOCK_PATH_CONTEXT *ctx)
+static void block_path_log_block_add_returned(const BLOCK_PATH_CONTEXT *ctx, bool durable)
 {
 	stratumlog(
 		"STRATUM_BLOCK_ADD_RETURNED schema=%s trace_id=%s algo=%s db_algo=%s coin_id=%d height=%d jobid=%x "
-		"userid=%d workerid=%d queue_state=appended_in_memory durable_state=pending persistence_owner=block_prune\n",
+		"userid=%d workerid=%d queue_state=appended_in_memory durable_state=%s persistence_owner=%s\n",
 		BLOCK_PATH_SCHEMA, ctx->trace_id, ctx->algo, ctx->db_algo, ctx->coin_id, ctx->height, ctx->jobid,
-		ctx->userid, ctx->workerid);
+		ctx->userid, ctx->workerid, durable? "committed": "pending_retry",
+		durable? "accepted_submit": "block_prune");
 }
 
 void block_path_maybe_log_summary()
@@ -546,10 +547,10 @@ static void client_do_submit(YAAMP_CLIENT *client, YAAMP_JOB *job, YAAMP_JOB_VAL
 			}
 
 			block_path_log_block_add_begin(&block_path);
-			block_add(client->userid, client->workerid, coind->id, templ->height,
+			bool durable = block_add(client->userid, client->workerid, coind->id, templ->height,
 				target_to_diff(coin_target), target_to_diff(hash_int),
 				hash1, submitvalues->hash_be, templ->has_segwit_txs);
-			block_path_log_block_add_returned(&block_path);
+			block_path_log_block_add_returned(&block_path, durable);
 
 			if(!strcmp("DCR", coind->rpcencoding)) {
 				// delay between dcrd and dcrwallet

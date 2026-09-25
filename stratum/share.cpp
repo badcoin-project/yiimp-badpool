@@ -390,7 +390,7 @@ void block_prune(YAAMP_DB *db)
 	g_list_block.Leave();
 }
 
-void block_add(int userid, int workerid, int coinid, int height, double diff, double diff_user, const char *h1, const char *h2, int segwit)
+bool block_add(int userid, int workerid, int coinid, int height, double diff, double diff_user, const char *h1, const char *h2, int segwit)
 {
 	YAAMP_BLOCK *block = new YAAMP_BLOCK;
 	memset(block, 0, sizeof(YAAMP_BLOCK));
@@ -408,7 +408,19 @@ void block_add(int userid, int workerid, int coinid, int height, double diff, do
 	strcpy(block->hash1, h1);
 	strcpy(block->hash2, h2);
 
+	// Accepted submits run on client threads, which already share g_db behind
+	// g_db_mutex for user and worker writes. Capture the accepted block before
+	// returning from that path; block_prune() remains the retry owner if this
+	// connection cannot complete the transaction. Decred still needs its
+	// notification-derived canonical identity and keeps the existing gate.
+	if(strcmp(g_stratum_algo, "decred")) {
+		CommonLock(&g_db_mutex);
+		block_persist_accepted(g_db, block);
+		CommonUnlock(&g_db_mutex);
+	}
+
 	g_list_block.AddTail(block);
+	return block->durable;
 }
 
 // called from blocknotify tool

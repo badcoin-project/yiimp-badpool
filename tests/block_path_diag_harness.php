@@ -56,9 +56,10 @@ expect_contains('target compare labeled', $client, 'target_compare=nbits_256', $
 expect_contains('legacy hash labeled', $client, 'hash_int_legacy=', $failures);
 expect_contains('legacy coin target labeled', $client, 'coin_target_legacy=', $failures);
 expect_contains('trace id process sequence', $client, '"%d-%llu"', $failures);
-expect_contains('block add durability pending', $client, 'durable_state=pending', $failures);
+expect_contains('block add durability result', $client, 'durable_state=%s', $failures);
 expect_contains('in-memory queue state', $client, 'queue_state=appended_in_memory', $failures);
-expect_contains('persistence owner explicit', $client, 'persistence_owner=block_prune', $failures);
+expect_contains('accepted persistence owner', $client, '"accepted_submit"', $failures);
+expect_contains('retry persistence owner', $client, '"block_prune"', $failures);
 expect_contains('DB algorithm identity explicit', $client, 'db_algo=%s', $failures);
 expect_contains('block path config', $stratum, 'DEBUGLOG:block_path', $failures);
 expect_contains('verbose block path config', $stratum, 'DEBUGLOG:block_path_verbose', $failures);

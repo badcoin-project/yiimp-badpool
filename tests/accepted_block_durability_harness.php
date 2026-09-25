@@ -70,6 +70,8 @@ durable_ok($failed['durable'] === false && $failed['retained'] === true, 'persis
 $share = file_get_contents(__DIR__.'/../stratum/share.cpp');
 $submit = file_get_contents(__DIR__.'/../stratum/client_submit.cpp');
 durable_ok(strpos($share, 'if(!block->durable && !block_persist_accepted(db, block))') !== false, 'durability still depends on confirmation');
+durable_ok(strpos($share, 'CommonLock(&g_db_mutex)') !== false && strpos($share, 'block_persist_accepted(g_db, block)') !== false, 'accepted submit does not attempt synchronous durable capture');
+durable_ok(strpos($share, 'strcmp(g_stratum_algo, "decred")') !== false, 'later-identity Decred path lost its confirmation gate');
 durable_ok(strpos($share, 'timeout_discard_allowed=false') !== false, 'failed persistence can be timeout-discarded');
 durable_ok(strpos($share, 'durable=true discard_state=in_memory_only') !== false, 'timeout does not distinguish durable state');
 durable_ok(strpos($share, "B.coin_id=%d AND B.algo='%s' AND B.blockhash='%s'") !== false, 'durable identity is not coin/algo/canonical-hash scoped');
@@ -79,7 +81,8 @@ durable_ok(strpos($share, 'block->hash2') !== false && strpos($share, 'pow_hash=
 durable_ok(strpos($share, 'block->userid') !== false && strpos($share, 'block->workerid') !== false, 'finder identity missing from persistence');
 durable_ok(strpos($share, 'BLOCK_DURABILITY_DUPLICATE') !== false, 'duplicate telemetry missing');
 durable_ok(strpos($share, 'BLOCK_CHAIN_CONFIRMED') !== false, 'later confirmation telemetry missing');
-durable_ok(strpos($submit, 'if(b)') !== false && strpos($submit, 'block_add(', strpos($submit, 'if(b)')) !== false, 'accepted submission no longer feeds block capture');
+durable_ok(strpos($submit, 'if(b)') !== false && strpos($submit, 'bool durable = block_add(', strpos($submit, 'if(b)')) !== false, 'accepted submission no longer performs durable capture');
+durable_ok(strpos($submit, 'durable? "accepted_submit": "block_prune"') !== false, 'accepted-path versus retry ownership is not observable');
 durable_ok(strpos($share, 'INSERT INTO payouts') === false && strpos($share, 'sendmany') === false, 'durability path reaches payout or wallet send');
 
 if ($failures) {
