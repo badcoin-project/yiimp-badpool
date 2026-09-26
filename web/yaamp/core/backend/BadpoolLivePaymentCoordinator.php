@@ -15,7 +15,7 @@ class BadpoolLivePaymentCoordinator
 		$this->root=$root?:$this->lane->runtimeRoot();
 	}
 	public function run() {
-		if(!$this->lane->isCommissioned())return $this->report('FAIL_CLOSED',null,null,'none',array('Lane is disabled and uncommissioned.'));
+		if(!$this->lane->isPayoutPreparationCommissioned())return $this->report('FAIL_CLOSED',null,null,'none',array('Lane is not commissioned for payout preparation.'));
 		if(!is_dir($this->root)&&!@mkdir($this->root,0770,true))return $this->report('FAIL_CLOSED',null,null,'none',array('Cannot create coordinator runtime directory.'));
 		$fh=@fopen($this->lane->lockPath($this->root),'c');
 		if(!$fh||!flock($fh,LOCK_EX|LOCK_NB))return $this->report('FAIL_CLOSED',null,null,'none',array('Coordinator invocation already active.'));

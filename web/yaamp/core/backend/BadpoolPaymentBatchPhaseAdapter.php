@@ -42,7 +42,7 @@ class BadpoolPaymentBatchPhaseAdapter
 	/** Automatic Scrypt batches consume the status1 output owned by the live maturity timer. */
 	private function selectLiveStatus1Work($ledger,$options)
 	{
-		$lane=$this->lane($options);if(!$lane->isCommissioned())return $this->hold('Live-payment lane is disabled and uncommissioned.');
+		$lane=$this->lane($options);if(!$lane->isPayoutPreparationCommissioned())return $this->hold('Live-payment lane is not commissioned for payout preparation.');
 		$limit=intval(arraySafeVal($options,'batch_size',0));
 		if($limit<1||$limit>$lane->batchLimit())return $this->hold('Live status1 selection requires a configured positive batch size.');
 		$sql="SELECT E.id earning_id,E.blockid block_id,E.userid account_id,E.coinid coin_id FROM earnings E INNER JOIN blocks B ON B.id=E.blockid AND B.coin_id=E.coinid INNER JOIN live_block_candidates C ON C.block_id=B.id AND C.coin_id=B.coin_id AND C.algo=:algo AND C.blockhash=B.blockhash INNER JOIN accounts A ON A.id=E.userid AND A.coinid=:coin WHERE E.coinid=:coin AND E.status=1 AND E.mature_time IS NOT NULL AND B.coin_id=:coin AND B.id>:boundary AND B.category='generate' ORDER BY E.id LIMIT ".intval($limit);
@@ -141,7 +141,7 @@ class BadpoolPaymentBatchPhaseAdapter
 
 	private function coins($options)
 	{
-		$lane=$this->lane($options);if(arraySafeVal($options,'mode')==='auto'&&!$lane->isCommissioned())return array();
+		$lane=$this->lane($options);if(arraySafeVal($options,'mode')==='auto'&&!$lane->isPayoutPreparationCommissioned())return array();
 		$ids=arraySafeVal($options,'mode')==='auto'?array($lane->coinId()):array(1266,1267,1268,1269,1270);$params=array();$p=array();foreach($ids as $i=>$id){$key=':id'.$i;$p[]=$key;$params[$key]=$id;}
 		$sql='SELECT id,symbol,algo FROM coins WHERE id IN ('.implode(',',$p).') AND IFNULL(enable,0)=1 AND IFNULL(installed,0)=1 AND IFNULL(visible,0)=1 AND IFNULL(auto_ready,0)=1';
 		$only=arraySafeVal($options,'only');if(arraySafeVal($options,'mode')==='auto'){$sql.=' AND LOWER(algo)=LOWER(:live_algo)';$params[':live_algo']=$lane->dbAlgo();}elseif($only){$sql.=' AND LOWER(algo)=LOWER(:algo)';$params[':algo']=$only;}
