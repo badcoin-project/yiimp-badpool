@@ -46,14 +46,14 @@ $disabled=array('uncommissioned-yescrypt','uncommissioned-skein','uncommissioned
 foreach($disabled as $id){$lane=$registry->get($id);lane_ok(!$lane->isAccountingCommissioned()&&!$lane->isMaturityCommissioned()&&!$lane->isPayoutPreparationCommissioned()&&!$lane->isWalletSendCommissioned()&&!$lane->isCommissioned()&&$lane->blockBoundary()===null&&$lane->batchLimit()===null&&$lane->maturityBlockLimit()===null,$id.' was accidentally commissioned');}
 $groestl=$registry->get('live-groestl-v1');
 lane_ok($groestl->coinId()===1269&&$groestl->operationalAlgo()==='groestl'&&$groestl->dbAlgo()==='badcoin-groestl'&&$groestl->blockBoundary()===31212,'Groestl identity or boundary changed');
-lane_ok($groestl->isAccountingCommissioned()&&!$groestl->isMaturityCommissioned()&&!$groestl->isPayoutPreparationCommissioned()&&!$groestl->isWalletSendCommissioned()&&!$groestl->isCommissioned(),'Groestl is not accounting-only');
-lane_ok($groestl->maturityBlockLimit()===null&&$groestl->batchLimit()===null,'Groestl implies a later-stage activation value');
+lane_ok($groestl->isAccountingCommissioned()&&$groestl->isMaturityCommissioned()&&!$groestl->isPayoutPreparationCommissioned()&&!$groestl->isWalletSendCommissioned()&&!$groestl->isCommissioned(),'Groestl stage predicates are not maturity-only');
+lane_ok($groestl->maturityBlockLimit()===10&&$groestl->batchLimit()===null,'Groestl maturity limit or later-stage activation value changed');
 lane_ok(basename($groestl->statePath())==='live-groestl-coordinator.json'&&basename($groestl->lockPath())==='live-groestl-coordinator.lock','Groestl state/lock binding is unsafe or unexpected');
 $sha=$registry->get('uncommissioned-sha256d');lane_ok($sha->operationalAlgo()==='sha256d'&&$sha->dbAlgo()==='sha256','SHA256d operational/DB mapping collapsed');
 
 $owner=$scrypt->ownershipEnvelope();lane_ok($registry->fromOwnershipEnvelope($owner)===$scrypt,'exact Scrypt ownership envelope was not resolved');
 foreach(array('schema'=>'wrong','lane'=>'live-groestl-v1','coin_id'=>1269,'algo'=>'badcoin-groestl','block_id_gt'=>31212) as $key=>$value){$changed=$owner;$changed[$key]=$value;lane_ok($registry->fromOwnershipEnvelope($changed)===null,'ownership '.$key.' mismatch was accepted');}
-lane_ok($registry->fromOwnershipEnvelope($groestl->ownershipEnvelope())===null,'accounting-only Groestl was exposed through payment ownership lookup');
+lane_ok($registry->fromOwnershipEnvelope($groestl->ownershipEnvelope())===null,'maturity-only Groestl was exposed through payment ownership lookup');
 
 foreach(array('lane'=>array('lane_id'=>$scrypt->laneId()),'coin'=>array('coin_id'=>$scrypt->coinId()),'state'=>array('state_filename'=>$scrypt->get('state_filename')),'lock'=>array('lock_filename'=>$scrypt->get('lock_filename')),'wallet'=>array('operational_algo'=>'scrypt','wallet_binding_identity'=>'scrypt','wallet_source_account'=>$scrypt->get('wallet_source_account'))) as $kind=>$changes){$duplicate=new BadpoolLivePaymentLaneConfiguration(array_merge($valid,array('lane_id'=>'duplicate-'.$kind,'coin_id'=>9990+strlen($kind),'state_filename'=>'duplicate-'.$kind.'.json','lock_filename'=>'duplicate-'.$kind.'.lock','wallet_binding_identity'=>'duplicate-'.$kind,'wallet_source_account'=>'pool-duplicate-'.$kind,'operational_algo'=>'duplicate-'.$kind),$changes));lane_ok(lane_throws(function()use($scrypt,$duplicate){new BadpoolLivePaymentLaneRegistry(array($scrypt,$duplicate));}),$kind.' collision was accepted');}
 
@@ -64,6 +64,8 @@ class DisabledLaneGuard {public $calls=0;public function selectAll($sql,$params)
 $guard=new DisabledLaneGuard();$executions=0;$adapter=new BadpoolPaymentBatchPhaseAdapter($guard,function()use(&$executions){$executions++;return array();});
 $selection=$adapter->selectEligibleWork(array('mode'=>'auto'),array('mode'=>'auto','batch_size'=>1,'lane_configuration'=>$groestl));
 $safety=$adapter->safetyCheck(array(),array('mode'=>'auto','lane_configuration'=>$groestl));
-lane_ok($selection['status']==='hold'&&$safety['status']==='hold'&&$guard->calls===0&&$executions===0,'Groestl payout preparation exposed work or invoked a guard');
+$payout=$adapter->preparePayoutRows(array(),array('mode'=>'auto','lane_configuration'=>$groestl));
+lane_ok($selection['status']==='hold'&&$safety['status']==='hold'&&$payout['status']==='hold'&&$guard->calls===0&&$executions===0,'Groestl payment selection or payout preparation exposed work or invoked a guard');
+lane_ok(!$groestl->isWalletSendCommissioned()&&$registry->fromOwnershipEnvelope($groestl->ownershipEnvelope())===null,'Groestl wallet-send path was commissioned or gained payment ownership');
 
 echo $fail?"$fail lane configuration checks failed\n":"Badpool live payment lane configuration harness passed\n";exit($fail?1:0);
