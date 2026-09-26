@@ -30,6 +30,10 @@ expect_contains('json only', $apply, 'wallet-send-apply supports --format=json o
 expect_contains('broad scope refused', $apply, 'refuses broad/all-coin scope', $failures);
 expect_contains('empty payout list refused', $apply, 'refuses empty or missing --selected-payout-ids', $failures);
 expect_contains('sorted explicit csv', $apply, 'Selected payout IDs must be explicit sorted CSV', $failures);
+expect_contains('wallet-send commissioning helper used', $apply, 'walletSendCommissionedLane', $failures);
+expect_contains('uncommissioned wallet send refusal', $apply, 'wallet_send_not_commissioned', $failures);
+$commissionPos=strpos($apply,'walletSendCommissionedLane');$rpcPos=strpos($apply,'new WalletRPC');
+if(!($commissionPos!==false&&$rpcPos!==false&&$commissionPos<$rpcPos))$failures[]='wallet-send commissioning must fail closed before wallet RPC construction';
 expect_contains('operator confirmation exact', $apply, 'selected_payout_rows_', $failures);
 expect_contains('full approval package recompute helper', $apply, 'walletSendApprovalPackageForIds($ids)', $failures);
 expect_contains('full approval package includes checksum', $approvalForIds, 'walletSendApprovalPackageReport()', $failures);
