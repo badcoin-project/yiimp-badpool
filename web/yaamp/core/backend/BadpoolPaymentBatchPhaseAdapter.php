@@ -119,6 +119,7 @@ class BadpoolPaymentBatchPhaseAdapter
 
 	public function preparePayoutRows($ledger, $options)
 	{
+		if(!$this->lane($options)->isPayoutPreparationCommissioned())return $this->hold('Live-payment lane is not commissioned for payout preparation.');
 		$recovered=$this->recoverAccountScope($ledger);
 		if($recovered!==null){$ledger['selected_account_ids']=$recovered['selected_account_ids'];$ledger['selected_accounts_by_coin']=$recovered['selected_accounts_by_coin'];}
 		$existing=$this->recoverExistingPayoutApply($ledger);
