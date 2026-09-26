@@ -2,15 +2,15 @@
 
 ## Implemented now
 
-`badpoolguard live-payment-coordinator --format=json` is the single-flight controller for coin 1267, Scrypt, and `block_id > 29242`. It creates auto/all-active-payout-coins batches of at most 25 through `BadpoolPaymentBatchRunner`; it never implements financial SQL or wallet operations itself.
+`badpoolguard live-payment-coordinator --format=json` remains the compatibility invocation for coin 1267, Scrypt, and `block_id > 29242`. The explicit `--lane-id=live-groestl-v1` form selects coin 1269, database algorithm `badcoin-groestl`, and `block_id > 31212`. Each lane creates auto/all-active-payout-coins batches of at most 25 through `BadpoolPaymentBatchRunner`; the coordinator never implements financial SQL or wallet operations itself.
 
 `BadpoolLivePaymentLaneConfiguration` is the strict identity and policy boundary used by the coordinator and its live phase adapter. Commissioning is an ordered sequence: accounting, maturity, payout preparation, then wallet send. Each enabled stage requires every earlier stage; accounting requires a positive block boundary, maturity requires a positive block limit, and payout preparation requires a positive earning-batch limit. The explicit predicates are `isAccountingCommissioned()`, `isMaturityCommissioned()`, `isPayoutPreparationCommissioned()`, and `isWalletSendCommissioned()`. The legacy `isCommissioned()` method remains only as a compatibility alias for `isPayoutPreparationCommissioned()`; payment call sites use the explicit predicate.
 
-The compatibility configuration keeps lane `live-scrypt-v1`, ownership schema `badpool.live_payment_coordinator.v1`, coin `1267`, database and operational identity `scrypt`, boundary `29242`, the 25-earning ceiling, wallet binding/account `scrypt` / `pool-scrypt`, and the existing state and lock filenames. Lane `live-groestl-v1` commissions accounting and maturity after block `31212` for coin `1269` and DB algorithm `badcoin-groestl`, with a 10-block maturity ceiling; payout preparation and wallet send remain disabled. The registry rejects duplicate lane IDs, coin IDs, state paths, lock paths, and wallet source accounts. Invalid identities, unsafe filenames, incompatible ownership schemas, out-of-order activation, or missing stage-owned activation values fail closed.
+The compatibility configuration keeps lane `live-scrypt-v1`, ownership schema `badpool.live_payment_coordinator.v1`, coin `1267`, database and operational identity `scrypt`, boundary `29242`, the 25-earning ceiling, wallet binding/account `scrypt` / `pool-scrypt`, and the existing state and lock filenames. Lane `live-groestl-v1` commissions accounting, maturity, and payout preparation after block `31212` for coin `1269` and DB algorithm `badcoin-groestl`, with a 10-block maturity ceiling and 25-earning batch ceiling. Groestl wallet send remains disabled. The registry rejects duplicate lane IDs, coin IDs, state paths, lock paths, and wallet source accounts. Invalid identities, unsafe filenames, incompatible ownership schemas, out-of-order activation, or missing stage-owned activation values fail closed.
 
 The existing Scrypt state and ledger formats are unchanged. In particular, active batch `20260920T120829Z-414141f5f7d0`, phase 6, state `READY_FOR_WALLET_APPROVAL`, and payout `526` remain owned by `live-scrypt-v1`; no migration, adoption, reconciliation, or payout rewrite is required. Human wallet approval remains mandatory, and the coordinator still cannot invoke wallet RPC or wallet send.
 
-The atomic `runtime/badpool-payment-batches/live-scrypt-coordinator.json` record uses schema `badpool.live_payment_coordinator.v1`. It records lane, coin, algorithm, boundary, active batch, observed state/phase, transition time, human-approval flag, and last reconciled batch. Every owned ledger carries the same lane ownership envelope. On startup the coordinator scans owned ledgers, so a crash after ledger creation cannot be mistaken for no active work. A nonblocking `flock` on `live-scrypt-coordinator.lock` prevents overlap; PID text is not authority.
+Each lane has an independent atomic state record using schema `badpool.live_payment_coordinator.v1`: `live-scrypt-coordinator.json` / `.lock` and `live-groestl-coordinator.json` / `.lock`. State records contain lane, coin, algorithm, boundary, active batch, observed state/phase, transition time, human-approval flag, and last reconciled batch. Every owned ledger carries the same lane ownership envelope. On startup the coordinator scans only ledgers owned by its exact lane, so a crash after ledger creation cannot be mistaken for no active work and one lane cannot adopt the other's batch. A nonblocking lane-specific `flock` prevents overlap; PID text is not authority.
 
 An owned delay-held batch is resumed by exact ID and its earning scope must remain unchanged. Wallet-ready and completed-payout states stop at human approval or read-only wallet-proof closeout respectively. Unknown HOLD, FAIL, REFUSED, malformed/missing/mismatched ledgers, and state disagreements fail closed. The sole terminal state is `RECONCILED`. An active terminal ledger is loaded directly by its durable ID, clears the active ID, records `last_terminal_reconciled_batch_id`, and returns `READY_FOR_NEW_BATCH`; the following invocation may create the next bounded batch.
 
@@ -20,19 +20,19 @@ Empty selection is IDLE. Cleanup first proves coordinator ownership and empty ea
 
 Closeout apply now resolves the exact ownership envelope through the lane registry instead of comparing against a global Scrypt owner constant. A ledger can only be reconciled by the commissioned lane whose schema, lane ID, coin, database algorithm, and boundary match the durable owner envelope. Existing Scrypt v1 ledgers remain valid.
 
-## Future generalization / commissioning
+## Remaining lane commissioning
 
-The registry records the other known identities, but all four are disabled and uncommissioned. They have no block boundary, no batch ceiling, and all accounting, payout-preparation, and wallet-send enablement flags are false. Supplying one to the coordinator fails before creating runtime state.
+The registry records the other known identities. Yescrypt, Skein, and SHA256d remain disabled and uncommissioned, with no block boundary or batch ceiling. Groestl is commissioned only through payout preparation; wallet-send approval and apply remain unavailable.
 
 | Lane status | Coin | Operational/wallet identity | Database/accounting algorithm | Wallet account |
 | --- | ---: | --- | --- | --- |
 | uncommissioned | 1266 | `yescrypt` | `yescrypt` | `pool-yescrypt` |
 | active compatibility lane | 1267 | `scrypt` | `scrypt` | `pool-scrypt` |
 | uncommissioned | 1268 | `skein` | `skein` | `pool-skein` |
-| uncommissioned | 1269 | `groestl` | `badcoin-groestl` | `pool-groestl` |
+| payout preparation commissioned; wallet send disabled | 1269 | `groestl` | `badcoin-groestl` | `pool-groestl` |
 | uncommissioned | 1270 | `sha256d` | `sha256` | `pool-sha256d` |
 
-Groestl and SHA256d use explicit operational-to-database mappings; code must not infer one identity from the other. Activation boundaries and production ownership history are deliberately absent until commissioning evidence exists. The Scrypt-only live maturity command and the Scrypt-only wallet preparation/proof restrictions are intentionally retained in this first compatibility refactor.
+Groestl and SHA256d use explicit operational-to-database mappings; code must not infer one identity from the other. The Scrypt-only wallet-send approval/proof restrictions are retained. In addition, `wallet-send-apply` now consults the lane registry and refuses any coin whose wallet-send stage is not commissioned before wallet RPC construction.
 
 Later maturity work must also support more than one earning per block. Production Scrypt history includes such blocks, so future lane generalization cannot assume a one-to-one block/earning relationship. This change does not alter maturity selection, monetary calculations, payment-delay semantics, phase ordering, payout cadence, or wallet authorization.
 

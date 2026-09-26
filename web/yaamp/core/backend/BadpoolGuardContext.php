@@ -31,6 +31,7 @@ class BadpoolGuardContext
 		'batch-size',
 		'stop-before-wallet-send',
 		'resume-batch-id',
+		'lane-id',
 		'batch-id',
 		'closeout-proof',
 		'closeout-proof-checksum',
@@ -375,6 +376,10 @@ class BadpoolGuardContext
 			}
 			if (in_array($lower, $batchOptions, true) && !in_array($this->command, array('batch-run-preview','batch-run'), true)) {
 				$this->addError("Option --$name is only available for payment batch commands.");
+				return array();
+			}
+			if ($lower === 'lane-id' && $this->command !== 'live-payment-coordinator') {
+				$this->addError("Option --$name is only available for live-payment-coordinator.");
 				return array();
 			}
 			if ($lower === 'batch-id' && !in_array($this->command,array('completed-payout-batch-closeout','completed-payout-batch-closeout-apply'),true)) {

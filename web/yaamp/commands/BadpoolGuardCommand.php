@@ -384,6 +384,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 			"       php yaamp/yiic.php badpoolguard guard-context --coin-id=<id> [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard status-runner [--coin-id=<id>] [--algo=<algo>] --format=json\n".
 			"       php yaamp/yiic.php badpoolguard batch-run-preview [--mode=auto|catchup|normal] [--scope=all-active-payout-coins] [--only=<algo>] [--batch-size=250] [--stop-before-wallet-send=1] [--format=json|text]\n".
+			"       php yaamp/yiic.php badpoolguard live-payment-coordinator [--lane-id=live-scrypt-v1|live-groestl-v1] --format=json\n".
 			"       php yaamp/yiic.php badpoolguard overview --all-coins-preview [--format=json|text]\n\n".
 			"Stage1 generation emits badpool.stage1_drain_manifest.v3 with the canonical structured apply contract above. Authentic legacy v2 manifests remain valid without v3 fields; v2/v3 hybrids, relabeling, structured drift, --manifest, and --confirmation are refused. Manifest/progress paths are runtime-supplied; schema and authority remain checksum-bound, while exact structured validation occurs before authorization and any transaction. New manifests require separately generated authorization.\n".
 			"Apply classifications: invocation_refusal for parser/scope/format/runtime-path failures; authorization_refusal for checksum, confirmation, manifest, schema, or authority failures before a transaction; transactional_failure for a begun and rolled-back transaction with no commit; partial_committed_failure after an earlier committed/verified batch; successful_apply only after final reconciliation.\n".
@@ -461,7 +462,9 @@ class BadpoolGuardCommand extends CConsoleCommand
 
 	private function livePaymentCoordinatorReport()
 	{
-		$lane=BadpoolLivePaymentLaneRegistry::scryptCompatibility();
+		$laneId=(string)$this->guard->getOption('lane-id','live-scrypt-v1');
+		try{$lane=(new BadpoolLivePaymentLaneRegistry())->get($laneId);}
+		catch(InvalidArgumentException $e){return array('schema'=>BadpoolLivePaymentLaneConfiguration::OWNERSHIP_SCHEMA,'command'=>'live-payment-coordinator','status'=>'fail','classification'=>'FAIL_CLOSED','lane'=>$laneId,'errors'=>array('Unknown live-payment lane.'));}
 		$runner=new BadpoolPaymentBatchRunner($this->paymentBatchPhaseAdapter());
 		return (new BadpoolLivePaymentCoordinator($runner,null,$lane))->run();
 	}
@@ -1833,6 +1836,8 @@ class BadpoolGuardCommand extends CConsoleCommand
 		if (isset($opts['__parse_error'])) return $this->walletSendApplyFail($report, 'invalid_option', $opts['__parse_error']);
 		if ($this->guard->getFormat() !== 'json') return $this->walletSendApplyFail($report, 'json_format_required', 'wallet-send-apply supports --format=json only.');
 		if ($this->guard->isAllCoinsPreview()) return $this->walletSendApplyFail($report, 'coin_id_required', 'wallet-send-apply requires --coin-id and refuses broad/all-coin scope.');
+		$walletLane=$this->walletSendCommissionedLane(intval(arraySafeVal($opts,'coin-id',0)));
+		if(!$walletLane)return $this->walletSendApplyFail($report,'wallet_send_not_commissioned','wallet-send-apply is disabled for this coin by the live-payment lane configuration.');
 		foreach (array('selected-payout-ids','approval-package-checksum','wallet-account-checksum','row-inventory-checksum','destination-plan-checksum','projected-total','projected-total-checksum','wallet-send-total','wallet-send-total-checksum','wallet-send-destination-plan-checksum','operator-confirms-wallet-send') as $r) if (!isset($opts[$r]) || $opts[$r] === '') return $this->walletSendApplyFail($report, 'missing_required_approval_binding', 'Missing required --'.$r.'.');
 		$ids = $this->parseCsvIds($opts['selected-payout-ids']);
 		if (empty($ids)) return $this->walletSendApplyFail($report, 'selected_payout_ids_required', 'wallet-send-apply refuses empty or missing --selected-payout-ids.');
@@ -1868,6 +1873,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 			return $this->walletSendApplyPostSendDbFailureReport($report, $txid, $ids, $approval, $e);
 		}
 	}
+	private function walletSendCommissionedLane($coinId){foreach((new BadpoolLivePaymentLaneRegistry())->all() as $lane)if($lane->coinId()===$coinId)return $lane->isWalletSendCommissioned()?$lane:null;return null;}
 	private function parseWalletSendApplyOptions($args) { $allowed=array('coin-id','format','selected-payout-ids','approval-package-checksum','wallet-account-checksum','row-inventory-checksum','destination-plan-checksum','projected-total','projected-total-checksum','wallet-send-total','wallet-send-total-checksum','wallet-send-destination-plan-checksum','operator-confirms-wallet-send'); $o=array(); foreach($args as $arg){ if(!preg_match('/^--([^=]+)=(.*)$/',$arg,$m)){ $o['__parse_error']='Unknown argument refused: '.$arg; continue; } $n=strtolower($m[1]); if(!in_array($n,$allowed,true)) $o['__parse_error']='Unknown option refused: --'.$m[1]; elseif(isset($o[$n])) $o['__parse_error']='Duplicate option refused: --'.$m[1]; else $o[$n]=$m[2]; } return $o; }
 	private function walletSendApplyBaseReport($opts){ $r=$this->applyBaseReport('wallet-send-apply', 'refused'); $r['wallet_rpc_primitive']='WalletRPC::badpoolGuardedSendmanyApply(sendmany)'; $r['amount_serialization']='destination_plan decimal strings are passed without float accumulation; selected payout row amounts are fetched with CAST(P.amount AS CHAR) to preserve exact DB decimal strings; CryptoNote amounts are converted to atomic integer strings by WalletRPC decimal parsing'; $r['wallet_sends']=false; $r['wallet_rpc_send_performed']=false; $r['wallet_send_success']=false; $r['db_completion_success']=false; $r['full_batch_reconciled']=false; $r['db_mutations']=false; $r['payout_rows_marked_completed']=false; $r['withdraw_rows_created']=false; $r['backend_loops_run']=false; $r['service_change']=false; $r['share_delete']=false; return $r; }
 	private function walletSendApplyFail($report,$reason,$msg){ $report['status']='refused'; $report['reason']=$reason; $report['wallet_sends']=false; $report['wallet_rpc_send_performed']=false; $report['wallet_send_success']=false; $report['db_completion_success']=false; $report['full_batch_reconciled']=false; $report['db_mutations']=false; $report['payout_rows_marked_completed']=false; $report['withdraw_rows_created']=false; $report['backend_loops_run']=false; $report['service_change']=false; $report['share_delete']=false; $report['errors'][]=$msg; return BadpoolGuardReport::finalize($report); }
