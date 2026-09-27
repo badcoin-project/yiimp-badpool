@@ -28,6 +28,16 @@ foreach(array('',0,'0',-1,'-1','30000x',1.5,true) as $bad) {
 	try{$command->actionIndex(1267,'scrypt',$bad,2);ok(false,'malformed boundary refused');}
 	catch(InvalidArgumentException $e){ok(strpos($e->getMessage(),'--after')!==false,'malformed boundary reports after');}
 }
+$yescrypt=LiveBlockAccountingCommand::configurationForRequest(1266,'yescrypt',31284,'live-yescrypt-v1');
+ok($yescrypt->laneId()==='live-yescrypt-v1'&&$yescrypt->isAccountingCommissioned(),'Yescrypt accounting lane was not accepted');
+foreach(array(array(1267,'yescrypt',31284),array(1266,'scrypt',31284),array(1266,'yescrypt',31283)) as $wrong){
+	try{LiveBlockAccountingCommand::configurationForRequest($wrong[0],$wrong[1],$wrong[2],'live-yescrypt-v1');ok(false,'mismatched Yescrypt scope accepted');}
+	catch(InvalidArgumentException $e){ok(true,'mismatched Yescrypt scope refused');}
+}
+try{LiveBlockAccountingCommand::configurationForRequest(1268,'skein',1,'uncommissioned-skein');ok(false,'uncommissioned accounting lane accepted');}
+catch(InvalidArgumentException $e){ok(true,'uncommissioned accounting lane refused');}
+$scrypt=LiveBlockAccountingCommand::configurationForRequest(1267,'scrypt',29242,'live-scrypt-v1');
+ok($scrypt->laneId()==='live-scrypt-v1'&&$scrypt->blockBoundary()===29242,'Scrypt accounting scope changed');
 $help=$command->getHelp();
 ok(strpos($help,'--after=<block_id>')!==false&&strpos($help,'strictly greater')!==false,'help documents exclusive required boundary');
 ok(LiveBlockAccountingCommand::resultExitCode(array('daemon_failed'=>0,'apply_failed'=>0))===0,'clean result returns success');

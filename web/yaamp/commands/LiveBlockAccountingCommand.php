@@ -6,20 +6,30 @@ class LiveBlockAccountingCommand extends CConsoleCommand
 {
 	public function getHelp()
 	{
-		return "Usage: php yaamp/yiic.php liveblockaccounting --coin=<id> --algo=<algo> --after=<block_id> [--limit=2]\n".
-			"Only live candidates whose block_id is strictly greater than the required positive --after boundary are eligible.";
+		return "Usage: php yaamp/yiic.php liveblockaccounting --coin=<id> --algo=<algo> --after=<block_id> [--limit=2] [--lane=live-scrypt-v1]\n".
+			"The coin, database algorithm, and exclusive block boundary must exactly match an accounting-commissioned lane; only block IDs strictly greater than the boundary are eligible.";
 	}
-	public function actionIndex($coin, $algo, $after, $limit=2)
+	public static function configurationForRequest($coin,$algo,$after,$lane)
 	{
 		if(!BadpoolLiveBlockAccounting::isPositiveInteger($after))
 			throw new InvalidArgumentException('--after must be an explicit positive integer block ID');
+		$config=(new BadpoolLivePaymentLaneRegistry())->get((string)$lane);
+		if(!$config->isAccountingCommissioned())throw new InvalidArgumentException('selected live accounting lane is disabled or uncommissioned');
+		if(intval($coin)!==$config->coinId() || (string)$algo!==$config->dbAlgo() || intval($after)!==$config->blockBoundary())
+			throw new InvalidArgumentException('coin, DB algo, and boundary do not match the selected lane');
+		return $config;
+	}
+	public function actionIndex($coin, $algo, $after, $limit=2, $lane='live-scrypt-v1')
+	{
+		$config=self::configurationForRequest($coin,$algo,$after,$lane);
 		$coinId=intval($coin);
 		$dbCoin=getdbo('db_coins',$coinId);
 		if(!$dbCoin || (string)$dbCoin->algo!==(string)$algo)
 			throw new InvalidArgumentException('explicit coin and algo scope do not match');
 		$processor=new BadpoolLiveBlockAccounting(
 			new BadpoolYiiLiveBlockStore(Yii::app()->db),
-			new BadpoolWalletLiveBlockDaemon($dbCoin)
+			new BadpoolWalletLiveBlockDaemon($dbCoin),
+			$config
 		);
 		$result=$processor->run($coinId,$algo,$after,$limit);
 		echo json_encode($result,JSON_UNESCAPED_SLASHES)."\n";
