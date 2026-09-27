@@ -45,8 +45,8 @@ foreach(array(
 
 $yescrypt=$registry->get('live-yescrypt-v1');
 lane_ok($yescrypt->coinId()===1266&&$yescrypt->operationalAlgo()==='yescrypt'&&$yescrypt->dbAlgo()==='yescrypt'&&$yescrypt->blockBoundary()===31284,'Yescrypt identity or boundary is incorrect');
-lane_ok($yescrypt->isAccountingCommissioned()&&!$yescrypt->isMaturityCommissioned()&&!$yescrypt->isPayoutPreparationCommissioned()&&!$yescrypt->isWalletSendCommissioned()&&!$yescrypt->isCommissioned(),'Yescrypt stage predicates do not stop exactly after accounting');
-lane_ok($yescrypt->maturityBlockLimit()===null&&$yescrypt->batchLimit()===null,'Yescrypt implies a later-stage activation value');
+lane_ok($yescrypt->isAccountingCommissioned()&&$yescrypt->isMaturityCommissioned()&&!$yescrypt->isPayoutPreparationCommissioned()&&!$yescrypt->isWalletSendCommissioned()&&!$yescrypt->isCommissioned(),'Yescrypt stage predicates do not stop exactly after maturity');
+lane_ok($yescrypt->maturityBlockLimit()===10&&$yescrypt->batchLimit()===null,'Yescrypt maturity limit or later-stage activation value is incorrect');
 lane_ok(basename($yescrypt->statePath())==='live-yescrypt-coordinator.json'&&basename($yescrypt->lockPath())==='live-yescrypt-coordinator.lock','Yescrypt state/lock binding is unsafe or unexpected');
 lane_ok($yescrypt->get('wallet_binding_identity')==='yescrypt'&&$yescrypt->get('wallet_source_account')==='pool-yescrypt','Yescrypt wallet identity changed');
 lane_ok($yescrypt->get('rpc_config_identity')===null&&$yescrypt->get('wallet_datadir_identity')===null&&$yescrypt->get('service_timer_identity')===null,'Yescrypt gained an operational wallet or service identity');
@@ -62,7 +62,7 @@ $sha=$registry->get('uncommissioned-sha256d');lane_ok($sha->operationalAlgo()===
 $owner=$scrypt->ownershipEnvelope();lane_ok($registry->fromOwnershipEnvelope($owner)===$scrypt,'exact Scrypt ownership envelope was not resolved');
 foreach(array('schema'=>'wrong','lane'=>'live-groestl-v1','coin_id'=>1269,'algo'=>'badcoin-groestl','block_id_gt'=>31212) as $key=>$value){$changed=$owner;$changed[$key]=$value;lane_ok($registry->fromOwnershipEnvelope($changed)===null,'ownership '.$key.' mismatch was accepted');}
 lane_ok($registry->fromOwnershipEnvelope($groestl->ownershipEnvelope())===$groestl,'exact Groestl payment ownership envelope was not resolved');
-lane_ok($registry->fromOwnershipEnvelope($yescrypt->ownershipEnvelope())===null,'accounting-only Yescrypt was exposed through payment ownership lookup');
+lane_ok($registry->fromOwnershipEnvelope($yescrypt->ownershipEnvelope())===null,'maturity-only Yescrypt was exposed through payment ownership lookup');
 
 foreach(array('lane'=>array('lane_id'=>$scrypt->laneId()),'coin'=>array('coin_id'=>$scrypt->coinId()),'state'=>array('state_filename'=>$scrypt->get('state_filename')),'lock'=>array('lock_filename'=>$scrypt->get('lock_filename')),'wallet'=>array('operational_algo'=>'scrypt','wallet_binding_identity'=>'scrypt','wallet_source_account'=>$scrypt->get('wallet_source_account'))) as $kind=>$changes){$duplicate=new BadpoolLivePaymentLaneConfiguration(array_merge($valid,array('lane_id'=>'duplicate-'.$kind,'coin_id'=>9990+strlen($kind),'state_filename'=>'duplicate-'.$kind.'.json','lock_filename'=>'duplicate-'.$kind.'.lock','wallet_binding_identity'=>'duplicate-'.$kind,'wallet_source_account'=>'pool-duplicate-'.$kind,'operational_algo'=>'duplicate-'.$kind),$changes));lane_ok(lane_throws(function()use($scrypt,$duplicate){new BadpoolLivePaymentLaneRegistry(array($scrypt,$duplicate));}),$kind.' collision was accepted');}
 
