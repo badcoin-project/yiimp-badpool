@@ -53,8 +53,8 @@ $registry=new BadpoolLivePaymentLaneRegistry();$lane=$registry->get('live-skein-
 skein_maturity_ok($lane->laneId()==='live-skein-v1','Skein maturity lane ID changed');
 skein_maturity_ok($lane->coinId()===1268&&$lane->dbAlgo()==='skein'&&$lane->operationalAlgo()==='skein','Skein maturity coin or algorithm identity changed');
 skein_maturity_ok($lane->blockBoundary()===31812,'Skein permanent maturity boundary changed');
-skein_maturity_ok($lane->isAccountingCommissioned()&&$lane->isMaturityCommissioned()&&!$lane->isPayoutPreparationCommissioned()&&!$lane->isWalletSendCommissioned()&&!$lane->isCommissioned(),'Skein staged commissioning predicates are incorrect');
-skein_maturity_ok($lane->maturityBlockLimit()===10&&$lane->batchLimit()===null,'Skein maturity or payout-preparation limit is incorrect');
+skein_maturity_ok($lane->isAccountingCommissioned()&&$lane->isMaturityCommissioned()&&$lane->isPayoutPreparationCommissioned()&&!$lane->isWalletSendCommissioned()&&$lane->isCommissioned(),'Skein staged commissioning predicates are incorrect');
+skein_maturity_ok($lane->maturityBlockLimit()===10&&$lane->batchLimit()===25,'Skein maturity or payout-preparation limit is incorrect');
 skein_maturity_ok(basename($lane->statePath())==='live-skein-coordinator.json'&&basename($lane->lockPath())==='live-skein-coordinator.lock','Skein state or lock identity changed');
 
 list($result,$store,$daemon)=run_skein_maturity(array(skein_maturity_row(31812),skein_maturity_row(31813),skein_maturity_row(31814)),array(31813=>array('state'=>'generate','confirmations'=>520),31814=>array('state'=>'immature','confirmations'=>12)));
@@ -91,7 +91,7 @@ foreach(array(null,'','live-scrypt-v1','live-yescrypt-v1','live-groestl-v1') as 
 list($bounded,$boundedStore,$boundedDaemon)=run_skein_maturity(array(skein_maturity_row(31900),skein_maturity_row(31901),skein_maturity_row(31902)),array(),2);
 skein_maturity_ok($bounded['selected']===2&&count($boundedStore->states)===2&&$boundedDaemon->calls===array(31900,31901),'Skein maturity invocation was not independently bounded');
 skein_maturity_ok($boundedStore->accountCredits===0&&$boundedStore->payoutMutations===0&&$boundedStore->walletCalls===0&&$boundedStore->earningCreates===0,'Skein maturity performed a forbidden downstream action or created an earning');
-skein_maturity_ok($registry->fromOwnershipEnvelope($lane->ownershipEnvelope())===null,'Skein maturity lane gained payout-preparation ownership');
+skein_maturity_ok($registry->fromOwnershipEnvelope($lane->ownershipEnvelope())===$lane,'Commissioned Skein payout-preparation ownership was not resolved');
 
 $scrypt=$registry->get('live-scrypt-v1');$yescrypt=$registry->get('live-yescrypt-v1');$groestl=$registry->get('live-groestl-v1');$sha=$registry->get('uncommissioned-sha256d');
 skein_maturity_ok($scrypt->coinId()===1267&&$scrypt->dbAlgo()==='scrypt'&&$scrypt->blockBoundary()===29242&&$scrypt->maturityBlockLimit()===10&&$scrypt->batchLimit()===25&&$scrypt->isWalletSendCommissioned(),'Scrypt configuration changed');
