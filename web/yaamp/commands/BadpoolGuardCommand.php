@@ -384,7 +384,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 			"       php yaamp/yiic.php badpoolguard guard-context --coin-id=<id> [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard status-runner [--coin-id=<id>] [--algo=<algo>] --format=json\n".
 			"       php yaamp/yiic.php badpoolguard batch-run-preview [--mode=auto|catchup|normal] [--scope=all-active-payout-coins] [--only=<algo>] [--batch-size=250] [--stop-before-wallet-send=1] [--format=json|text]\n".
-			"       php yaamp/yiic.php badpoolguard live-payment-coordinator [--lane-id=live-scrypt-v1|live-groestl-v1] --format=json\n".
+			"       php yaamp/yiic.php badpoolguard live-payment-coordinator [--lane-id=live-scrypt-v1|live-yescrypt-v1|live-groestl-v1] --format=json\n".
 			"       php yaamp/yiic.php badpoolguard overview --all-coins-preview [--format=json|text]\n\n".
 			"Stage1 generation emits badpool.stage1_drain_manifest.v3 with the canonical structured apply contract above. Authentic legacy v2 manifests remain valid without v3 fields; v2/v3 hybrids, relabeling, structured drift, --manifest, and --confirmation are refused. Manifest/progress paths are runtime-supplied; schema and authority remain checksum-bound, while exact structured validation occurs before authorization and any transaction. New manifests require separately generated authorization.\n".
 			"Apply classifications: invocation_refusal for parser/scope/format/runtime-path failures; authorization_refusal for checksum, confirmation, manifest, schema, or authority failures before a transaction; transactional_failure for a begun and rolled-back transaction with no commit; partial_committed_failure after an earlier committed/verified batch; successful_apply only after final reconciliation.\n".

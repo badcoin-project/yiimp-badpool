@@ -46,8 +46,8 @@ function run_yescrypt_maturity($rows,$results,$limit=10)
 
 $registry=new BadpoolLivePaymentLaneRegistry();$lane=$registry->get('live-yescrypt-v1');
 yescrypt_maturity_ok($lane->laneId()==='live-yescrypt-v1'&&$lane->coinId()===1266&&$lane->dbAlgo()==='yescrypt'&&$lane->operationalAlgo()==='yescrypt'&&$lane->blockBoundary()===31284,'Yescrypt maturity lane identity or boundary changed');
-yescrypt_maturity_ok($lane->isAccountingCommissioned()&&$lane->isMaturityCommissioned()&&!$lane->isPayoutPreparationCommissioned()&&!$lane->isWalletSendCommissioned()&&!$lane->isCommissioned(),'Yescrypt staged commissioning predicates are incorrect');
-yescrypt_maturity_ok($lane->maturityBlockLimit()===10&&$lane->batchLimit()===null,'Yescrypt maturity or payout limit is incorrect');
+yescrypt_maturity_ok($lane->isAccountingCommissioned()&&$lane->isMaturityCommissioned()&&$lane->isPayoutPreparationCommissioned()&&!$lane->isWalletSendCommissioned()&&$lane->isCommissioned(),'Yescrypt staged commissioning predicates are incorrect');
+yescrypt_maturity_ok($lane->maturityBlockLimit()===10&&$lane->batchLimit()===25,'Yescrypt maturity or payout limit is incorrect');
 
 list($result,$store,$daemon)=run_yescrypt_maturity(array(yescrypt_maturity_row(31284),yescrypt_maturity_row(31285),yescrypt_maturity_row(31286)),array(31285=>array('state'=>'generate','confirmations'=>520),31286=>array('state'=>'immature','confirmations'=>12)));
 yescrypt_maturity_ok(array_map(function($row){return $row['block_id'];},$store->selected)===array(31285,31286)&&$daemon->calls===array(31285,31286),'Yescrypt maturity crossed the exclusive boundary or missed eligible forward blocks');
@@ -78,7 +78,7 @@ $validated=LiveBlockMaturityCommand::configurationForRequest(1266,'yescrypt',312
 list($bounded,$boundedStore,$boundedDaemon)=run_yescrypt_maturity(array(yescrypt_maturity_row(31400),yescrypt_maturity_row(31401),yescrypt_maturity_row(31402)),array(),2);
 yescrypt_maturity_ok($bounded['selected']===2&&count($boundedStore->states)===2&&$boundedDaemon->calls===array(31400,31401),'Yescrypt maturity invocation was not independently bounded');
 yescrypt_maturity_ok($boundedStore->accountCredits===0&&$boundedStore->payouts===0&&$boundedStore->walletSends===0,'Yescrypt maturity performed a forbidden downstream financial action');
-yescrypt_maturity_ok($registry->fromOwnershipEnvelope($lane->ownershipEnvelope())===null,'Yescrypt maturity lane gained payout-preparation ownership');
+yescrypt_maturity_ok($registry->fromOwnershipEnvelope($lane->ownershipEnvelope())===$lane,'Yescrypt payout-preparation ownership was not resolved exactly');
 
 $scrypt=$registry->get('live-scrypt-v1');$groestl=$registry->get('live-groestl-v1');
 yescrypt_maturity_ok($scrypt->coinId()===1267&&$scrypt->dbAlgo()==='scrypt'&&$scrypt->blockBoundary()===29242&&$scrypt->maturityBlockLimit()===10&&$scrypt->isWalletSendCommissioned(),'Scrypt behavior changed');

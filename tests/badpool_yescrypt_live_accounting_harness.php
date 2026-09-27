@@ -45,7 +45,7 @@ function add_yescrypt_case($store,$id,$coin,$algo,$candidateHash=null,$blockHash
 
 $registry=new BadpoolLivePaymentLaneRegistry();$lane=$registry->get('live-yescrypt-v1');
 yescrypt_ok($lane->coinId()===1266&&$lane->dbAlgo()==='yescrypt'&&$lane->blockBoundary()===31284,'Yescrypt lane scope is not exact');
-yescrypt_ok($lane->isAccountingCommissioned()&&$lane->isMaturityCommissioned()&&!$lane->isPayoutPreparationCommissioned()&&!$lane->isWalletSendCommissioned()&&!$lane->isCommissioned(),'Yescrypt commissioning predicates changed outside accounting and maturity');
+yescrypt_ok($lane->isAccountingCommissioned()&&$lane->isMaturityCommissioned()&&$lane->isPayoutPreparationCommissioned()&&!$lane->isWalletSendCommissioned()&&$lane->isCommissioned(),'Yescrypt commissioning predicates are incorrect');
 
 $store=new YescryptAccountingStore();
 add_yescrypt_case($store,30000,1266,'yescrypt');
