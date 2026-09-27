@@ -1,5 +1,7 @@
 <?php
 
+require_once(dirname(__FILE__).'/BadpoolLivePaymentLaneConfiguration.php');
+
 interface BadpoolLiveBlockDaemon { public function inspect($candidate); }
 interface BadpoolLiveBlockStore {
 	public function candidates($coinId, $algo, $after, $limit);
@@ -10,9 +12,10 @@ class BadpoolLiveBlockAccounting
 {
 	private $store;
 	private $daemon;
-	public function __construct(BadpoolLiveBlockStore $store, BadpoolLiveBlockDaemon $daemon)
+	private $lane;
+	public function __construct(BadpoolLiveBlockStore $store, BadpoolLiveBlockDaemon $daemon, $lane=null)
 	{
-		$this->store=$store; $this->daemon=$daemon;
+		$this->store=$store; $this->daemon=$daemon; $this->lane=$lane;
 	}
 	public function run($coinId, $algo, $after, $limit)
 	{
@@ -20,6 +23,10 @@ class BadpoolLiveBlockAccounting
 		if($coinId<=0 || $algo==='' || !self::isPositiveInteger($after) || $limit<1 || $limit>10)
 			throw new InvalidArgumentException('coin, algo, a positive integer after boundary, and a limit from 1 through 10 are required');
 		$after=intval($after);
+		if($this->lane!==null && (!$this->lane instanceof BadpoolLivePaymentLaneConfiguration || !$this->lane->isAccountingCommissioned()))
+			throw new InvalidArgumentException('live accounting lane is disabled or uncommissioned');
+		if($this->lane!==null && ($coinId!==$this->lane->coinId() || $algo!==$this->lane->dbAlgo() || $after!==$this->lane->blockBoundary()))
+			throw new InvalidArgumentException('coin, DB algo, and boundary must exactly match the commissioned live accounting lane');
 		$out=array('selected'=>0,'immature'=>0,'orphan'=>0,'skipped'=>0,'daemon_failed'=>0,'apply_failed'=>0,
 			'daemon_failures'=>array(),'apply_failures'=>array());
 		foreach($this->store->candidates($coinId,$algo,$after,$limit) as $candidate) {
