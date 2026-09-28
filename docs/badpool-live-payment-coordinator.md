@@ -20,6 +20,40 @@ Commissioned lane identities reserve independent state and lock paths: `live-scr
 
 The normal payment delay remains active without a bypass. An owned delay-held batch is `WAITING_PAYMENT_DELAY`, retains its exact selected earning IDs, block IDs, and lane ownership, and is resumed by exact batch ID; no replacement batch, account credit, payout row, or wallet activity is allowed while it is held. Wallet-ready and completed-payout states stop at human approval or read-only wallet-proof closeout respectively. For Yescrypt and Skein, `READY_FOR_WALLET_APPROVAL` is the terminal automated phase. Unknown HOLD, FAIL, REFUSED, malformed/missing/mismatched ledgers, and state disagreements fail closed. The sole reconciled state is `RECONCILED`. An active reconciled ledger is loaded directly by its durable ID, clears the active ID, records `last_terminal_reconciled_batch_id`, and returns `READY_FOR_NEW_BATCH`; the following invocation may create the next bounded batch.
 
+## Generalized exact-ID wallet approval framework
+
+`BadpoolGuardedMultiLaneWalletSend` is the operator-only framework for a future human-approved send spanning one or more payment-ready lanes. It does not expose a recurring coordinator action and does not enable wallet sending globally. Lane configuration keeps `wallet_send_enabled` (recurring commissioning) separate from `human_approved_wallet_send_enabled` (eligibility for an explicit operator scope). Scrypt, Groestl, and Yescrypt are eligible for the latter; Skein is not eligible while its owned batch is `WAITING_PAYMENT_DELAY`, and accounting-only SHA256d is not eligible.
+
+The approval document uses schema `badpool.wallet_send.multi_lane_approval.v1`, requires `human_approved=true`, and contains a non-empty, ascending `entries` array. Every entry binds exactly `payout_id`, `lane_id`, `coin_id`, `account_id`, the unrounded decimal `amount`, `recipient`, `wallet_binding_identity`, `source_account_identity`, `expected_completed=0`, `expected_tx=null`, and `expected_batch_state=READY_FOR_WALLET_APPROVAL`. Missing, additional, duplicate, unordered, unknown, completed, transaction-bearing, mismatched, or non-ready entries fail closed before the wallet gateway is called. Repository lookup authority is only the explicit payout-ID array; incomplete or otherwise discoverable payouts are never added.
+
+```json
+{
+  "schema": "badpool.wallet_send.multi_lane_approval.v1",
+  "human_approved": true,
+  "entries": [
+    {
+      "payout_id": 526,
+      "lane_id": "live-scrypt-v1",
+      "coin_id": 1267,
+      "account_id": 79,
+      "amount": "54111.530811649995",
+      "recipient": "<exact account destination>",
+      "wallet_binding_identity": "scrypt",
+      "source_account_identity": "pool-scrypt",
+      "expected_completed": 0,
+      "expected_tx": null,
+      "expected_batch_state": "READY_FOR_WALLET_APPROVAL"
+    }
+  ]
+}
+```
+
+After every entry and lane validates, the framework constructs deterministic per-recipient amounts using the existing eight-decimal wallet projection while retaining the exact raw aggregate. Duplicate destinations are refused rather than implicitly combined. It then makes one call to the injected `sendmanyApprovedScope(wallet_bindings, recipients, payout_ids)` gateway. This abstraction is fixture-backed in tests and performs no live RPC. A failed gateway result leaves every payout unchanged.
+
+A valid returned transaction ID is first written to the required durable possible-send evidence store and is then reconciled transactionally to only the approved payout IDs, with the validated row preconditions supplied to the repository. All approved rows receive the identical transaction ID and completed state; a count mismatch or any changed row fails the reconciliation as a unit. If evidence retention or database reconciliation fails after wallet success, the result is a manual-recovery HOLD containing the transaction ID and validated scope. Possible-send evidence blocks another automatic call for that exact scope. Operators must reconcile it manually; the framework never automatically retries after a transaction ID may have been returned.
+
+The human boundary remains unchanged: `READY_FOR_WALLET_APPROVAL` is classified as `HUMAN_WALLET_APPROVAL_REQUIRED`, and `BadpoolLivePaymentCoordinator` has no wallet gateway or RPC call. This source framework does not claim that any production multi-algorithm send occurred and does not imply that a Skein or SHA256d payout exists.
+
 The read-only `completed-payout-batch-closeout` proof cannot change a ledger. An operator must retain its successful JSON report, calculate its SHA-256, and explicitly run `completed-payout-batch-closeout-apply` with the exact batch ID, report path, checksum, and confirmation `reconcile_completed_payout_ledger_only`. The apply revalidates the owned ledger and exact payout IDs, performs no DB or wallet operation, and atomically records `RECONCILED`, timestamp, proof checksum, and payout IDs. Repeating the identical apply is idempotent; any changed proof or evidence fails closed.
 
 Empty selection is IDLE. Cleanup first proves coordinator ownership and empty earning, block, account, payment-delay, and payout scopes, confines the target to one direct child of the runtime root, rejects symlinks, and then removes the complete artifact tree. Historical, recovery, manual, normal, and unowned batches—including canary `20260918T005930Z-8089f25db0fe`—are never adopted or deleted.
