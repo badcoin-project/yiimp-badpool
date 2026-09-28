@@ -7,7 +7,7 @@ class LiveBlockAccountingCommand extends CConsoleCommand
 	public function getHelp()
 	{
 		return "Usage: php yaamp/yiic.php liveblockaccounting --coin=<id> --algo=<algo> --after=<block_id> [--limit=2] [--lane=live-scrypt-v1]\n".
-			"The coin, database algorithm, and exclusive block boundary must exactly match an accounting-commissioned lane; only block IDs strictly greater than the boundary are eligible. The lane defaults to live-scrypt-v1, so non-Scrypt lanes such as live-skein-v1 must be explicit.";
+			"The coin, database algorithm, and exclusive block boundary must exactly match an accounting-commissioned lane; only block IDs strictly greater than the boundary are eligible. The lane defaults to live-scrypt-v1, so non-Scrypt lanes such as live-skein-v1 and live-sha256d-v1 must be explicit.";
 	}
 	public static function configurationForRequest($coin,$algo,$after,$lane)
 	{

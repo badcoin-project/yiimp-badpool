@@ -57,20 +57,26 @@ lane_ok($skein->maturityBlockLimit()===10&&$skein->batchLimit()===25,'Skein matu
 lane_ok(basename($skein->statePath())==='live-skein-coordinator.json'&&basename($skein->lockPath())==='live-skein-coordinator.lock','Skein state/lock binding is unsafe or unexpected');
 lane_ok($skein->get('wallet_binding_identity')==='skein'&&$skein->get('wallet_source_account')==='pool-skein','Skein wallet identity changed');
 lane_ok($skein->get('rpc_config_identity')===null&&$skein->get('wallet_datadir_identity')===null&&$skein->get('service_timer_identity')===null,'Skein gained an operational wallet or service identity');
-$disabled=array('uncommissioned-sha256d');
-foreach($disabled as $id){$lane=$registry->get($id);lane_ok(!$lane->isAccountingCommissioned()&&!$lane->isMaturityCommissioned()&&!$lane->isPayoutPreparationCommissioned()&&!$lane->isWalletSendCommissioned()&&!$lane->isCommissioned()&&$lane->blockBoundary()===null&&$lane->batchLimit()===null&&$lane->maturityBlockLimit()===null,$id.' was accidentally commissioned');}
+$sha=$registry->get('live-sha256d-v1');
+lane_ok($sha->coinId()===1270&&$sha->operationalAlgo()==='sha256d'&&$sha->dbAlgo()==='sha256'&&$sha->blockBoundary()===32014,'SHA256d identity or boundary is incorrect');
+lane_ok($sha->isAccountingCommissioned()&&!$sha->isMaturityCommissioned()&&!$sha->isPayoutPreparationCommissioned()&&!$sha->isWalletSendCommissioned()&&!$sha->isCommissioned(),'SHA256d stages do not stop exactly after accounting');
+lane_ok($sha->maturityBlockLimit()===null&&$sha->batchLimit()===null,'SHA256d gained a maturity or payout-preparation limit');
+lane_ok(basename($sha->statePath())==='live-sha256d-coordinator.json'&&basename($sha->lockPath())==='live-sha256d-coordinator.lock','SHA256d state/lock binding is unsafe or unexpected');
+lane_ok($sha->get('wallet_binding_identity')==='sha256d'&&$sha->get('wallet_source_account')==='pool-sha256d','SHA256d wallet identity changed');
+lane_ok($sha->get('rpc_config_identity')===null&&$sha->get('wallet_datadir_identity')===null&&$sha->get('service_timer_identity')===null,'SHA256d gained an RPC, wallet data, or service identity');
 $groestl=$registry->get('live-groestl-v1');
 lane_ok($groestl->coinId()===1269&&$groestl->operationalAlgo()==='groestl'&&$groestl->dbAlgo()==='badcoin-groestl'&&$groestl->blockBoundary()===31212,'Groestl identity or boundary changed');
 lane_ok($groestl->isAccountingCommissioned()&&$groestl->isMaturityCommissioned()&&$groestl->isPayoutPreparationCommissioned()&&!$groestl->isWalletSendCommissioned()&&$groestl->isCommissioned(),'Groestl stage predicates do not stop exactly before wallet send');
 lane_ok($groestl->maturityBlockLimit()===10&&$groestl->batchLimit()===25,'Groestl maturity or payout-preparation limit changed');
 lane_ok(basename($groestl->statePath())==='live-groestl-coordinator.json'&&basename($groestl->lockPath())==='live-groestl-coordinator.lock','Groestl state/lock binding is unsafe or unexpected');
-$sha=$registry->get('uncommissioned-sha256d');lane_ok($sha->operationalAlgo()==='sha256d'&&$sha->dbAlgo()==='sha256','SHA256d operational/DB mapping collapsed');
+lane_ok($sha->operationalAlgo()==='sha256d'&&$sha->dbAlgo()==='sha256','SHA256d operational/DB mapping collapsed');
 
 $owner=$scrypt->ownershipEnvelope();lane_ok($registry->fromOwnershipEnvelope($owner)===$scrypt,'exact Scrypt ownership envelope was not resolved');
 foreach(array('schema'=>'wrong','lane'=>'live-groestl-v1','coin_id'=>1269,'algo'=>'badcoin-groestl','block_id_gt'=>31212) as $key=>$value){$changed=$owner;$changed[$key]=$value;lane_ok($registry->fromOwnershipEnvelope($changed)===null,'ownership '.$key.' mismatch was accepted');}
 lane_ok($registry->fromOwnershipEnvelope($groestl->ownershipEnvelope())===$groestl,'exact Groestl payment ownership envelope was not resolved');
 lane_ok($registry->fromOwnershipEnvelope($yescrypt->ownershipEnvelope())===$yescrypt,'exact Yescrypt payment ownership envelope was not resolved');
 lane_ok($registry->fromOwnershipEnvelope($skein->ownershipEnvelope())===$skein,'exact Skein payment ownership envelope was not resolved');
+lane_ok($registry->fromOwnershipEnvelope($sha->ownershipEnvelope())===null,'Accounting-only SHA256d ownership was accepted for payment coordination');
 
 foreach(array('lane'=>array('lane_id'=>$scrypt->laneId()),'coin'=>array('coin_id'=>$scrypt->coinId()),'state'=>array('state_filename'=>$scrypt->get('state_filename')),'lock'=>array('lock_filename'=>$scrypt->get('lock_filename')),'wallet'=>array('operational_algo'=>'scrypt','wallet_binding_identity'=>'scrypt','wallet_source_account'=>$scrypt->get('wallet_source_account'))) as $kind=>$changes){$duplicate=new BadpoolLivePaymentLaneConfiguration(array_merge($valid,array('lane_id'=>'duplicate-'.$kind,'coin_id'=>9990+strlen($kind),'state_filename'=>'duplicate-'.$kind.'.json','lock_filename'=>'duplicate-'.$kind.'.lock','wallet_binding_identity'=>'duplicate-'.$kind,'wallet_source_account'=>'pool-duplicate-'.$kind,'operational_algo'=>'duplicate-'.$kind),$changes));lane_ok(lane_throws(function()use($scrypt,$duplicate){new BadpoolLivePaymentLaneRegistry(array($scrypt,$duplicate));}),$kind.' collision was accepted');}
 
@@ -81,6 +87,7 @@ lane_ok($selection['status']==='pass'&&$guard->calls===1&&$guard->params===array
 lane_ok($scrypt->statePath()!==$groestl->statePath()&&$scrypt->lockPath()!==$groestl->lockPath(),'Scrypt and Groestl coordinator paths collide');
 lane_ok($yescrypt->statePath()!==$scrypt->statePath()&&$yescrypt->statePath()!==$groestl->statePath()&&$yescrypt->lockPath()!==$scrypt->lockPath()&&$yescrypt->lockPath()!==$groestl->lockPath(),'Yescrypt coordinator paths collide with another lane');
 lane_ok($skein->statePath()!==$scrypt->statePath()&&$skein->statePath()!==$groestl->statePath()&&$skein->statePath()!==$yescrypt->statePath()&&$skein->lockPath()!==$scrypt->lockPath()&&$skein->lockPath()!==$groestl->lockPath()&&$skein->lockPath()!==$yescrypt->lockPath(),'Skein coordinator paths collide with another lane');
+lane_ok(!in_array($sha->statePath(),array($scrypt->statePath(),$yescrypt->statePath(),$skein->statePath(),$groestl->statePath()),true)&&!in_array($sha->lockPath(),array($scrypt->lockPath(),$yescrypt->lockPath(),$skein->lockPath(),$groestl->lockPath()),true),'SHA256d coordinator paths collide with another lane');
 $skeinRoot=sys_get_temp_dir().'/badpool-skein-lane-'.bin2hex(random_bytes(4));mkdir($skeinRoot);$skeinGuard=new CommissionedLaneGuard();$skeinExecutions=0;$skeinAdapter=new BadpoolPaymentBatchPhaseAdapter($skeinGuard,function()use(&$skeinExecutions){$skeinExecutions++;return array();});
 $skeinSelection=$skeinAdapter->selectEligibleWork(array('mode'=>'auto','run_directory'=>$skeinRoot),array('mode'=>'auto','batch_size'=>25,'lane_configuration'=>$skein));
 lane_ok($skeinSelection['status']==='pass'&&$skeinGuard->calls===1&&$skeinGuard->params===array(':coin'=>1268,':algo'=>'skein',':boundary'=>31812)&&$skeinExecutions===0,'Skein payment selection did not enter its exact commissioned scope');

@@ -29,7 +29,7 @@ function skein_payout_row($id,$block=31813,$changes=array())
 	return array_merge($row,$changes);
 }
 
-$registry=new BadpoolLivePaymentLaneRegistry();$lane=$registry->get('live-skein-v1');$scrypt=$registry->get('live-scrypt-v1');$yescrypt=$registry->get('live-yescrypt-v1');$groestl=$registry->get('live-groestl-v1');$sha=$registry->get('uncommissioned-sha256d');
+$registry=new BadpoolLivePaymentLaneRegistry();$lane=$registry->get('live-skein-v1');$scrypt=$registry->get('live-scrypt-v1');$yescrypt=$registry->get('live-yescrypt-v1');$groestl=$registry->get('live-groestl-v1');$sha=$registry->get('live-sha256d-v1');
 skein_payout_ok($lane->laneId()==='live-skein-v1','Skein payout-preparation lane identity changed');
 skein_payout_ok($lane->coinId()===1268,'Skein payout-preparation coin changed');
 skein_payout_ok($lane->dbAlgo()==='skein','Skein payout-preparation database algorithm changed');

@@ -93,7 +93,7 @@ skein_maturity_ok($bounded['selected']===2&&count($boundedStore->states)===2&&$b
 skein_maturity_ok($boundedStore->accountCredits===0&&$boundedStore->payoutMutations===0&&$boundedStore->walletCalls===0&&$boundedStore->earningCreates===0,'Skein maturity performed a forbidden downstream action or created an earning');
 skein_maturity_ok($registry->fromOwnershipEnvelope($lane->ownershipEnvelope())===$lane,'Commissioned Skein payout-preparation ownership was not resolved');
 
-$scrypt=$registry->get('live-scrypt-v1');$yescrypt=$registry->get('live-yescrypt-v1');$groestl=$registry->get('live-groestl-v1');$sha=$registry->get('uncommissioned-sha256d');
+$scrypt=$registry->get('live-scrypt-v1');$yescrypt=$registry->get('live-yescrypt-v1');$groestl=$registry->get('live-groestl-v1');$sha=$registry->get('live-sha256d-v1');
 skein_maturity_ok($scrypt->coinId()===1267&&$scrypt->dbAlgo()==='scrypt'&&$scrypt->blockBoundary()===29242&&$scrypt->maturityBlockLimit()===10&&$scrypt->batchLimit()===25&&$scrypt->isWalletSendCommissioned(),'Scrypt configuration changed');
 skein_maturity_ok($yescrypt->coinId()===1266&&$yescrypt->dbAlgo()==='yescrypt'&&$yescrypt->blockBoundary()===31284&&$yescrypt->maturityBlockLimit()===10&&$yescrypt->batchLimit()===25&&$yescrypt->isPayoutPreparationCommissioned()&&!$yescrypt->isWalletSendCommissioned(),'Yescrypt configuration changed');
 skein_maturity_ok($groestl->coinId()===1269&&$groestl->dbAlgo()==='badcoin-groestl'&&$groestl->blockBoundary()===31212&&$groestl->maturityBlockLimit()===10&&$groestl->batchLimit()===25&&$groestl->isPayoutPreparationCommissioned()&&!$groestl->isWalletSendCommissioned(),'Groestl configuration changed');

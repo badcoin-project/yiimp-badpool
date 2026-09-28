@@ -42,10 +42,18 @@ foreach(array(array(1267,'skein',31812),array(1268,'scrypt',31812),array(1268,'s
 }
 try{$command->actionIndex(1268,'skein',31812,2);ok(false,'Skein accounting accepted the default Scrypt lane');}
 catch(InvalidArgumentException $e){ok(true,'Skein accounting requires its explicit lane');}
+$sha256d=LiveBlockAccountingCommand::configurationForRequest(1270,'sha256',32014,'live-sha256d-v1');
+ok($sha256d->laneId()==='live-sha256d-v1'&&$sha256d->dbAlgo()==='sha256'&&$sha256d->operationalAlgo()==='sha256d'&&$sha256d->isAccountingCommissioned()&&!$sha256d->isMaturityCommissioned(),'SHA256d accounting-only lane was not accepted');
+foreach(array(array(1267,'sha256',32014),array(1270,'sha256d',32014),array(1270,'sha256',32013)) as $wrong){
+	try{LiveBlockAccountingCommand::configurationForRequest($wrong[0],$wrong[1],$wrong[2],'live-sha256d-v1');ok(false,'mismatched SHA256d scope accepted');}
+	catch(InvalidArgumentException $e){ok(true,'mismatched SHA256d scope refused');}
+}
+try{$command->actionIndex(1270,'sha256',32014,2);ok(false,'SHA256d accounting accepted the default Scrypt lane');}
+catch(InvalidArgumentException $e){ok(true,'SHA256d accounting requires its explicit lane');}
 $scrypt=LiveBlockAccountingCommand::configurationForRequest(1267,'scrypt',29242,'live-scrypt-v1');
 ok($scrypt->laneId()==='live-scrypt-v1'&&$scrypt->blockBoundary()===29242,'Scrypt accounting scope changed');
 $help=$command->getHelp();
-ok(strpos($help,'--after=<block_id>')!==false&&strpos($help,'--lane=live-scrypt-v1')!==false&&strpos($help,'strictly greater')!==false,'help documents the Scrypt default and exclusive required boundary');
+ok(strpos($help,'--after=<block_id>')!==false&&strpos($help,'--lane=live-scrypt-v1')!==false&&strpos($help,'strictly greater')!==false&&strpos($help,'live-sha256d-v1')!==false,'help documents the Scrypt default, SHA256d explicit lane, and exclusive required boundary');
 ok(LiveBlockAccountingCommand::resultExitCode(array('daemon_failed'=>0,'apply_failed'=>0))===0,'clean result returns success');
 ok(LiveBlockAccountingCommand::resultExitCode(array('daemon_failed'=>1,'apply_failed'=>0))===1,'daemon failure returns nonzero');
 ok(LiveBlockAccountingCommand::resultExitCode(array('daemon_failed'=>0,'apply_failed'=>1))===1,'apply failure returns nonzero');
