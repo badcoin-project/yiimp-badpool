@@ -1,0 +1,10 @@
+{
+  "schema": "badpool.wallet_send.fixture.v1",
+  "protected_skein_batch": {"batch_id":"20260928T002836Z-dadc9cef85e9","lane_id":"live-skein-v1","batch_state":"WAITING_PAYMENT_DELAY","created_payout_ids":[]},
+  "payouts": [
+    {"payout_id":526,"lane_id":"live-scrypt-v1","coin_id":1267,"account_id":79,"amount":"54111.530811649995","recipient":"BAD-scrypt-account-79","wallet_binding_identity":"scrypt","source_account_identity":"pool-scrypt","completed":0,"tx":null,"batch_state":"READY_FOR_WALLET_APPROVAL"},
+    {"payout_id":527,"lane_id":"live-groestl-v1","coin_id":1269,"account_id":76,"amount":"55875.65007076999","recipient":"BAD-groestl-account-76","wallet_binding_identity":"groestl","source_account_identity":"pool-groestl","completed":0,"tx":null,"batch_state":"READY_FOR_WALLET_APPROVAL"},
+    {"payout_id":528,"lane_id":"live-yescrypt-v1","coin_id":1266,"account_id":75,"amount":"33063.28546626001","recipient":"BAD-yescrypt-account-75","wallet_binding_identity":"yescrypt","source_account_identity":"pool-yescrypt","completed":0,"tx":null,"batch_state":"READY_FOR_WALLET_APPROVAL"},
+    {"payout_id":529,"lane_id":"live-scrypt-v1","coin_id":1267,"account_id":90,"amount":"1.00000001","recipient":"BAD-unapproved-account-90","wallet_binding_identity":"scrypt","source_account_identity":"pool-scrypt","completed":0,"tx":null,"batch_state":"READY_FOR_WALLET_APPROVAL"}
+  ]
+}

@@ -15,7 +15,7 @@ lane_ok(basename($scrypt->statePath())==='live-scrypt-coordinator.json'&&basenam
 lane_ok($scrypt->get('wallet_binding_identity')==='scrypt'&&$scrypt->get('wallet_source_account')==='pool-scrypt','Scrypt wallet binding changed');
 
 $valid=$scrypt->toArray();
-$off=array_merge($valid,array('block_id_gt'=>null,'maturity_max_blocks'=>null,'batch_max_earnings'=>null,'accounting_enabled'=>false,'maturity_enabled'=>false,'payout_preparation_enabled'=>false,'wallet_send_enabled'=>false));
+$off=array_merge($valid,array('block_id_gt'=>null,'maturity_max_blocks'=>null,'batch_max_earnings'=>null,'accounting_enabled'=>false,'maturity_enabled'=>false,'payout_preparation_enabled'=>false,'wallet_send_enabled'=>false,'human_approved_wallet_send_enabled'=>false));
 $accounting=array_merge($off,array('block_id_gt'=>1,'accounting_enabled'=>true));
 $maturity=array_merge($accounting,array('maturity_max_blocks'=>1,'maturity_enabled'=>true));
 $payout=array_merge($maturity,array('batch_max_earnings'=>1,'payout_preparation_enabled'=>true));
@@ -50,6 +50,7 @@ lane_ok($yescrypt->maturityBlockLimit()===10&&$yescrypt->batchLimit()===25,'Yesc
 lane_ok(basename($yescrypt->statePath())==='live-yescrypt-coordinator.json'&&basename($yescrypt->lockPath())==='live-yescrypt-coordinator.lock','Yescrypt state/lock binding is unsafe or unexpected');
 lane_ok($yescrypt->get('wallet_binding_identity')==='yescrypt'&&$yescrypt->get('wallet_source_account')==='pool-yescrypt','Yescrypt wallet identity changed');
 lane_ok($yescrypt->get('rpc_config_identity')===null&&$yescrypt->get('wallet_datadir_identity')===null&&$yescrypt->get('service_timer_identity')===null,'Yescrypt gained an operational wallet or service identity');
+lane_ok($yescrypt->isHumanApprovedWalletSendEligible()&&!$yescrypt->isWalletSendCommissioned(),'Yescrypt human-approved eligibility was not kept separate from recurring wallet commissioning');
 $skein=$registry->get('live-skein-v1');
 lane_ok($skein->coinId()===1268&&$skein->operationalAlgo()==='skein'&&$skein->dbAlgo()==='skein'&&$skein->blockBoundary()===31812,'Skein identity or boundary is incorrect');
 lane_ok($skein->isAccountingCommissioned()&&$skein->isMaturityCommissioned()&&$skein->isPayoutPreparationCommissioned()&&!$skein->isWalletSendCommissioned()&&$skein->isCommissioned(),'Skein stage predicates do not stop exactly before wallet send');
@@ -57,6 +58,7 @@ lane_ok($skein->maturityBlockLimit()===10&&$skein->batchLimit()===25,'Skein matu
 lane_ok(basename($skein->statePath())==='live-skein-coordinator.json'&&basename($skein->lockPath())==='live-skein-coordinator.lock','Skein state/lock binding is unsafe or unexpected');
 lane_ok($skein->get('wallet_binding_identity')==='skein'&&$skein->get('wallet_source_account')==='pool-skein','Skein wallet identity changed');
 lane_ok($skein->get('rpc_config_identity')===null&&$skein->get('wallet_datadir_identity')===null&&$skein->get('service_timer_identity')===null,'Skein gained an operational wallet or service identity');
+lane_ok(!$skein->isHumanApprovedWalletSendEligible(),'Skein became eligible for a human-approved send before reaching payout readiness');
 $sha=$registry->get('live-sha256d-v1');
 lane_ok($sha->coinId()===1270&&$sha->operationalAlgo()==='sha256d'&&$sha->dbAlgo()==='sha256'&&$sha->blockBoundary()===32014,'SHA256d identity or boundary is incorrect');
 lane_ok($sha->isAccountingCommissioned()&&!$sha->isMaturityCommissioned()&&!$sha->isPayoutPreparationCommissioned()&&!$sha->isWalletSendCommissioned()&&!$sha->isCommissioned(),'SHA256d stages do not stop exactly after accounting');
@@ -64,10 +66,12 @@ lane_ok($sha->maturityBlockLimit()===null&&$sha->batchLimit()===null,'SHA256d ga
 lane_ok(basename($sha->statePath())==='live-sha256d-coordinator.json'&&basename($sha->lockPath())==='live-sha256d-coordinator.lock','SHA256d state/lock binding is unsafe or unexpected');
 lane_ok($sha->get('wallet_binding_identity')==='sha256d'&&$sha->get('wallet_source_account')==='pool-sha256d','SHA256d wallet identity changed');
 lane_ok($sha->get('rpc_config_identity')===null&&$sha->get('wallet_datadir_identity')===null&&$sha->get('service_timer_identity')===null,'SHA256d gained an RPC, wallet data, or service identity');
+lane_ok(!$sha->isHumanApprovedWalletSendEligible(),'SHA256d accounting-only lane became human-send eligible');
 $groestl=$registry->get('live-groestl-v1');
 lane_ok($groestl->coinId()===1269&&$groestl->operationalAlgo()==='groestl'&&$groestl->dbAlgo()==='badcoin-groestl'&&$groestl->blockBoundary()===31212,'Groestl identity or boundary changed');
 lane_ok($groestl->isAccountingCommissioned()&&$groestl->isMaturityCommissioned()&&$groestl->isPayoutPreparationCommissioned()&&!$groestl->isWalletSendCommissioned()&&$groestl->isCommissioned(),'Groestl stage predicates do not stop exactly before wallet send');
 lane_ok($groestl->maturityBlockLimit()===10&&$groestl->batchLimit()===25,'Groestl maturity or payout-preparation limit changed');
+lane_ok($groestl->isHumanApprovedWalletSendEligible()&&!$groestl->isWalletSendCommissioned(),'Groestl human-approved eligibility was not kept separate from recurring wallet commissioning');
 lane_ok(basename($groestl->statePath())==='live-groestl-coordinator.json'&&basename($groestl->lockPath())==='live-groestl-coordinator.lock','Groestl state/lock binding is unsafe or unexpected');
 lane_ok($sha->operationalAlgo()==='sha256d'&&$sha->dbAlgo()==='sha256','SHA256d operational/DB mapping collapsed');
 
