@@ -66,11 +66,11 @@ skein_ok(count($states)===count(array_unique($states)),'Skein state filename is 
 skein_ok(count($locks)===count(array_unique($locks)),'Skein lock filename is not unique');
 skein_ok($registry->fromOwnershipEnvelope($lane->ownershipEnvelope())===$lane,'Commissioned Skein payment ownership was not resolved');
 
-$scrypt=$registry->get('live-scrypt-v1');$yescrypt=$registry->get('live-yescrypt-v1');$groestl=$registry->get('live-groestl-v1');$sha=$registry->get('uncommissioned-sha256d');
+$scrypt=$registry->get('live-scrypt-v1');$yescrypt=$registry->get('live-yescrypt-v1');$groestl=$registry->get('live-groestl-v1');$sha=$registry->get('live-sha256d-v1');
 skein_ok($scrypt->coinId()===1267&&$scrypt->dbAlgo()==='scrypt'&&$scrypt->blockBoundary()===29242&&$scrypt->isWalletSendCommissioned(),'Existing Scrypt configuration changed');
 skein_ok($yescrypt->coinId()===1266&&$yescrypt->dbAlgo()==='yescrypt'&&$yescrypt->blockBoundary()===31284&&$yescrypt->isPayoutPreparationCommissioned()&&!$yescrypt->isWalletSendCommissioned(),'Existing Yescrypt configuration changed');
 skein_ok($groestl->coinId()===1269&&$groestl->dbAlgo()==='badcoin-groestl'&&$groestl->blockBoundary()===31212&&$groestl->isPayoutPreparationCommissioned()&&!$groestl->isWalletSendCommissioned(),'Existing Groestl configuration changed');
-skein_ok($sha->coinId()===1270&&$sha->dbAlgo()==='sha256'&&$sha->operationalAlgo()==='sha256d'&&!$sha->isAccountingCommissioned(),'SHA256d configuration changed');
+skein_ok($sha->coinId()===1270&&$sha->dbAlgo()==='sha256'&&$sha->operationalAlgo()==='sha256d'&&$sha->isAccountingCommissioned()&&!$sha->isMaturityCommissioned(),'SHA256d configuration changed');
 
 $root=sys_get_temp_dir().'/badpool-skein-accounting-'.bin2hex(random_bytes(5));mkdir($root);
 $protected=array(
