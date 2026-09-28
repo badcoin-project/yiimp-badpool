@@ -27,9 +27,9 @@ function mw_refused($approval,$rows,$mutator=null){list($exec,$repo,$wallet)=mw_
 
 $rows=mw_rows($fixture);
 mw_check($fixture['schema']==='badpool.wallet_send.fixture.v1','fixture schema');
-mw_check($fixture['protected_skein_batch']['batch_id']==='20260928T002836Z-dadc9cef85e9','protected Skein batch ID');
-mw_check($fixture['protected_skein_batch']['batch_state']==='WAITING_PAYMENT_DELAY'&&$fixture['protected_skein_batch']['created_payout_ids']===array(),'Skein delay batch remains payout-free');
-foreach(array(526=>array('live-scrypt-v1',79,'54111.530811649995'),527=>array('live-groestl-v1',76,'55875.65007076999'),528=>array('live-yescrypt-v1',75,'33063.28546626001'))as$id=>$expected)mw_check($rows[$id]['lane_id']===$expected[0]&&$rows[$id]['account_id']===$expected[1]&&$rows[$id]['amount']===$expected[2]&&$rows[$id]['completed']===0&&$rows[$id]['tx']===null,'protected payout fixture '.$id);
+mw_check($fixture['skein_wallet_ready_batch']['batch_id']==='20260928T002836Z-dadc9cef85e9','Skein wallet-ready batch ID');
+mw_check($fixture['skein_wallet_ready_batch']['batch_state']==='READY_FOR_WALLET_APPROVAL'&&$fixture['skein_wallet_ready_batch']['created_payout_ids']===array(529),'Skein wallet-ready payout retained');
+foreach(array(526=>array('live-scrypt-v1',79,'54111.530811649995'),527=>array('live-groestl-v1',76,'55875.65007076999'),528=>array('live-yescrypt-v1',75,'33063.28546626001'),529=>array('live-skein-v1',76,'57981.11592853001'))as$id=>$expected)mw_check($rows[$id]['lane_id']===$expected[0]&&$rows[$id]['account_id']===$expected[1]&&$rows[$id]['amount']===$expected[2]&&$rows[$id]['completed']===0&&$rows[$id]['tx']===null,'protected payout fixture '.$id);
 
 list($r,$repo,$wallet)=mw_refused(array(),$rows);mw_check($r['status']==='refused'&&$wallet->calls===0,'exact approval payload required');
 $a=mw_approval($rows,array(526));$a['entries']=array();list($r,$repo,$wallet)=mw_refused($a,$rows);mw_check($r['status']==='refused'&&$wallet->calls===0,'empty approval rejected');
@@ -59,7 +59,7 @@ mw_check($repo->rows[526]['completed']===1&&$repo->rows[527]['completed']===1&&$
 $again=$exec->execute(mw_approval($rows,array(526,527,528)));mw_check($again['status']==='refused'&&$wallet->calls===1,'post-send replay rejected before wallet');
 
 foreach(array('live-scrypt-v1'=>array(527,528),'live-groestl-v1'=>array(526,528),'live-yescrypt-v1'=>array(526,527),'live-skein-v1'=>array(526,527,528),'live-sha256d-v1'=>array(526,527,528))as$laneId=>$ids){foreach($ids as$id){$a=mw_approval($rows,array($id));$a['entries'][0]['lane_id']=$laneId;list($r,$repo,$wallet)=mw_refused($a,$rows);mw_check($r['status']==='refused'&&$wallet->calls===0,$laneId.' cannot adopt payout '.$id);}}
-$registry=new BadpoolLivePaymentLaneRegistry();mw_check(!$registry->get('live-skein-v1')->isHumanApprovedWalletSendEligible(),'Skein is not human-send eligible');
+$registry=new BadpoolLivePaymentLaneRegistry();mw_check($registry->get('live-skein-v1')->isHumanApprovedWalletSendEligible()&&!$registry->get('live-skein-v1')->isWalletSendCommissioned(),'Skein is human-send eligible while recurring send stays disabled');
 mw_check(!$registry->get('live-sha256d-v1')->isHumanApprovedWalletSendEligible()&&!$registry->get('live-sha256d-v1')->isPayoutPreparationCommissioned(),'SHA256d accounting-only lane is not wallet-ready');
 mw_check($registry->get('live-groestl-v1')->isHumanApprovedWalletSendEligible()&&!$registry->get('live-groestl-v1')->isWalletSendCommissioned(),'human execution eligibility is separate from recurring Groestl flag');
 mw_check($registry->get('live-yescrypt-v1')->isHumanApprovedWalletSendEligible()&&!$registry->get('live-yescrypt-v1')->isWalletSendCommissioned(),'human execution eligibility is separate from recurring Yescrypt flag');

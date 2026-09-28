@@ -59,7 +59,7 @@ skein_ok($lane->maturityBlockLimit()===10&&$lane->batchLimit()===25,'Skein matur
 skein_ok(basename($lane->statePath())==='live-skein-coordinator.json','Skein state filename changed');
 skein_ok(basename($lane->lockPath())==='live-skein-coordinator.lock','Skein lock filename changed');
 skein_ok($lane->get('wallet_binding_identity')==='skein'&&$lane->get('wallet_source_account')==='pool-skein','Skein wallet identity metadata changed');
-skein_ok($lane->get('rpc_config_identity')===null&&$lane->get('wallet_datadir_identity')===null&&$lane->get('service_timer_identity')===null,'Skein gained an RPC, wallet data, or service identity');
+skein_ok($lane->get('rpc_config_identity')==='/etc/badcoin/pool-skein.conf'&&$lane->get('wallet_datadir_identity')==='/var/lib/badcoin-pool-skein'&&$lane->get('service_timer_identity')===null,'Skein guarded RPC identity or service separation changed');
 
 $states=array();$locks=array();foreach($registry->all() as $configured){$states[]=basename($configured->statePath());$locks[]=basename($configured->lockPath());}
 skein_ok(count($states)===count(array_unique($states)),'Skein state filename is not unique');

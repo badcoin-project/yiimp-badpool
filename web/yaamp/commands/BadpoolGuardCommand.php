@@ -13,6 +13,8 @@ require_once(dirname(__FILE__).'/../core/backend/BadpoolPaymentBatchPhaseAdapter
 require_once(dirname(__FILE__).'/../core/backend/BadpoolCompletedPayoutBatchCloseout.php');
 require_once(dirname(__FILE__).'/../core/backend/BadpoolCompletedPayoutBatchCloseoutApply.php');
 require_once(dirname(__FILE__).'/../core/backend/BadpoolWalletFundingGuard.php');
+require_once(dirname(__FILE__).'/../core/backend/BadpoolYiiExactMultiWalletPayoutRepository.php');
+require_once(dirname(__FILE__).'/../core/backend/BadpoolMultiWalletProductionPreflight.php');
 require_once(dirname(__FILE__).'/../core/backend/BadpoolConfirmedBlockPaymentDelayOverride.php');
 require_once(dirname(__FILE__).'/../core/rpc/wallet-rpc.php');
 
@@ -49,6 +51,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 		'wallet-funding-preflight',
 		'wallet-send-apply',
 		'wallet-proof-closeout',
+		'multi-wallet-send-preflight',
 		'payable-source-reconciliation-preview',
 		'account-credit-transition-preview',
 		'earnings-credit-readiness-preview',
@@ -206,6 +209,9 @@ class BadpoolGuardCommand extends CConsoleCommand
 			case 'wallet-proof-closeout':
 				$report = $this->walletProofCloseoutReport();
 				break;
+			case 'multi-wallet-send-preflight':
+				$report = $this->multiWalletSendPreflightReport();
+				break;
 			case 'payable-source-reconciliation-preview':
 				$report = $this->payableSourceReconciliationPreviewReport();
 				break;
@@ -345,6 +351,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 			"       php yaamp/yiic.php badpoolguard wallet-send-approval-package --coin-id=<id> --selected-payout-ids=<csv> --format=json\n".
 			"       php yaamp/yiic.php badpoolguard wallet-send-apply --coin-id=<id> --selected-payout-ids=<csv> --approval-package-checksum=<sha256> --row-inventory-checksum=<sha256> --destination-plan-checksum=<sha256> --projected-total=<decimal> --projected-total-checksum=<sha256> --wallet-send-total=<decimal8> --wallet-send-total-checksum=<sha256> --wallet-send-destination-plan-checksum=<sha256> --operator-confirms-wallet-send=<confirmation-text> --format=json\n".
 			"       php yaamp/yiic.php badpoolguard wallet-proof-closeout --coin-id=<id> --selected-payout-ids=<csv> --format=json\n".
+			"       php yaamp/yiic.php badpoolguard multi-wallet-send-preflight --selected-payout-ids=<explicit-csv> --format=json\n".
 			"       php yaamp/yiic.php badpoolguard payable-source-reconciliation-preview --coin-id=<id> [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard account-credit-transition-preview --coin-id=<id> [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard earnings-credit-readiness-preview --coin-id=<id> [--format=json|text]\n".
@@ -1997,6 +2004,29 @@ class BadpoolGuardCommand extends CConsoleCommand
 		$report['closeout_valid'] = $report['wallet_lookup_success'] && $report['wallet_txid_expected'] && $report['wallet_amount_matches_expected'] && $report['wallet_confirmations_present'];
 		if ($report['closeout_valid']) { $report['classification'] = 'PASS / WALLET PROOF CLOSEOUT COMPLETE'; $report['final_classification'] = 'PASS / WALLET PROOF CLOSEOUT COMPLETE'; $report['next_safe_lane_or_STOP'] = 'STOP'; }
 		return $this->guard->finalizeReport($report);
+	}
+
+	private function multiWalletSendPreflightReport()
+	{
+		if($this->guard->getFormat()!=='json'){
+			$this->guard->addError('multi-wallet-send-preflight supports --format=json only.');
+			return $this->multiWalletSendPreflightRefusal();
+		}
+		try{
+			$ids=BadpoolMultiWalletProductionPreflight::parseSelectedPayoutIds($this->guard->getOption('selected-payout-ids',null));
+			$repository=new BadpoolYiiExactMultiWalletPayoutRepository(app()->db);
+			$inspector=new BadpoolConfiguredReadOnlyWalletInspector();
+			$preflight=new BadpoolMultiWalletProductionPreflight($repository,$inspector);
+			return $preflight->run($ids);
+		}catch(Exception$e){
+			$this->guard->addError($e->getMessage());
+			return $this->multiWalletSendPreflightRefusal();
+		}
+	}
+
+	private function multiWalletSendPreflightRefusal()
+	{
+		return array('schema'=>BadpoolMultiWalletProductionPreflight::SCHEMA,'command'=>'multi-wallet-send-preflight','mode'=>'read-only-production-preflight','status'=>'refused','classification'=>'REFUSED','read_only'=>true,'human_approved'=>false,'authorization'=>'NONE; preflight does not authorize wallet sends.','wallet_reads'=>0,'wallet_sends'=>false,'wallet_rpc_send_performed'=>false,'db_mutations'=>false,'payout_mutations'=>false,'execution_journal_created'=>false,'send_attempt_started'=>false,'apply_handler_available'=>false,'blocked_actions'=>array('wallet_send','database_mutation','payout_mutation','execution_journal','SEND_ATTEMPT_STARTED','multi-wallet-send-apply'));
 	}
 
 	private function walletProofCloseoutHold($report, $field, $message) { $report['closeout_valid']=false; $report['classification']='HOLD / WALLET PROOF INCOMPLETE'; $report['final_classification']='HOLD / WALLET PROOF INCOMPLETE'; $report['fix_items'][]=$message; if ($field) $report['invalid_closeout_fields'][]=$field; return $this->guard->finalizeReport($report); }

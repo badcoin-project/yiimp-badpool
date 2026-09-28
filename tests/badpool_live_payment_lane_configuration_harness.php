@@ -57,8 +57,8 @@ lane_ok($skein->isAccountingCommissioned()&&$skein->isMaturityCommissioned()&&$s
 lane_ok($skein->maturityBlockLimit()===10&&$skein->batchLimit()===25,'Skein maturity or payout-preparation limit is incorrect');
 lane_ok(basename($skein->statePath())==='live-skein-coordinator.json'&&basename($skein->lockPath())==='live-skein-coordinator.lock','Skein state/lock binding is unsafe or unexpected');
 lane_ok($skein->get('wallet_binding_identity')==='skein'&&$skein->get('wallet_source_account')==='pool-skein','Skein wallet identity changed');
-lane_ok($skein->get('rpc_config_identity')===null&&$skein->get('wallet_datadir_identity')===null&&$skein->get('service_timer_identity')===null,'Skein gained an operational wallet or service identity');
-lane_ok(!$skein->isHumanApprovedWalletSendEligible(),'Skein became eligible for a human-approved send before reaching payout readiness');
+lane_ok($skein->get('rpc_config_identity')==='/etc/badcoin/pool-skein.conf'&&$skein->get('wallet_datadir_identity')==='/var/lib/badcoin-pool-skein'&&$skein->get('service_timer_identity')===null,'Skein guarded RPC identity or service separation changed');
+lane_ok($skein->isHumanApprovedWalletSendEligible()&&!$skein->isWalletSendCommissioned(),'Skein human approval eligibility must not enable recurring wallet send');
 $sha=$registry->get('live-sha256d-v1');
 lane_ok($sha->coinId()===1270&&$sha->operationalAlgo()==='sha256d'&&$sha->dbAlgo()==='sha256'&&$sha->blockBoundary()===32014,'SHA256d identity or boundary is incorrect');
 lane_ok($sha->isAccountingCommissioned()&&!$sha->isMaturityCommissioned()&&!$sha->isPayoutPreparationCommissioned()&&!$sha->isWalletSendCommissioned()&&!$sha->isCommissioned(),'SHA256d stages do not stop exactly after accounting');

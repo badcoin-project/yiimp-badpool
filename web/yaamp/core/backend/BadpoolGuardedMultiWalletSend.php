@@ -69,9 +69,21 @@ class BadpoolMultiWalletApprovalPlanner
 
 	public function build($approval)
 	{
+		return $this->buildInternal($approval,true);
+	}
+
+	/** Build a deterministic proposal without granting execution authority. */
+	public function buildPreflightProposal($approval)
+	{
+		return $this->buildInternal($approval,false);
+	}
+
+	private function buildInternal($approval,$requireHumanApproval)
+	{
 		$this->exactKeys($approval,array('schema','human_approved','entries'),'approval');
 		if($approval['schema']!==self::APPROVAL_SCHEMA)throw new InvalidArgumentException('Unsupported approval schema.');
-		if($approval['human_approved']!==true)throw new InvalidArgumentException('Explicit human approval is required.');
+		if($requireHumanApproval&&$approval['human_approved']!==true)throw new InvalidArgumentException('Explicit human approval is required.');
+		if(!$requireHumanApproval&&$approval['human_approved']!==false)throw new InvalidArgumentException('Preflight proposal must remain non-authorizing.');
 		if(!is_array($approval['entries'])||!count($approval['entries']))throw new InvalidArgumentException('Approval entries must be non-empty.');
 		$required=array('payout_id','lane_id','coin_id','account_id','amount','recipient','wallet_binding_identity','source_account_identity','expected_completed','expected_tx','expected_batch_state');
 		$entries=array();$previous=0;
@@ -98,7 +110,7 @@ class BadpoolMultiWalletApprovalPlanner
 			$this->same($entry['lane_id'],(string)$row['lane_id'],'lane mismatch',$id);$this->same($entry['coin_id'],$this->positiveInt($row['coin_id'],'stored coin_id'),'coin mismatch',$id);$this->same($entry['account_id'],$this->positiveInt($row['account_id'],'stored account_id'),'account mismatch',$id);$this->same($entry['amount'],$this->decimal($row['amount'],'stored amount'),'amount mismatch',$id);$this->same($entry['recipient'],(string)$row['recipient'],'recipient mismatch',$id);$this->same($entry['wallet_binding_identity'],(string)$row['wallet_binding_identity'],'wallet mismatch',$id);$this->same($entry['source_account_identity'],(string)$row['source_account_identity'],'source mismatch',$id);
 			if((int)$row['completed']!==0||$row['tx']!==null||(string)$row['batch_state']!==self::READY_STATE)throw new RuntimeException('Stored payout precondition changed for payout '.$id.'.');
 			$walletAmount=$this->projectEight($entry['amount']);$row['wallet_send_amount']=$walletAmount;$validated[]=$row;$rawTotal=$this->add($rawTotal,$entry['amount']);$walletTotal=$this->add($walletTotal,$walletAmount);
-			$key=$entry['wallet_binding_identity']."\n".$entry['source_account_identity'];if(!isset($groups[$key]))$groups[$key]=array('wallet_binding_identity'=>$entry['wallet_binding_identity'],'source_account_identity'=>$entry['source_account_identity'],'rpc_config_identity'=>$lane->get('rpc_config_identity'),'wallet_datadir_identity'=>$lane->get('wallet_datadir_identity'),'payout_ids'=>array(),'recipients'=>array(),'raw_total'=>'0','wallet_send_total'=>'0');
+			$key=$entry['wallet_binding_identity']."\n".$entry['source_account_identity'];if(!isset($groups[$key]))$groups[$key]=array('lane_id'=>$entry['lane_id'],'coin_id'=>$entry['coin_id'],'wallet_binding_identity'=>$entry['wallet_binding_identity'],'source_account_identity'=>$entry['source_account_identity'],'rpc_config_identity'=>$lane->get('rpc_config_identity'),'wallet_datadir_identity'=>$lane->get('wallet_datadir_identity'),'payout_ids'=>array(),'recipients'=>array(),'raw_total'=>'0','wallet_send_total'=>'0');
 			if(isset($groups[$key]['recipients'][$entry['recipient']]))throw new RuntimeException('Duplicate recipient inside one wallet operation is refused: '.$entry['recipient']);
 			$groups[$key]['payout_ids'][]=$id;$groups[$key]['recipients'][$entry['recipient']]=$walletAmount;$groups[$key]['raw_total']=$this->add($groups[$key]['raw_total'],$entry['amount']);$groups[$key]['wallet_send_total']=$this->add($groups[$key]['wallet_send_total'],$walletAmount);
 		}
