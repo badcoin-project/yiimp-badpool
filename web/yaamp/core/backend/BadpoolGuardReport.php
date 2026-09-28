@@ -64,7 +64,7 @@ class BadpoolGuardReport
 				if (self::arrayValue($report, 'schema') !== self::BOUNDED_MATURITY_APPROVAL_PACKAGE_SCHEMA) $report['schema'] = self::APPROVAL_PACKAGE_SCHEMA;
 				$report['mode'] = self::APPROVAL_PACKAGE_MODE;
 			}
-			elseif (self::arrayValue($report, 'schema') !== 'badpool.payment_batch.preview.v1') {
+			elseif (self::arrayValue($report, 'schema') !== 'badpool.payment_batch.preview.v1' && self::arrayValue($report, 'schema') !== 'badpool.wallet_send.multi_wallet_preflight.v1') {
 				if (!self::isCanonicalStage1Manifest($report) && !self::isBackwardMaturityDryrun($report)) $report['schema'] = self::PREVIEW_SCHEMA;
 				$report['mode'] = self::PREVIEW_MODE;
 			}
