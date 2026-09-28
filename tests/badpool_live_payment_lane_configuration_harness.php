@@ -49,7 +49,7 @@ lane_ok($yescrypt->isAccountingCommissioned()&&$yescrypt->isMaturityCommissioned
 lane_ok($yescrypt->maturityBlockLimit()===10&&$yescrypt->batchLimit()===25,'Yescrypt maturity or payout-preparation limit is incorrect');
 lane_ok(basename($yescrypt->statePath())==='live-yescrypt-coordinator.json'&&basename($yescrypt->lockPath())==='live-yescrypt-coordinator.lock','Yescrypt state/lock binding is unsafe or unexpected');
 lane_ok($yescrypt->get('wallet_binding_identity')==='yescrypt'&&$yescrypt->get('wallet_source_account')==='pool-yescrypt','Yescrypt wallet identity changed');
-lane_ok($yescrypt->get('rpc_config_identity')===null&&$yescrypt->get('wallet_datadir_identity')===null&&$yescrypt->get('service_timer_identity')===null,'Yescrypt gained an operational wallet or service identity');
+lane_ok($yescrypt->get('rpc_config_identity')==='/etc/badcoin/pool-yescrypt.conf'&&$yescrypt->get('wallet_datadir_identity')==='/var/lib/badcoin-pool-yescrypt'&&$yescrypt->get('service_timer_identity')===null,'Yescrypt guarded RPC identity or service separation changed');
 lane_ok($yescrypt->isHumanApprovedWalletSendEligible()&&!$yescrypt->isWalletSendCommissioned(),'Yescrypt human-approved eligibility was not kept separate from recurring wallet commissioning');
 $skein=$registry->get('live-skein-v1');
 lane_ok($skein->coinId()===1268&&$skein->operationalAlgo()==='skein'&&$skein->dbAlgo()==='skein'&&$skein->blockBoundary()===31812,'Skein identity or boundary is incorrect');
@@ -73,6 +73,7 @@ lane_ok($groestl->isAccountingCommissioned()&&$groestl->isMaturityCommissioned()
 lane_ok($groestl->maturityBlockLimit()===10&&$groestl->batchLimit()===25,'Groestl maturity or payout-preparation limit changed');
 lane_ok($groestl->isHumanApprovedWalletSendEligible()&&!$groestl->isWalletSendCommissioned(),'Groestl human-approved eligibility was not kept separate from recurring wallet commissioning');
 lane_ok(basename($groestl->statePath())==='live-groestl-coordinator.json'&&basename($groestl->lockPath())==='live-groestl-coordinator.lock','Groestl state/lock binding is unsafe or unexpected');
+lane_ok($groestl->get('rpc_config_identity')==='/etc/badcoin/pool-groestl.conf'&&$groestl->get('wallet_datadir_identity')==='/var/lib/badcoin-pool-groestl'&&$groestl->get('service_timer_identity')===null,'Groestl guarded RPC identity or service separation changed');
 lane_ok($sha->operationalAlgo()==='sha256d'&&$sha->dbAlgo()==='sha256','SHA256d operational/DB mapping collapsed');
 
 $owner=$scrypt->ownershipEnvelope();lane_ok($registry->fromOwnershipEnvelope($owner)===$scrypt,'exact Scrypt ownership envelope was not resolved');
