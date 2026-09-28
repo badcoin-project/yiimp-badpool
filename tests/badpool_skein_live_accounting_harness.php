@@ -52,10 +52,10 @@ skein_ok($lane->operationalAlgo()==='skein','Skein operational algorithm is not 
 skein_ok($lane->blockBoundary()===31812,'Skein permanent boundary changed');
 skein_ok($lane->isAccountingCommissioned(),'Skein accounting is not commissioned');
 skein_ok($lane->isMaturityCommissioned(),'Skein maturity is not commissioned');
-skein_ok(!$lane->isPayoutPreparationCommissioned(),'Skein payout preparation was commissioned');
+skein_ok($lane->isPayoutPreparationCommissioned(),'Skein payout preparation is not commissioned');
 skein_ok(!$lane->isWalletSendCommissioned(),'Skein wallet send was commissioned');
-skein_ok(!$lane->isCommissioned(),'Skein compatibility commissioning predicate is true');
-skein_ok($lane->maturityBlockLimit()===10&&$lane->batchLimit()===null,'Skein maturity or payout-preparation limit is incorrect');
+skein_ok($lane->isCommissioned(),'Skein compatibility commissioning predicate is false');
+skein_ok($lane->maturityBlockLimit()===10&&$lane->batchLimit()===25,'Skein maturity or payout-preparation limit is incorrect');
 skein_ok(basename($lane->statePath())==='live-skein-coordinator.json','Skein state filename changed');
 skein_ok(basename($lane->lockPath())==='live-skein-coordinator.lock','Skein lock filename changed');
 skein_ok($lane->get('wallet_binding_identity')==='skein'&&$lane->get('wallet_source_account')==='pool-skein','Skein wallet identity metadata changed');
@@ -64,7 +64,7 @@ skein_ok($lane->get('rpc_config_identity')===null&&$lane->get('wallet_datadir_id
 $states=array();$locks=array();foreach($registry->all() as $configured){$states[]=basename($configured->statePath());$locks[]=basename($configured->lockPath());}
 skein_ok(count($states)===count(array_unique($states)),'Skein state filename is not unique');
 skein_ok(count($locks)===count(array_unique($locks)),'Skein lock filename is not unique');
-skein_ok($registry->fromOwnershipEnvelope($lane->ownershipEnvelope())===null,'Maturity-only Skein was exposed to payment coordinator ownership');
+skein_ok($registry->fromOwnershipEnvelope($lane->ownershipEnvelope())===$lane,'Commissioned Skein payment ownership was not resolved');
 
 $scrypt=$registry->get('live-scrypt-v1');$yescrypt=$registry->get('live-yescrypt-v1');$groestl=$registry->get('live-groestl-v1');$sha=$registry->get('uncommissioned-sha256d');
 skein_ok($scrypt->coinId()===1267&&$scrypt->dbAlgo()==='scrypt'&&$scrypt->blockBoundary()===29242&&$scrypt->isWalletSendCommissioned(),'Existing Scrypt configuration changed');
