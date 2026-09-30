@@ -1,6 +1,6 @@
 <?php
 /** Exact-decimal funding authority. Configure externally, for example:
- * define('YAAMP_BADPOOL_MINIMUM_WALLET_RESERVES', array(1267 => '<operator-selected BAD amount>'));
+ * define('YAAMP_BADPOOL_MINIMUM_WALLET_RESERVES', array(1267 => '1000'));
  * Absence is deliberately different from explicitly configured zero. */
 class BadpoolWalletFundingGuard
 {

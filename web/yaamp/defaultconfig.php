@@ -25,6 +25,15 @@ if (!defined('YAAMP_TXFEE_RENTING_WD')) define('YAAMP_TXFEE_RENTING_WD', 0.002);
 if (!defined('YAAMP_PAYMENTS_FREQ')) define('YAAMP_PAYMENTS_FREQ', 24*60*60);
 if (!defined('YAAMP_PAYMENTS_MINI')) define('YAAMP_PAYMENTS_MINI', 0.001);
 
+// Fixed post-send floors for payout-commissioned Badcoin pool wallets.
+// SHA256d coin 1270 remains accounting-only and is intentionally absent.
+if (!defined('YAAMP_BADPOOL_MINIMUM_WALLET_RESERVES')) define('YAAMP_BADPOOL_MINIMUM_WALLET_RESERVES', array(
+	1266 => '1000', // Yescrypt
+	1267 => '1000', // Scrypt
+	1268 => '1000', // Skein
+	1269 => '1000', // Groestl
+));
+
 if (!defined('YAAMP_ALLOW_EXCHANGE')) define('YAAMP_ALLOW_EXCHANGE', false);
 if (!defined('EXCH_AUTO_WITHDRAW')) define('EXCH_AUTO_WITHDRAW', 9999.9999);
 
