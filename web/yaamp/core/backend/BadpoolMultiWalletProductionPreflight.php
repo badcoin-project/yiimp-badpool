@@ -17,34 +17,73 @@ interface BadpoolReadOnlyWalletReadinessInspector
  */
 class BadpoolConfiguredReadOnlyWalletInspector implements BadpoolReadOnlyWalletReadinessInspector
 {
-	private $timeout;
-	public function __construct($timeout=10){$this->timeout=max(1,intval($timeout));}
+	private $timeout,$transport,$registry;
+	public function __construct($timeout=10,$transport=null,$registry=null)
+	{
+		if($transport!==null&&!is_callable($transport))throw new InvalidArgumentException('Read-only RPC transport must be callable.');
+		if($registry!==null&&!($registry instanceof BadpoolLivePaymentLaneRegistry))throw new InvalidArgumentException('Live-payment lane registry required.');
+		$this->timeout=max(1,intval($timeout));$this->transport=$transport;$this->registry=$registry?:new BadpoolLivePaymentLaneRegistry();
+	}
 
 	public function inspect($operation)
 	{
 		$base=array('daemon_reachable'=>false,'readiness_reachable'=>false,'available_balance'=>null,'balance_scope'=>'exact legacy named source account','balance_semantics'=>'getbalance(source_account,1); decoded floating point is not used','reason'=>null,'rpc_methods'=>array('getnetworkinfo','getblockchaininfo','getwalletinfo','getbalance'));
-		$path=isset($operation['rpc_config_identity'])?$operation['rpc_config_identity']:null;
-		if(!is_string($path)||$path===''||is_link($path)||!is_file($path)){$base['reason']='RPC config is missing or unsafe.';return$base;}
-		try{$config=$this->config($path);$network=$this->rpc($config,'getnetworkinfo',array(),false);$chain=$this->rpc($config,'getblockchaininfo',array(),false);$wallet=$this->rpc($config,'getwalletinfo',array(),false);$balance=$this->rpc($config,'getbalance',array($operation['source_account_identity'],1),true);}
-		catch(Exception$e){$base['reason']='Read-only wallet readiness failed: '.$this->redact($e->getMessage());return$base;}
+		try{
+			$identity=$this->authoritativeIdentity($operation);
+			$config=$this->config($identity['config'],$identity['datadir']);
+			$network=$this->rpc($config,'getnetworkinfo',array(),false);$chain=$this->rpc($config,'getblockchaininfo',array(),false);$wallet=$this->rpc($config,'getwalletinfo',array(),false);$balance=$this->rpc($config,'getbalance',array($identity['source_account'],1),true);
+		}
+		catch(Exception$e){$base['reason']='Read-only wallet readiness failed closed.';return$base;}
 		if(!is_array($network)||!is_array($chain)||!is_array($wallet)||!is_string($balance)||!preg_match('/^(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$/',$balance)){$base['reason']='Read-only wallet response was incomplete or malformed.';return$base;}
 		if(array_key_exists('unlocked_until',$wallet)&&intval($wallet['unlocked_until'])<=0){$base['daemon_reachable']=true;$base['available_balance']=$balance;$base['reason']='Wallet is locked.';return$base;}
 		$base['daemon_reachable']=true;$base['readiness_reachable']=true;$base['available_balance']=$balance;$base['reason']=null;return$base;
 	}
 
-	private function config($path)
+	private function authoritativeIdentity($operation)
+	{
+		if(!is_array($operation)||!isset($operation['lane_id']))throw new RuntimeException('Wallet operation identity is unavailable.');
+		$lane=$this->registry->get($operation['lane_id']);$expected=array('config'=>$lane->get('rpc_config_identity'),'datadir'=>$lane->get('wallet_datadir_identity'),'source_account'=>$lane->get('wallet_source_account'),'wallet'=>$lane->get('wallet_binding_identity'),'coin_id'=>$lane->coinId());
+		$actual=array('config'=>isset($operation['rpc_config_identity'])?$operation['rpc_config_identity']:null,'datadir'=>isset($operation['wallet_datadir_identity'])?$operation['wallet_datadir_identity']:null,'source_account'=>isset($operation['source_account_identity'])?$operation['source_account_identity']:null,'wallet'=>isset($operation['wallet_binding_identity'])?$operation['wallet_binding_identity']:null,'coin_id'=>isset($operation['coin_id'])?$operation['coin_id']:null);
+		if($actual!==$expected)throw new RuntimeException('Wallet operation identity does not match its configured lane.');
+		if(!$this->isAbsolutePath($expected['datadir']))throw new RuntimeException('Wallet datadir identity must be absolute.');
+		if(is_link($expected['datadir'])||!is_dir($expected['datadir']))throw new RuntimeException('Wallet datadir identity is missing or unsafe.');
+		if(!is_string($expected['config'])||$expected['config']===''||is_link($expected['config'])||!is_file($expected['config']))throw new RuntimeException('RPC config identity is missing or unsafe.');
+		return$expected;
+	}
+
+	private function config($path,$datadir)
 	{
 		$values=array();foreach(@file($path,FILE_IGNORE_NEW_LINES)?:array()as$line){$line=trim($line);if($line===''||$line[0]==='#'||$line[0]===';')continue;if(strpos($line,'=')===false)continue;list($k,$v)=array_map('trim',explode('=',$line,2));$values[strtolower($k)]=$v;}
-		foreach(array('rpcuser','rpcpassword','rpcport')as$key)if(!isset($values[$key])||$values[$key]==='')throw new RuntimeException('Required RPC configuration field is unavailable.');
+		if(!isset($values['rpcport'])||$values['rpcport']==='')throw new RuntimeException('Required RPC port is unavailable.');
 		$host=isset($values['rpcconnect'])?$values['rpcconnect']:(isset($values['rpchost'])?$values['rpchost']:'127.0.0.1');
 		if(!preg_match('/^(?:127\.0\.0\.1|localhost|::1)$/',$host))throw new RuntimeException('Preflight refuses non-loopback RPC endpoints.');
 		if(!preg_match('/^[1-9][0-9]{0,4}$/',$values['rpcport'])||intval($values['rpcport'])>65535)throw new RuntimeException('RPC port is invalid.');
-		return array('user'=>$values['rpcuser'],'password'=>$values['rpcpassword'],'url'=>'http://'.$host.':'.$values['rpcport'].'/');
+		$hasUser=isset($values['rpcuser'])&&$values['rpcuser']!=='';$hasPassword=isset($values['rpcpassword'])&&$values['rpcpassword']!=='';
+		if($hasUser!==$hasPassword)throw new RuntimeException('Explicit RPC authentication is incomplete.');
+		$auth=$hasUser?array($values['rpcuser'],$values['rpcpassword']):$this->cookieAuthentication($datadir);
+		$urlHost=$host==='::1'?'[::1]':$host;
+		return array('user'=>$auth[0],'password'=>$auth[1],'url'=>'http://'.$urlHost.':'.$values['rpcport'].'/');
+	}
+
+	private function cookieAuthentication($datadir)
+	{
+		$path=rtrim($datadir,'/\\').'/.cookie';
+		if(is_link($path)||!is_file($path)||!is_readable($path))throw new RuntimeException('Native wallet cookie is missing or unsafe.');
+		$raw=@file_get_contents($path);if(!is_string($raw)||$raw===''||strlen($raw)>4096)throw new RuntimeException('Native wallet cookie is malformed.');
+		$raw=rtrim($raw,"\r\n");if($raw===''||preg_match('/[\x00-\x1F\x7F]/',$raw)||strpos($raw,':')===false)throw new RuntimeException('Native wallet cookie is malformed.');
+		list($user,$password)=explode(':',$raw,2);if($user===''||$password==='')throw new RuntimeException('Native wallet cookie is malformed.');
+		return array($user,$password);
+	}
+
+	private function isAbsolutePath($path)
+	{
+		return is_string($path)&&($path!==''&&($path[0]==='/'||preg_match('/^[A-Za-z]:[\\\\\/]/',$path)===1||substr($path,0,2)==='\\\\'));
 	}
 
 	private function rpc($config,$method,$params,$decimal)
 	{
 		$allowed=array('getnetworkinfo'=>true,'getblockchaininfo'=>true,'getwalletinfo'=>true,'getbalance'=>true);if(!isset($allowed[$method]))throw new RuntimeException('RPC method is not read-only allowlisted.');
+		if($this->transport!==null)return call_user_func($this->transport,$config,$method,$params,$decimal);
 		if(!function_exists('curl_init'))throw new RuntimeException('cURL is unavailable.');
 		$payload=json_encode(array('jsonrpc'=>'1.0','id'=>'badpool-read-only-preflight','method'=>$method,'params'=>$params));$h=curl_init($config['url']);curl_setopt_array($h,array(CURLOPT_RETURNTRANSFER=>true,CURLOPT_POST=>true,CURLOPT_POSTFIELDS=>$payload,CURLOPT_HTTPAUTH=>CURLAUTH_BASIC,CURLOPT_USERPWD=>$config['user'].':'.$config['password'],CURLOPT_HTTPHEADER=>array('Content-Type: application/json'),CURLOPT_CONNECTTIMEOUT=>$this->timeout,CURLOPT_TIMEOUT=>$this->timeout));$raw=curl_exec($h);$error=curl_error($h);$status=intval(curl_getinfo($h,CURLINFO_HTTP_CODE));curl_close($h);
 		if(!is_string($raw)||$raw===''||$status!==200)throw new RuntimeException($error!==''?'RPC transport error.':'RPC returned a non-success response.');
@@ -53,7 +92,6 @@ class BadpoolConfiguredReadOnlyWalletInspector implements BadpoolReadOnlyWalletR
 		if(!preg_match('/"result"\s*:\s*(-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?)/',$raw,$m))throw new RuntimeException('RPC decimal result is unavailable.');return ltrim($m[1],'+');
 	}
 
-	private function redact($message){return preg_replace('/(rpcuser|rpcpassword|password|user|cookie|token)\s*[^ ]*/i','$1=REDACTED',(string)$message);}
 }
 
 /** Atomic, symlink-refusing storage separate from execution journals. */

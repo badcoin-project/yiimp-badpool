@@ -1,9 +1,17 @@
 <?php
 function arraySafeVal($a,$k,$d=null){return is_array($a)&&array_key_exists($k,$a)?$a[$k]:$d;}
+require_once dirname(__DIR__).'/web/yaamp/defaultconfig.php';
 require_once dirname(__DIR__).'/web/yaamp/core/backend/BadpoolWalletFundingGuard.php';
 require_once dirname(__DIR__).'/web/yaamp/core/rpc/wallet-rpc.php';
-$fail=array(); function ok($v,$m){global $fail;if(!$v)$fail[]=$m;}
+$fail=array();$checks=0; function ok($v,$m){global $fail,$checks;$checks++;if(!$v)$fail[]=$m;}
 function funding($balance,$send,$reserve,$configured=true){return BadpoolWalletFundingGuard::evaluate($balance,$send,array('configured'=>$configured,'value'=>$reserve,'error'=>'fixture'));}
+$configured=constant('YAAMP_BADPOOL_MINIMUM_WALLET_RESERVES');
+ok($configured===array(1266=>'1000',1267=>'1000',1268=>'1000',1269=>'1000'),'four-wallet reserve map is exact and SHA256d is absent');
+foreach(array(1266,1267,1268,1269)as$coin)ok(BadpoolWalletFundingGuard::configuredReserve($coin)===array('configured'=>true,'value'=>'1000','error'=>null),'coin '.$coin.' reserve is exact');
+ok(BadpoolWalletFundingGuard::configuredReserve(1270)['configured']===false,'coin 1270 remains unconfigured');
+$required=funding('55111.53081165','54111.53081165','1000');ok($required['required_wallet_balance']==='55111.53081165'&&$required['projected_post_send_balance']==='1000'&&$required['reserve_preserved'],'exact projected send plus reserve passes at equality');
+$atomicBelow=funding('55111.53081164','54111.53081165','1000');ok($atomicBelow['projected_post_send_balance']==='999.99999999'&&!$atomicBelow['reserve_preserved'],'one atomic unit below required fails');
+$postBelow=funding('55111.530811649','54111.53081165','1000');ok($postBelow['projected_post_send_balance']==='999.999999999'&&!$postBelow['reserve_preserved'],'post-send balance below fixed floor fails');
 $greater=funding('100.00000000','20.12345678','10'); ok($greater['funding_classification']==='PASS / WALLET FUNDING SUFFICIENT','greater balance');
 $equal=funding('30.12345678','20.12345678','10');ok($equal['reserve_preserved']&&$equal['projected_post_send_balance']==='10','equal balance');
 $reserveHold=funding('25','20','10');ok(!$reserveHold['reserve_preserved']&&$reserveHold['sufficient_for_send'],'reserve-only hold');
@@ -35,4 +43,4 @@ ok($wallet->badpoolGuardedSpendableBalance('')==='30.00000000'&&$fixture->calls=
 $accountHold=funding($wallet->badpoolGuardedSpendableBalance(''),'25','10');ok($accountHold['funding_classification']==='HOLD / WALLET FUNDING INSUFFICIENT'&&funding('100','25','10')['funding_classification']==='PASS / WALLET FUNDING SUFFICIENT','account insufficient holds despite hypothetical wildcard sufficiency');
 ok(strpos($apply,'$walletAccount=(string)$coin->account')!==false&&strpos($apply,'walletFundingCheck($remote,intval($opts[\'coin-id\']),(string)$approval[\'wallet_send_total\'],$walletAccount)')!==false&&strpos($apply,'badpoolGuardedSendmanyApply($walletAccount, $dests)')!==false,'apply balance and send share one account variable');
 ok(strpos($src,"'wallet_balance_scope'=>'same account used as sendmany fromaccount'")!==false,'preflight reports account scope');
-if($fail){echo "Badpool wallet funding guard harness FAILED\n";foreach($fail as$f)echo" - $f\n";exit(1);}echo"Badpool wallet funding guard harness passed\n";
+if($fail){echo "FAIL Badpool wallet funding guard harness ($checks checks)\n";foreach($fail as$f)echo" - $f\n";exit(1);}echo"PASS Badpool wallet funding guard harness ($checks checks)\n";
