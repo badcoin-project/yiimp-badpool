@@ -2015,7 +2015,8 @@ class BadpoolGuardCommand extends CConsoleCommand
 		try{
 			$ids=BadpoolMultiWalletProductionPreflight::parseSelectedPayoutIds($this->guard->getOption('selected-payout-ids',null));
 			$repository=new BadpoolYiiExactMultiWalletPayoutRepository(app()->db);
-			$inspector=new BadpoolConfiguredReadOnlyWalletInspector();
+			$transport=new BadpoolReadOnlyWalletCliTransport();
+			$inspector=new BadpoolConfiguredReadOnlyWalletInspector($transport);
 			$preflight=new BadpoolMultiWalletProductionPreflight($repository,$inspector);
 			return $preflight->run($ids);
 		}catch(Exception$e){
