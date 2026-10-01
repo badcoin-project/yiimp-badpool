@@ -64,6 +64,8 @@ sm_ok(!in_array(529,$plan['payout_ids'],true),'unrelated payout excluded');
 
 list($exec,$repo,$gateway,$journal)=sm_system($rows,'success');$r=$exec->execute($approval);
 sm_ok($r['status']==='pass'&&$r['journal_state']==='RECONCILED','all wallet success reconciles');
+sm_ok($r['db_reconciliation_status']==='complete'&&$r['db_completion_success']===true,'successful reconciliation completion metadata');
+sm_ok($r['db_mutations']===true&&$r['db_mutation_status']==='guarded_transaction_committed','successful reconciliation mutation metadata');
 sm_ok($gateway->calls===array('scrypt','groestl','yescrypt'),'one call per wallet in order');
 sm_ok(array_slice($gateway->events,0,3)===array('preflight:scrypt','preflight:groestl','preflight:yescrypt'),'all funding checks before first send');
 sm_ok($gateway->startEvidence,'SEND_ATTEMPT_STARTED visible before every call');
@@ -73,7 +75,7 @@ sm_ok($repo->reconciled[526]===str_repeat('a',64),'Scrypt txid mapped to 526');
 sm_ok($repo->reconciled[527]===str_repeat('b',64),'Groestl txid mapped to 527');
 sm_ok($repo->reconciled[528]===str_repeat('c',64),'Yescrypt txid mapped to 528');
 sm_ok($repo->rows[529]['completed']===0,'unrelated payout untouched');
-$again=$exec->execute($approval);sm_ok($again['status']==='pass'&&count($gateway->calls)===3,'reconciled restart never resends');
+$again=$exec->execute($approval);sm_ok($again['status']==='pass'&&count($gateway->calls)===3,'reconciled restart never resends');sm_ok($again['db_reconciliation_status']==='complete'&&$again['db_completion_success']===true&&$again['db_mutations']===false&&$again['db_mutation_status']==='none','already-reconciled restart reports no mutation this run');
 
 foreach(array('scrypt','groestl','yescrypt')as$wallet){list($exec,$repo,$gateway,$journal)=sm_system($rows,'fund-'.$wallet);$gateway->readiness[$wallet]=array('ready'=>false,'reason'=>$wallet.' insufficient balance');$r=$exec->execute($approval);sm_ok($r['reason']==='wallet_preflight_failed'&&count($gateway->calls)===0,$wallet.' funding failure blocks all sends');}
 list($exec,$repo,$gateway,$journal)=sm_system($rows,'reserve');$gateway->readiness['groestl']=array('ready'=>false,'reason'=>'reserve requirement');$r=$exec->execute($approval);sm_ok(count($gateway->calls)===0&&strpos($r['error'],'reserve')!==false,'reserve enforcement blocks all sends');
@@ -89,6 +91,7 @@ list($exec,$repo,$gateway,$journal)=sm_system($rows,'changed-initial');$repo->ro
 list($exec,$repo,$gateway,$journal)=sm_system($rows,'changed-between');$gateway->onSend=function($wallet)use($repo){if($wallet==='scrypt')$repo->rows[527]['recipient']='changed-destination';};$r=$exec->execute($approval);sm_ok($r['reason']==='payout_changed_between_wallet_operations'&&$gateway->calls===array('scrypt'),'changed payout between operations holds safely');sm_ok($journal->load(BadpoolMultiWalletApprovalPlanner::checksum($approval))['global_state']==='HOLD_MANUAL_RECOVERY','changed-between journal holds');
 
 list($exec,$repo,$gateway,$journal)=sm_system($rows,'db-fail');$repo->failReconcile=true;$r=$exec->execute($approval);$j=$journal->load(BadpoolMultiWalletApprovalPlanner::checksum($approval));sm_ok($r['reason']==='database_reconciliation_failed'&&$j['global_state']==='HOLD_MANUAL_RECOVERY','DB failure holds');$txCount=0;foreach($j['operations']as$o)if($o['txid'])$txCount++;sm_ok($txCount===3,'DB failure preserves all txids');$retry=$exec->execute($approval);sm_ok(count($gateway->calls)===3&&$retry['reason']==='manual_recovery_required','DB failure blocks resend');sm_ok($repo->rows[526]['completed']===0&&$repo->rows[527]['completed']===0&&$repo->rows[528]['completed']===0,'failed reconciliation is all-or-none');
+sm_ok($r['db_reconciliation_status']==='failed'&&$r['db_completion_success']===false&&$r['db_mutations']===false&&$r['db_mutation_status']==='none','rolled-back DB failure reports no mutation');
 
 list($exec,$repo,$gateway,$journal)=sm_system($rows,'restart-safe');$plan=$exec->preflight($approval);$journal->prepare($plan);$op=$plan['operations'][0];$journal->startAttempt($plan['approval_checksum'],$op['operation_id']);$journal->recordTxid($plan['approval_checksum'],$op['operation_id'],str_repeat('a',64));$r=$exec->execute($approval);sm_ok($r['status']==='pass'&&$gateway->calls===array('groestl','yescrypt'),'restart resumes after recorded txid without resend');
 list($exec,$repo,$gateway,$journal)=sm_system($rows,'restart-uncertain');$plan=$exec->preflight($approval);$journal->prepare($plan);$journal->startAttempt($plan['approval_checksum'],$plan['operations'][0]['operation_id']);$r=$exec->execute($approval);sm_ok($r['reason']==='uncertain_prior_attempt'&&count($gateway->calls)===0,'restart after attempt without txid requires recovery');
