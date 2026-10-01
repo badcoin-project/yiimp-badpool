@@ -1,0 +1,8 @@
+<?php
+$checks=0;$failures=array();function co_ok($value,$message){global$checks,$failures;$checks++;if(!$value)$failures[]=$message;}
+$root=dirname(__DIR__);$entrypoints=array('web/index.php','web/run.php','web/runconsole.php','web/yaamp/yiic.php','web/yaamp/modules/thread/CronjobController.php');
+foreach($entrypoints as$file){$source=file_get_contents($root.'/'.$file);$server=strpos($source,"require_once('serverconfig.php')");$defaults=strpos($source,"require_once('yaamp/defaultconfig.php')");co_ok($server!==false&&$defaults!==false&&$server<$defaults,$file.' loads serverconfig before defaults');}
+$defaultsSource=file_get_contents($root.'/web/yaamp/defaultconfig.php');co_ok(strpos($defaultsSource,"if (!defined('YAAMP_BADPOOL_MINIMUM_WALLET_RESERVES'))")!==false,'repository reserve defaults are guarded by a pre-defined constant');
+co_ok(strpos($defaultsSource,"1266 => '1000'")!==false&&strpos($defaultsSource,"1267 => '1000'")!==false&&strpos($defaultsSource,"1268 => '1000'")!==false&&strpos($defaultsSource,"1269 => '1000'")!==false&&strpos($defaultsSource,'1270 =>')===false,'repository default policy remains four 1000 reserves with SHA256d absent');
+define('YAAMP_BADPOOL_MINIMUM_WALLET_RESERVES',array(1267=>'100'));require_once($root.'/web/yaamp/defaultconfig.php');$effective=constant('YAAMP_BADPOOL_MINIMUM_WALLET_RESERVES');co_ok($effective===array(1267=>'100'),'pre-defined production-style serverconfig value overrides repository defaults');
+if($failures){echo"FAIL Badpool config override harness ($checks checks)\n - ".implode("\n - ",$failures)."\n";exit(1);}echo"PASS Badpool config override harness ($checks checks)\n";
