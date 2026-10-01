@@ -15,6 +15,7 @@ require_once(dirname(__FILE__).'/../core/backend/BadpoolCompletedPayoutBatchClos
 require_once(dirname(__FILE__).'/../core/backend/BadpoolWalletFundingGuard.php');
 require_once(dirname(__FILE__).'/../core/backend/BadpoolYiiExactMultiWalletPayoutRepository.php');
 require_once(dirname(__FILE__).'/../core/backend/BadpoolMultiWalletProductionPreflight.php');
+require_once(dirname(__FILE__).'/../core/backend/BadpoolMultiWalletSendApply.php');
 require_once(dirname(__FILE__).'/../core/backend/BadpoolConfirmedBlockPaymentDelayOverride.php');
 require_once(dirname(__FILE__).'/../core/rpc/wallet-rpc.php');
 
@@ -52,6 +53,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 		'wallet-send-apply',
 		'wallet-proof-closeout',
 		'multi-wallet-send-preflight',
+		'multi-wallet-send-apply',
 		'payable-source-reconciliation-preview',
 		'account-credit-transition-preview',
 		'earnings-credit-readiness-preview',
@@ -127,6 +129,9 @@ class BadpoolGuardCommand extends CConsoleCommand
 		}
 		if ($action === 'wallet-send-apply') {
 			$actionArgs = $this->walletSendApplyContextArgs($args);
+		}
+		if ($action === 'multi-wallet-send-apply') {
+			$actionArgs = $this->multiWalletSendApplyContextArgs($args);
 		}
 		elseif ($action === 'block-accounting-dryrun') {
 			$actionArgs = $this->blockAccountingDryrunContextArgs($args);
@@ -211,6 +216,9 @@ class BadpoolGuardCommand extends CConsoleCommand
 				break;
 			case 'multi-wallet-send-preflight':
 				$report = $this->multiWalletSendPreflightReport();
+				break;
+			case 'multi-wallet-send-apply':
+				$report = $this->multiWalletSendApplyReport($args);
 				break;
 			case 'payable-source-reconciliation-preview':
 				$report = $this->payableSourceReconciliationPreviewReport();
@@ -352,6 +360,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 			"       php yaamp/yiic.php badpoolguard wallet-send-apply --coin-id=<id> --selected-payout-ids=<csv> --approval-package-checksum=<sha256> --row-inventory-checksum=<sha256> --destination-plan-checksum=<sha256> --projected-total=<decimal> --projected-total-checksum=<sha256> --wallet-send-total=<decimal8> --wallet-send-total-checksum=<sha256> --wallet-send-destination-plan-checksum=<sha256> --operator-confirms-wallet-send=<confirmation-text> --format=json\n".
 			"       php yaamp/yiic.php badpoolguard wallet-proof-closeout --coin-id=<id> --selected-payout-ids=<csv> --format=json\n".
 			"       php yaamp/yiic.php badpoolguard multi-wallet-send-preflight --selected-payout-ids=<explicit-csv> --format=json\n".
+			"       php yaamp/yiic.php badpoolguard multi-wallet-send-apply --preflight-report=<retained-json> --preflight-report-checksum=<file-sha256> --approval-checksum=<approval-sha256> --selected-payout-ids=<sorted-csv> --operator-confirms-multi-wallet-send=".BadpoolMultiWalletSendApply::CONFIRMATION." --format=json\n".
 			"       php yaamp/yiic.php badpoolguard payable-source-reconciliation-preview --coin-id=<id> [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard account-credit-transition-preview --coin-id=<id> [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard earnings-credit-readiness-preview --coin-id=<id> [--format=json|text]\n".
@@ -2030,6 +2039,12 @@ class BadpoolGuardCommand extends CConsoleCommand
 		return array('schema'=>BadpoolMultiWalletProductionPreflight::SCHEMA,'command'=>'multi-wallet-send-preflight','mode'=>'read-only-production-preflight','status'=>'refused','classification'=>'REFUSED','read_only'=>true,'human_approved'=>false,'authorization'=>'NONE; preflight does not authorize wallet sends.','wallet_reads'=>0,'wallet_sends'=>false,'wallet_rpc_send_performed'=>false,'db_mutations'=>false,'payout_mutations'=>false,'execution_journal_created'=>false,'send_attempt_started'=>false,'apply_handler_available'=>false,'blocked_actions'=>array('wallet_send','database_mutation','payout_mutation','execution_journal','SEND_ATTEMPT_STARTED','multi-wallet-send-apply'));
 	}
 
+	private function multiWalletSendApplyReport($args)
+	{
+		try{$options=BadpoolMultiWalletSendApply::parseOptions($args);$repository=new BadpoolYiiExactMultiWalletPayoutRepository(app()->db);$apply=new BadpoolMultiWalletSendApply($repository);$report=$apply->execute($options);if($report['status']!=='pass')$this->guard->addError(isset($report['error'])&&$report['error']?$report['error']:'Multi-wallet apply did not complete.');return$report;}
+		catch(Exception$e){$this->guard->addError($e->getMessage());return array('schema'=>'badpool.wallet_send.multi_wallet_apply.v1','command'=>'multi-wallet-send-apply','status'=>'refused','classification'=>'REFUSED','wallet_sends_attempted'=>false,'db_reconciliation_status'=>'not_started','completed_payout_ids'=>array(),'do_not_retry'=>false,'manual_recovery_required'=>false,'errors'=>array($e->getMessage()),'warnings'=>array());}
+	}
+
 	private function walletProofCloseoutHold($report, $field, $message) { $report['closeout_valid']=false; $report['classification']='HOLD / WALLET PROOF INCOMPLETE'; $report['final_classification']='HOLD / WALLET PROOF INCOMPLETE'; $report['fix_items'][]=$message; if ($field) $report['invalid_closeout_fields'][]=$field; return $this->guard->finalizeReport($report); }
 	private function walletProofContextForCoin($coinId) { if ($coinId !== 1267) return array('supported'=>false,'reason'=>'unsupported_wallet_proof_context'); return array('supported'=>true,'coin_id'=>1267,'conf'=>'/etc/badcoin/pool-scrypt.conf','datadir'=>'/var/lib/badcoin-pool-scrypt','rpc_methods'=>array('gettransaction')); }
 	private function walletProofDecimalIsZero($v) { return preg_match('/^-?0+(?:\.0+)?$/', trim((string)$v)) === 1; }
@@ -3465,6 +3480,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 	{ $items=arraySafeVal(arraySafeVal($approval,'items',array()),'selected_earnings',array()); $credit=0.0; $accounts=array(); foreach($items as $i){ $n=app()->db->createCommand("UPDATE earnings SET status=2,price=:price WHERE id=:id AND userid=:uid AND coinid=:cid AND blockid=:bid AND status=1 AND mature_time=:mt")->execute(array(':price'=>$i['coin_price'],':id'=>$i['earning_id'],':uid'=>$i['userid'],':cid'=>$i['coinid'],':bid'=>$i['blockid'],':mt'=>$i['mature_time'])); if($n!==1) throw new Exception('selected earning changed or disappeared: '.$i['earning_id']); $n=app()->db->createCommand("UPDATE accounts SET balance=balance+:credit WHERE id=:id AND coinid=:coinid")->execute(array(':credit'=>$i['projected_converted_credit_value'],':id'=>$i['account_id'],':coinid'=>$i['account_coinid'])); if($n!==1) throw new Exception('selected account changed or disappeared: '.$i['account_id']); $credit+=floatval($i['projected_converted_credit_value']); $accounts[$i['account_id']]=isset($accounts[$i['account_id']])?$accounts[$i['account_id']]+floatval($i['projected_converted_credit_value']):floatval($i['projected_converted_credit_value']); } return array('selected_count'=>count($items),'applied_count'=>count($items),'applied_amount'=>$this->decimalString($credit),'affected_account_ids'=>array_map('intval', array_keys($accounts)),'selected_earnings_count'=>count($items),'credited_earnings_count'=>count($items),'projected_credit_total'=>$this->decimalString($credit),'applied_credit_total'=>$this->decimalString($credit),'affected_account_count'=>count($accounts),'affected_account_totals'=>$accounts,'payout_rows_created'=>false,'wallet_sends'=>false,'backend_loops_run'=>false,'shares_deleted'=>false); }
 
 	private function walletSendApplyContextArgs($args){ $out=array(); foreach($args as $arg){ if(preg_match('/^--(coin-id|format|selected-payout-ids)(=.*)?$/i',$arg)) $out[]=$arg; } return $out; }
+	private function multiWalletSendApplyContextArgs($args){$out=array();foreach($args as$arg)if(preg_match('/^--(format|selected-payout-ids)(=.*)?$/',$arg))$out[]=$arg;return$out;}
 	private function guardedApplyContextArgs($args){ $out=array(); foreach($args as $arg){ if(preg_match('/^--(coin-id|format)(=.*)?$/i',$arg)) $out[]=$arg; } return $out; }
 	private function maturitySelectionContextArgs($args){$out=array();foreach($args as $arg)if(preg_match('/^--(coin-id|format)(=.*)?$/i',$arg))$out[]=$arg;return $out;}
 	private function accountCreditSelectionContextArgs($args){$out=array();foreach($args as $arg)if(preg_match('/^--(coin-id|format)(=.*)?$/i',$arg))$out[]=$arg;return $out;}
