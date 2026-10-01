@@ -416,9 +416,9 @@ class BadpoolGuardContext
 	{
 		$hasCoinId = isset($options['coin-id']);
 		$allCoins = isset($options['all-coins-preview']);
-		if ($this->command === 'multi-wallet-send-preflight') {
+		if ($this->command === 'multi-wallet-send-preflight' || $this->command === 'multi-wallet-send-apply') {
 			if ($hasCoinId || $allCoins) {
-				$this->addError('multi-wallet-send-preflight authority is only --selected-payout-ids; coin-wide or all-coin scope is refused.');
+				$this->addError($this->command.' authority is only --selected-payout-ids; coin-wide or all-coin scope is refused.');
 				return;
 			}
 			$this->scope = array('all_coins_preview'=>false,'coin_id'=>null,'coin'=>null,'authority'=>'explicit_payout_ids_only');
