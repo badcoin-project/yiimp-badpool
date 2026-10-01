@@ -30,6 +30,9 @@ $only=$execution;$only['human_approved']=false;ap_ok($only===$report['approval_o
 ap_ok($executionChecksum===BadpoolMultiWalletApprovalPlanner::checksum($execution),'execution approval checksum deterministic');
 $result=$apply->execute($options);
 ap_ok($result['status']==='pass'&&$result['journal_state']==='RECONCILED','all-four apply reconciles');
+ap_ok($result['db_reconciliation_status']==='complete'&&$result['db_completion_success']===true,'outer apply preserves reconciliation completion metadata');
+ap_ok($result['db_mutations']===true&&$result['db_mutation_status']==='guarded_transaction_committed','outer apply reports committed reconciliation mutation');
+$serialized=BadpoolGuardReport::finalize($result);ap_ok($serialized['db_reconciliation_status']==='complete'&&$serialized['db_completion_success']===true&&$serialized['db_mutations']===true&&$serialized['db_mutation_status']==='guarded_transaction_committed','outer serialization preserves consistent mutation metadata');
 ap_ok(count($sent)===4,'exactly four wallet sends');
 ap_ok($repo->calls===1&&count($repo->maps)===4,'single exact reconciliation after all txids');
 ap_ok(is_file($journal->path($executionChecksum)),'journal keyed by execution approval');
@@ -39,7 +42,7 @@ ap_ok($sent[0][8]==='pool-scrypt'&&$sent[1][8]==='pool-groestl'&&$sent[2][8]==='
 ap_ok(count(array_unique(array_values($repo->maps)))===4,'one txid per wallet');
 ap_ok($repo->maps[526]!==$repo->maps[527]&&$repo->maps[527]!==$repo->maps[529],'shared account payouts not merged');
 ap_ok($result['do_not_retry']===true,'completed execution reports do not retry');
-$again=$apply->execute($options);ap_ok($again['reason']==='already_reconciled'&&count($sent)===4,'reconciled journal never resends');
+$again=$apply->execute($options);ap_ok($again['reason']==='already_reconciled'&&count($sent)===4,'reconciled journal never resends');ap_ok($again['db_reconciliation_status']==='complete'&&$again['db_completion_success']===true&&$again['db_mutations']===false&&$again['db_mutation_status']==='none','already-reconciled outer apply reports no new DB mutation');
 
 $outside=ap_root('outside').'/x.json';copy($path,$outside);$bad=$options;$bad['preflight-report']=$outside;$bad['preflight-report-checksum']=hash_file('sha256',$outside);ap_ok(ap_throws(function()use($apply,$bad){$apply->execute($bad);},'outside'),'path traversal/outside rejected');
 if(function_exists('symlink')){$link=$reportRoot.'/link.json';@symlink($path,$link);$bad=$options;$bad['preflight-report']=$link;ap_ok(ap_throws(function()use($apply,$bad){$apply->execute($bad);},'non-symlink'),'report symlink rejected');}
