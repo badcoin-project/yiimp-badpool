@@ -12,6 +12,7 @@ require_once(dirname(__FILE__).'/../core/backend/BadpoolLivePaymentCoordinator.p
 require_once(dirname(__FILE__).'/../core/backend/BadpoolPaymentBatchPhaseAdapter.php');
 require_once(dirname(__FILE__).'/../core/backend/BadpoolCompletedPayoutBatchCloseout.php');
 require_once(dirname(__FILE__).'/../core/backend/BadpoolCompletedPayoutBatchCloseoutApply.php');
+require_once(dirname(__FILE__).'/../core/backend/BadpoolCompletedPayoutWalletProof.php');
 require_once(dirname(__FILE__).'/../core/backend/BadpoolWalletFundingGuard.php');
 require_once(dirname(__FILE__).'/../core/backend/BadpoolYiiExactMultiWalletPayoutRepository.php');
 require_once(dirname(__FILE__).'/../core/backend/BadpoolMultiWalletProductionPreflight.php');
@@ -1959,12 +1960,13 @@ class BadpoolGuardCommand extends CConsoleCommand
 		$report['next_safe_lane_or_STOP'] = 'STOP';
 		$report['do_not_rerun'] = array('wallet-send-apply','payout-row-apply','account-credit-apply');
 		$report['fix_items'] = array();
-		$report['wallet_proof_context'] = $this->walletProofContextForCoin(intval(arraySafeVal($this->guard->getScope(), 'coin_id')));
+		$proofReader = new BadpoolCompletedPayoutWalletProof();
+		$report['wallet_proof_context'] = $proofReader->contextForCoin(intval(arraySafeVal($this->guard->getScope(), 'coin_id')));
 
 		if ($this->guard->getFormat() !== 'json') return $this->walletProofCloseoutHold($report, 'format', 'wallet-proof-closeout requires --format=json.');
 		if ($this->guard->isAllCoinsPreview()) return $this->walletProofCloseoutHold($report, 'coin_id', 'wallet-proof-closeout requires explicit --coin-id and refuses broad/all-coin scope.');
 		$coinId = intval(arraySafeVal($this->guard->getScope(), 'coin_id'));
-		if ($coinId !== 1267) return $this->walletProofCloseoutHold($report, 'unsupported_wallet_proof_context', 'unsupported_wallet_proof_context');
+		if (empty($report['wallet_proof_context']['supported'])) return $this->walletProofCloseoutHold($report, 'unsupported_wallet_proof_context', 'unsupported_wallet_proof_context');
 		$ids = $this->parseCsvIds($this->guard->getOption('selected-payout-ids'));
 		if (empty($ids)) return $this->walletProofCloseoutHold($report, 'selected_payout_ids', 'wallet-proof-closeout requires explicit nonempty --selected-payout-ids CSV of positive integers.');
 		if ($this->hasDuplicateIds($ids)) return $this->walletProofCloseoutHold($report, 'selected_payout_ids', 'Duplicate selected payout IDs are refused.');
@@ -1989,27 +1991,30 @@ class BadpoolGuardCommand extends CConsoleCommand
 			$report['payout_inventory'][] = $item;
 			$expected = $this->walletSendDryrunDecimalAdd($expected, $amount);
 			$expectedWallet = $this->walletSendDryrunDecimalAdd($expectedWallet, $this->walletSendProjectBtcAmount8dp($amount));
-			if ($txid !== '') $txids[$txid] = true;
+			if ($txid !== '') {
+				if (preg_match('/^[0-9a-fA-F]{64}$/D',$txid)!==1) $report['invalid_closeout_fields'][] = 'malformed tx payout '.$id;
+				else $txids[strtolower($txid)] = true;
+			}
 		}
 		$report['expected_send_amount'] = '-'.$expected;
 		$report['expected_wallet_amount'] = '-'.$expectedWallet;
 		if (!empty($report['missing_closeout_fields']) || !empty($report['invalid_closeout_fields']) || count($txids) !== 1) return $this->walletProofCloseoutHold($report, 'selected_payout_validation', 'Selected payout validation failed.');
-		$coin = $this->walletSendApplyRpcCoin($coinId);
-		$remote = new WalletRPC($coin);
 		$txid = key($txids);
-		$walletTx = $this->walletProofNormalizeRpcValue($remote->gettransaction($txid));
+		try { $walletTx = $proofReader->getTransaction($coinId,$txid); }
+		catch (Exception $e) { return $this->walletProofCloseoutHold($report, 'wallet_lookup_failed', 'Completed-payout wallet proof failed closed.'); }
 		$report['wallet_lookup_success'] = !empty($walletTx);
-		$report['wallet_txid_expected'] = ((string)arraySafeVal($walletTx, 'txid', $txid) === $txid);
+		$report['wallet_txid_expected'] = ((string)arraySafeVal($walletTx, 'txid', '') === $txid);
 		$report['wallet_amount'] = (string)arraySafeVal($walletTx, 'amount', '');
 		$report['proof_amount_raw'] = $report['wallet_amount'];
-		$report['proof_amount_abs'] = ltrim($report['proof_amount_raw'], '-');
+		$report['wallet_amount_is_debit'] = preg_match('/^-(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$/D',$report['proof_amount_raw'])===1;
+		$report['proof_amount_abs'] = $report['wallet_amount_is_debit'] ? substr($report['proof_amount_raw'],1) : '';
 		$report['expected_wallet_send_total'] = $expectedWallet;
 		$report['amount_match_mode'] = 'absolute_debit_normalized';
-		$report['amount_matches_expected_abs'] = ($this->walletSendDecimalCompare($report['proof_amount_abs'], $expectedWallet) === 0);
+		$report['amount_matches_expected_abs'] = ($report['wallet_amount_is_debit'] && $this->walletSendDecimalCompare($report['proof_amount_abs'], $expectedWallet) === 0);
 		// Backward-compatibility parser sentinel: walletSendDecimalCompare(ltrim($report['wallet_amount'], '-'), $expectedWallet)
-		$report['wallet_amount_matches_expected'] = ($report['amount_matches_expected_abs'] && strpos($report['wallet_amount'], '-') === 0);
+		$report['wallet_amount_matches_expected'] = $report['amount_matches_expected_abs'];
 		$report['wallet_confirmations_present'] = array_key_exists('confirmations', $walletTx);
-		$report['wallet_proof'] = array('txid'=>$txid,'amount'=>$report['wallet_amount'],'confirmations'=>arraySafeVal($walletTx,'confirmations',null),'blockhash'=>arraySafeVal($walletTx,'blockhash',null),'blockindex'=>arraySafeVal($walletTx,'blockindex',null),'category'=>arraySafeVal($walletTx,'category',null),'rpc_error'=>$this->walletProofRedact(json_encode($remote->error)));
+		$report['wallet_proof'] = array('txid'=>$txid,'amount'=>$report['wallet_amount'],'confirmations'=>arraySafeVal($walletTx,'confirmations',null),'blockhash'=>arraySafeVal($walletTx,'blockhash',null),'blockindex'=>arraySafeVal($walletTx,'blockindex',null),'category'=>arraySafeVal($walletTx,'category',null),'rpc_error'=>null);
 		$report['closeout_valid'] = $report['wallet_lookup_success'] && $report['wallet_txid_expected'] && $report['wallet_amount_matches_expected'] && $report['wallet_confirmations_present'];
 		if ($report['closeout_valid']) { $report['classification'] = 'PASS / WALLET PROOF CLOSEOUT COMPLETE'; $report['final_classification'] = 'PASS / WALLET PROOF CLOSEOUT COMPLETE'; $report['next_safe_lane_or_STOP'] = 'STOP'; }
 		return $this->guard->finalizeReport($report);
@@ -2046,7 +2051,6 @@ class BadpoolGuardCommand extends CConsoleCommand
 	}
 
 	private function walletProofCloseoutHold($report, $field, $message) { $report['closeout_valid']=false; $report['classification']='HOLD / WALLET PROOF INCOMPLETE'; $report['final_classification']='HOLD / WALLET PROOF INCOMPLETE'; $report['fix_items'][]=$message; if ($field) $report['invalid_closeout_fields'][]=$field; return $this->guard->finalizeReport($report); }
-	private function walletProofContextForCoin($coinId) { if ($coinId !== 1267) return array('supported'=>false,'reason'=>'unsupported_wallet_proof_context'); return array('supported'=>true,'coin_id'=>1267,'conf'=>'/etc/badcoin/pool-scrypt.conf','datadir'=>'/var/lib/badcoin-pool-scrypt','rpc_methods'=>array('gettransaction')); }
 	private function walletProofDecimalIsZero($v) { return preg_match('/^-?0+(?:\.0+)?$/', trim((string)$v)) === 1; }
 	private function walletProofRedact($v) { return preg_replace('/(rpc(user|pass(word)?)|cookie|secret|token|passphrase)([^\s,;]*)/i', '$1=REDACTED', (string)$v); }
 	private function walletProofNormalizeRpcValue($value) { if (is_object($value)) return get_object_vars($value); return is_array($value) ? $value : array(); }

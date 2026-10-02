@@ -30,6 +30,25 @@ closeout_expect($report['ledger_only_apply_mode_available']===true&&hash_file('s
 closeout_expect($proofCalls===array(array(1267,array(520))),'completed payout did not route exclusively to wallet proof',$failures);
 closeout_expect(strpos(json_encode($proofCalls),'wallet-send')===false,'proof-valid payout emitted wallet-send command',$failures);
 
+// Each human-approved lane closes through the same coin-partitioned proof
+// callback. SHA256d remains unsupported by the canonical proof context.
+$proofContextReader=new BadpoolCompletedPayoutWalletProof(null,1,function(){throw new RuntimeException('fixture must not invoke CLI');});
+foreach(array(1266=>'yescrypt',1267=>'scrypt',1268=>'skein',1269=>'groestl')as$coin=>$name){
+	$id='eligible-'.$name;$payoutId=600+($coin-1260);closeout_ledger($root,$id,array('created_payout_ids'=>array($payoutId)));
+	$adapter->rows=array(array('id'=>$payoutId,'idcoin'=>$coin,'completed'=>1,'tx'=>str_repeat('a',64)));
+	$laneProof=function($proofCoin,$proofIds)use($coin,$payoutId,$proofContextReader){$context=$proofContextReader->contextForCoin($proofCoin);return closeout_valid_proof(array('selected_payout_ids'=>array($payoutId),'scope'=>array('coin_id'=>$coin),'wallet_proof_context'=>$context,'payout_inventory'=>array(array('payout_id'=>$payoutId,'coin_id'=>$coin))));};
+	$laneReport=(new BadpoolCompletedPayoutBatchCloseout($adapter,$laneProof,$root))->preview($id);
+	closeout_expect($laneReport['status']==='pass'&&count($laneReport['wallet_proof_reports'])===1,$name.' completed payout closeout did not pass',$failures);
+}
+$shaBatch='unsupported-sha256d';closeout_ledger($root,$shaBatch,array('created_payout_ids'=>array(610)));$adapter->rows=array(array('id'=>610,'idcoin'=>1270,'completed'=>1,'tx'=>str_repeat('b',64)));
+$shaProof=function($coin,$ids)use($proofContextReader){return closeout_valid_proof(array('selected_payout_ids'=>$ids,'scope'=>array('coin_id'=>$coin),'wallet_proof_context'=>$proofContextReader->contextForCoin($coin),'payout_inventory'=>array(array('payout_id'=>$ids[0],'coin_id'=>$coin)),'closeout_valid'=>false));};
+$shaReport=(new BadpoolCompletedPayoutBatchCloseout($adapter,$shaProof,$root))->preview($shaBatch);
+closeout_expect($shaReport['status']==='hold'&&in_array('wallet_proof_missing_or_invalid',$shaReport['errors'],true),'SHA256d completed payout closeout was not rejected',$failures);
+$grouped='exact-coin-groups';closeout_ledger($root,$grouped,array('created_payout_ids'=>array(701,702,703)));$adapter->rows=array(array('id'=>701,'idcoin'=>1266,'completed'=>1,'tx'=>str_repeat('c',64)),array('id'=>702,'idcoin'=>1267,'completed'=>1,'tx'=>str_repeat('d',64)),array('id'=>703,'idcoin'=>1266,'completed'=>1,'tx'=>str_repeat('c',64)));$groupCalls=array();
+$groupProof=function($coin,$ids)use(&$groupCalls){$groupCalls[]=array($coin,$ids);$inventory=array();foreach($ids as$id)$inventory[]=array('payout_id'=>$id,'coin_id'=>$coin);return closeout_valid_proof(array('selected_payout_ids'=>$ids,'scope'=>array('coin_id'=>$coin),'payout_inventory'=>$inventory));};
+$groupReport=(new BadpoolCompletedPayoutBatchCloseout($adapter,$groupProof,$root))->preview($grouped);
+closeout_expect($groupReport['status']==='pass'&&$groupCalls===array(array(1266,array(701,703)),array(1267,array(702))),'closeout did not group proofs by exact payout coin',$failures);
+
 // A normal fresh payout stays at the existing wallet approval boundary.  This
 // lane refuses it before any wallet RPC, rather than converting it to closeout.
 $pending='fresh-unpaid';closeout_ledger($root,$pending);$adapter->rows=array(array('id'=>520,'idcoin'=>1267,'completed'=>0,'tx'=>''));$before=count($proofCalls);
