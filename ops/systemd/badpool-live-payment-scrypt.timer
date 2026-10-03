@@ -1,0 +1,11 @@
+[Unit]
+Description=Run the Badpool Scrypt payment coordinator every five minutes
+
+[Timer]
+OnBootSec=5min
+OnCalendar=*:0/5
+Persistent=true
+Unit=badpool-live-payment-scrypt.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,12 @@
+# Source-prepared only. Do not enable until the documented SHA256d production gate passes.
+[Unit]
+Description=Run Badpool SHA256d maturity every five minutes (gated)
+
+[Timer]
+OnBootSec=5min
+OnCalendar=*:0/5
+Persistent=true
+Unit=badpool-live-maturity-sha256d.service
+
+[Install]
+WantedBy=timers.target
