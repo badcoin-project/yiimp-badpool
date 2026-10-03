@@ -43,6 +43,7 @@ $root=sys_get_temp_dir().'/badpool-production-repo-'.bin2hex(random_bytes(5));mk
 $lanes=array(526=>$registry->get('live-scrypt-v1'),527=>$registry->get('live-groestl-v1'),528=>$registry->get('live-yescrypt-v1'),529=>$registry->get('live-skein-v1'));
 $batchIds=array(526=>'batch-526',527=>'batch-527',528=>'20260927T135815Z-f30c33bc6543',529=>'20260928T002836Z-dadc9cef85e9');
 foreach($lanes as$id=>$lane){pr_state($root,$lane,$batchIds[$id]);pr_ledger($root,$lane,$batchIds[$id],array($id));}
+$queuedScryptBatch='20261003T160000Z-535353535353';pr_ledger($root,$lanes[526],$queuedScryptBatch,array(530));
 
 $db=new RepoFixtureDb();
 foreach(array(526=>array(79,1267,'54111.530811649995','BAD-scrypt-account-79'),527=>array(76,1269,'55875.65007076999','BAD-groestl-account-76'),528=>array(75,1266,'33063.28546626001','BAD-yescrypt-account-75'),529=>array(76,1268,'57981.11592853001','BAD-skein-account-76'),530=>array(90,1267,'1.00000001','BAD-unapproved-account-90'))as$id=>$value){
@@ -58,6 +59,7 @@ pr_ok(strpos($db->selectSql[0],'INNER JOIN coins C ON C.id=P.idcoin')!==false,'p
 pr_ok(strpos($db->selectSql[0],'A.coinid')===false,'accounts.coinid is not payout or lane authority');
 pr_ok($db->rows[527]['account_coin_id']===1267&&$db->rows[529]['account_coin_id']===1267&&$db->rows[527]['coin_id']!==1267&&$db->rows[529]['coin_id']!==1267,'accounts.coinid mismatch alone does not reject valid cross-lane payouts');
 pr_ok($db->rows===$before,'exact payout discovery performs no database mutation');
+$twoScrypt=$repo->loadExactPayouts(array(526,530));pr_ok(array_column($twoScrypt,'batch_id')===array($batchIds[526],$queuedScryptBatch),'two queued READY batches in one lane did not remain independently addressable');
 foreach(array(526,527,528,529)as$id)pr_ok($repo->loadExactPayouts(array($id))[0]['payout_id']===$id,'payout '.$id.' resolves independently');
 pr_ok($repo->loadExactPayouts(array(527))[0]['account_id']===76&&$repo->loadExactPayouts(array(529))[0]['account_id']===76,'shared account 76 resolves in both lanes');
 pr_ok($rows[1]['lane_id']==='live-groestl-v1'&&$rows[1]['coin_id']===1269&&$rows[1]['wallet_binding_identity']==='groestl'&&$rows[1]['source_account_identity']==='pool-groestl','payout 527 retains Groestl wallet ownership');
@@ -77,7 +79,7 @@ $db->rows[527]['account_exists']=false;pr_ok(pr_throws(function()use($repo){$rep
 $db->rows[527]['coin_exists']=false;pr_ok(pr_throws(function()use($repo){$repo->loadExactPayouts(array(527));}),'missing payout coin refused');$db->rows[527]['coin_exists']=true;
 $db->extraReturnId=530;pr_ok(pr_throws(function()use($repo){$repo->loadExactPayouts(array(526));}),'unexpected payout returned refused');$db->extraReturnId=null;
 
-$statePath=$lanes[527]->statePath($root);$savedState=file_get_contents($statePath);$badState=json_decode($savedState,true);$badState['active_batch_id']='wrong-active-batch';file_put_contents($statePath,json_encode($badState));pr_ok(pr_throws(function()use($repo){$repo->loadExactPayouts(array(527));}),'wrong active coordinator batch refused');file_put_contents($statePath,$savedState);
+$statePath=$lanes[527]->statePath($root);$savedState=file_get_contents($statePath);$queuedState=json_decode($savedState,true);$queuedState['version']=2;$queuedState['active_batch_id']=null;$queuedState['ready_for_wallet_approval_batch_ids']=array($batchIds[527]);file_put_contents($statePath,json_encode($queuedState));pr_ok($repo->loadExactPayouts(array(527))[0]['batch_id']===$batchIds[527],'queued READY ownership incorrectly depended on the active execution slot');file_put_contents($statePath,$savedState);
 $ledgerPath=$root.'/'.$batchIds[528].'/ledger.json';$savedLedger=file_get_contents($ledgerPath);$badLedger=json_decode($savedLedger,true);$badLedger['batch_state']='WAITING_PAYMENT_DELAY';file_put_contents($ledgerPath,json_encode($badLedger));pr_ok(pr_throws(function()use($repo){$repo->loadExactPayouts(array(528));}),'non-ready durable batch refused');file_put_contents($ledgerPath,$savedLedger);
 $skeinLedgerPath=$root.'/'.$batchIds[529].'/ledger.json';$savedSkeinLedger=file_get_contents($skeinLedgerPath);$badLedger=json_decode($savedSkeinLedger,true);$badLedger['coordinator_owner']['coin_id']=1269;file_put_contents($skeinLedgerPath,json_encode($badLedger));pr_ok(pr_throws(function()use($repo){$repo->loadExactPayouts(array(529));}),'wrong durable lane owner refused');file_put_contents($skeinLedgerPath,$savedSkeinLedger);
 $groestlLedgerPath=$root.'/'.$batchIds[527].'/ledger.json';$savedGroestlLedger=file_get_contents($groestlLedgerPath);$badLedger=json_decode($savedGroestlLedger,true);$badLedger['created_payout_ids']=array();file_put_contents($groestlLedgerPath,json_encode($badLedger));pr_ok(pr_throws(function()use($repo){$repo->loadExactPayouts(array(527));}),'payout missing from created_payout_ids refused');file_put_contents($groestlLedgerPath,$savedGroestlLedger);
