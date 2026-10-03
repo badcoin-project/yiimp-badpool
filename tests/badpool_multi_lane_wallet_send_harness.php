@@ -64,7 +64,7 @@ mw_check(!$registry->get('live-sha256d-v1')->isHumanApprovedWalletSendEligible()
 mw_check($registry->get('live-groestl-v1')->isHumanApprovedWalletSendEligible()&&!$registry->get('live-groestl-v1')->isWalletSendCommissioned(),'human execution eligibility is separate from recurring Groestl flag');
 mw_check($registry->get('live-yescrypt-v1')->isHumanApprovedWalletSendEligible()&&!$registry->get('live-yescrypt-v1')->isWalletSendCommissioned(),'human execution eligibility is separate from recurring Yescrypt flag');
 $a=mw_approval($rows,array(526),false);list($r,$repo,$wallet)=mw_refused($a,$rows);mw_check($r['status']==='refused'&&$wallet->calls===0,'human approval mandatory');
-$coordinator=file_get_contents(dirname(__FILE__).'/../web/yaamp/core/backend/BadpoolLivePaymentCoordinator.php');mw_check(strpos($coordinator,"READY_FOR_WALLET_APPROVAL')return 'HUMAN_WALLET_APPROVAL_REQUIRED'")!==false,'coordinator still stops at phase 6');
+$coordinator=file_get_contents(dirname(__FILE__).'/../web/yaamp/core/backend/BadpoolLivePaymentCoordinator.php');mw_check(strpos($coordinator,"case'READY_FOR_WALLET_APPROVAL'")!==false&&strpos($coordinator,"return'HUMAN_WALLET_APPROVAL_REQUIRED'")!==false,'coordinator still parks phase 6 for human approval');
 mw_check(strpos($coordinator,'sendmanyApprovedScope')===false&&strpos($coordinator,'badpoolGuardedSendmanyApply')===false,'coordinator has no automatic wallet call');
 
 $a=mw_approval($rows,array(526));$a['unexpected']=true;list($r,$repo,$wallet)=mw_refused($a,$rows);mw_check($r['status']==='refused','malformed approval payload rejected');

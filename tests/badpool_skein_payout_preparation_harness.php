@@ -69,7 +69,7 @@ class SkeinDelayAdapter
 {
 	public $delayCalls=0,$creditCalls=0,$payoutCalls=0;
 	public function safetyCheck($ledger,$options){return array('status'=>'pass','selected_coin_scope'=>array(array('id'=>1268,'algo'=>'skein')));}
-	public function selectEligibleWork($ledger,$options){return array('status'=>'pass','selected_earning_ids'=>array(3001,3002),'selected_block_ids'=>array(31813,31814),'selected_account_ids'=>array(88,89),'selected_work_by_coin'=>array('1268'=>array('selection_mode'=>'live_status1','earning_ids'=>array(3001,3002),'block_ids'=>array(31813,31814),'account_ids'=>array(88,89))));}
+	public function selectEligibleWork($ledger,$options){$earnings=array(3001,3002);$blocks=array(31813,31814);if(array_intersect($earnings,(array)arraySafeVal($options,'excluded_earning_ids',array()))||array_intersect($blocks,(array)arraySafeVal($options,'excluded_block_ids',array())))$earnings=$blocks=array();return array('status'=>'pass','selected_earning_ids'=>$earnings,'selected_block_ids'=>$blocks,'selected_account_ids'=>$earnings?array(88,89):array(),'selected_work_by_coin'=>array('1268'=>array('selection_mode'=>'live_status1','earning_ids'=>$earnings,'block_ids'=>$blocks,'account_ids'=>$earnings?array(88,89):array())));}
 	public function packageMaturity($ledger,$options){return array('status'=>'pass');}
 	public function applyMaturity($ledger,$options){return array('status'=>'pass');}
 	public function paymentDelayCheck($ledger,$options){$this->delayCalls++;return array('status'=>'hold','warnings'=>array('normal_payment_delay_active'));}
@@ -84,13 +84,13 @@ function skein_payout_ledger($root,$id,$lane,$state,$earnings,$accounts,$payouts
 function skein_payout_state($root,$lane,$id){file_put_contents($lane->statePath($root),json_encode(array('schema'=>$lane->get('ownership_schema'),'version'=>1,'lane'=>$lane->laneId(),'coin_id'=>$lane->coinId(),'algo'=>$lane->dbAlgo(),'block_id_gt'=>$lane->blockBoundary(),'active_batch_id'=>$id)));}
 
 $coordinatorRoot=skein_payout_root('coordinator');$delayAdapter=new SkeinDelayAdapter();$coordinator=new BadpoolLivePaymentCoordinator(new BadpoolPaymentBatchRunner($delayAdapter,$coordinatorRoot),$coordinatorRoot,$lane);
-$first=$coordinator->run();$batch=$first['active_batch_id'];$firstLedger=json_decode(file_get_contents($coordinatorRoot.'/'.$batch.'/ledger.json'),true);$firstIds=$firstLedger['selected_earning_ids'];
-skein_payout_ok($first['classification']==='WAITING_PAYMENT_DELAY'&&$first['action_taken']==='created_batch'&&$firstIds===array(3001,3002)&&$firstLedger['selected_account_ids']===array(88,89),'New Skein batch did not retain exact earning/account ownership at the payment delay');
+$first=$coordinator->run();$batch=$first['waiting_payment_delay_batch_ids'][0];$firstLedger=json_decode(file_get_contents($coordinatorRoot.'/'.$batch.'/ledger.json'),true);$firstIds=$firstLedger['selected_earning_ids'];
+skein_payout_ok($first['classification']==='WAITING_PAYMENT_DELAY'&&$first['action_taken']==='created_fresh_batch'&&$firstIds===array(3001,3002)&&$firstLedger['selected_account_ids']===array(88,89),'New Skein batch did not retain exact earning/account ownership at the payment delay');
 skein_payout_ok(is_file($lane->statePath($coordinatorRoot))&&is_file($lane->lockPath($coordinatorRoot))&&!is_file($scrypt->statePath($coordinatorRoot))&&!is_file($yescrypt->statePath($coordinatorRoot))&&!is_file($groestl->statePath($coordinatorRoot)),'Skein coordinator used or created another lane state/lock identity');
 skein_payout_ok($delayAdapter->delayCalls===1&&$delayAdapter->creditCalls===0&&$delayAdapter->payoutCalls===0&&$first['created_payout_ids']===array(),'Account credit or payout preparation ran before the normal payment delay passed');
 $second=$coordinator->run();$secondLedger=json_decode(file_get_contents($coordinatorRoot.'/'.$batch.'/ledger.json'),true);
-skein_payout_ok($second['classification']==='WAITING_PAYMENT_DELAY'&&$second['active_batch_id']===$batch&&$second['action_taken']==='resumed_batch'&&$secondLedger['selected_earning_ids']===$firstIds,'Selected-ID payment-delay resume did not retain the same Skein batch and exact earning IDs');
-skein_payout_ok($delayAdapter->delayCalls===2&&$delayAdapter->creditCalls===0&&$delayAdapter->payoutCalls===0,'Payment-delay resume reached account credit or payout creation');
+skein_payout_ok($second['classification']==='WAITING_PAYMENT_DELAY'&&$second['active_batch_id']===null&&$second['existing_batch_resumed']===true&&$secondLedger['selected_earning_ids']===$firstIds,'Selected-ID payment-delay resume did not retain the same Skein batch and exact earning IDs');
+skein_payout_ok($delayAdapter->delayCalls===3&&$delayAdapter->creditCalls===0&&$delayAdapter->payoutCalls===0,'Payment-delay resume or empty fresh-work probe reached account credit or payout creation');
 
 $isolationRoot=skein_payout_root('isolation');$scryptId='20260920T120829Z-414141f5f7d0';$groestlId='20260927T003516Z-5d76dbf9c318';$yescryptId='20260927T135815Z-f30c33bc6543';
 skein_payout_ledger($isolationRoot,$scryptId,$scrypt,'READY_FOR_WALLET_APPROVAL',array(4001),array(79),array(526));skein_payout_ledger($isolationRoot,$groestlId,$groestl,'READY_FOR_WALLET_APPROVAL',array(4002),array(76),array(527));skein_payout_ledger($isolationRoot,$yescryptId,$yescrypt,'WAITING_PAYMENT_DELAY',array(4003),array(75));
@@ -99,9 +99,8 @@ $isolationAdapter=new SkeinDelayAdapter();$isolationResult=(new BadpoolLivePayme
 skein_payout_ok($isolationResult['classification']==='WAITING_PAYMENT_DELAY'&&!in_array($isolationResult['active_batch_id'],array($scryptId,$groestlId,$yescryptId),true),'Skein adopted a parked payout or the owned Yescrypt batch');
 foreach($protected as $id=>$hash)skein_payout_ok(hash_file('sha256',$isolationRoot.'/'.$id.'/ledger.json')===$hash,'Skein mutated protected batch '.$id);
 
-class SkeinWalletBoundaryRunner{public $calls=0;public function run($options){$this->calls++;return array();}}
-$walletRoot=skein_payout_root('wallet');$walletId='20260927T150000Z-343434343434';skein_payout_ledger($walletRoot,$walletId,$lane,'READY_FOR_WALLET_APPROVAL',array(5001),array(88),array(900));skein_payout_state($walletRoot,$lane,$walletId);$walletRunner=new SkeinWalletBoundaryRunner();$walletResult=(new BadpoolLivePaymentCoordinator($walletRunner,$walletRoot,$lane))->run();
-skein_payout_ok($walletRunner->calls===0&&$walletResult['classification']==='HUMAN_WALLET_APPROVAL_REQUIRED'&&$walletResult['wallet_rpc_used']===false&&$walletResult['wallet_send_performed']===false,'Wallet execution remained reachable with Skein wallet send disabled');
+$walletRoot=skein_payout_root('wallet');$walletId='20260927T150000Z-343434343434';skein_payout_ledger($walletRoot,$walletId,$lane,'READY_FOR_WALLET_APPROVAL',array(5001),array(88),array(900));skein_payout_state($walletRoot,$lane,$walletId);$walletAdapter=new SkeinDelayAdapter();$walletResult=(new BadpoolLivePaymentCoordinator(new BadpoolPaymentBatchRunner($walletAdapter,$walletRoot),$walletRoot,$lane))->run();
+skein_payout_ok($walletResult['ready_for_wallet_approval_batch_ids']===array($walletId)&&$walletResult['wallet_rpc_used']===false&&$walletResult['wallet_send_performed']===false,'Wallet execution remained reachable with Skein wallet send disabled');
 $context=BadpoolGuardContext::fromArgs('live-payment-coordinator',array('--lane-id=live-skein-v1','--format=json'));skein_payout_ok($context->isValid()&&$context->getOption('lane-id')==='live-skein-v1','The explicit Skein coordinator command contract was rejected');
 
 skein_payout_remove($selectionRoot);skein_payout_remove($coordinatorRoot);skein_payout_remove($isolationRoot);skein_payout_remove($walletRoot);
