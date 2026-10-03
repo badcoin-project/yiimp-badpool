@@ -1,0 +1,15 @@
+[Unit]
+Description=Badpool live payment coordinator (Skein)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=zako
+WorkingDirectory=/srv/badpool/yiimp-badpool/web
+UMask=0027
+NoNewPrivileges=true
+PrivateTmp=true
+StandardOutput=journal
+StandardError=journal
+ExecStart=/usr/bin/php yaamp/yiic.php badpoolguard live-payment-coordinator --lane-id=live-skein-v1 --format=json

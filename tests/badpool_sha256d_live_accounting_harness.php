@@ -60,7 +60,8 @@ sha256d_ok($lane->maturityBlockLimit()===null&&$lane->batchLimit()===null,'SHA25
 sha256d_ok(basename($lane->statePath())==='live-sha256d-coordinator.json','SHA256d state filename changed');
 sha256d_ok(basename($lane->lockPath())==='live-sha256d-coordinator.lock','SHA256d lock filename changed');
 sha256d_ok($lane->get('wallet_binding_identity')==='sha256d'&&$lane->get('wallet_source_account')==='pool-sha256d','SHA256d wallet identity metadata changed');
-sha256d_ok($lane->get('rpc_config_identity')===null&&$lane->get('wallet_datadir_identity')===null&&$lane->get('service_timer_identity')===null,'SHA256d gained an RPC, wallet data, or service identity');
+sha256d_ok($lane->get('rpc_config_identity')===null&&$lane->get('wallet_datadir_identity')===null&&$lane->get('service_timer_identity')==='badpool-live-payment-sha256d.timer','SHA256d RPC/wallet identity or prepared service identity is incorrect');
+sha256d_ok($lane->isMaturityPipelinePrepared()&&$lane->isPayoutPreparationPipelinePrepared()&&$lane->isRecurringPaymentCoordinatorPrepared(),'SHA256d source pipeline is not prepared independently of commissioning');
 sha256d_ok($registry->fromOwnershipEnvelope($lane->ownershipEnvelope())===null,'Accounting-only SHA256d lane was accepted for payment ownership');
 
 $states=array();$locks=array();foreach($registry->all() as $configured){$states[]=basename($configured->statePath());$locks[]=basename($configured->lockPath());}
