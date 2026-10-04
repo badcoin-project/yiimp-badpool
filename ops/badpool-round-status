@@ -1,0 +1,2 @@
+#!/bin/sh
+exec php "$(dirname "$0")/../tools/badpool-round-status.php" "$@"

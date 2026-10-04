@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Offline L3.194 stop-condition probe; never connects to a daemon or database.
+"""Offline L3.195 recovery-contract probe; never connects to a daemon or database.
 
 Usage: python3 tests/durable_round_daemon_recovery_preflight.py --badcoin-source
        /path/to/Badcoin --compiler g++
 
 This compiles the response-selection tail extracted from the supplied daemon
-source. It tests that code, not a proposed accounting implementation. Returning
-2 means the reproductions passed but the implementation preflight is BLOCKED.
+source. It tests that code, not the accounting implementation. Returning
+0 means the daemon ambiguity findings underlying the fail-closed contract passed.
 Returning 1 means the probe failed or its source assumptions need review.
 
 An unresolved durable intent can safely remain HOLD. These probes establish why
@@ -90,9 +90,9 @@ int main() {
                       r'\s*confirmations = chainActive.Height\(\) - blockindex->nHeight \+ 1;',
                       blockchain, re.S), 'confirmation semantics changed; inspect it')
     print('PASS negative confirmations do not encode historical acceptance')
-    print('PRECHECK=BLOCKED: terminal replay resolution needs original-outcome evidence; '
-          'HOLD is safe but is not terminal recovery')
-    return 2
+    print('PRECHECK=PASS: L3.195 permits HOLD; terminal resolution requires original-outcome '
+          'evidence or distinctly audited operator adjudication, never blind replay')
+    return 0
 
 
 if __name__ == '__main__':

@@ -1,5 +1,6 @@
 
 #include "stratum.h"
+#include "durable_round.h"
 #include <mysql/mysqld_error.h>
 #include <signal.h>
 
@@ -375,6 +376,7 @@ void db_update_coinds(YAAMP_DB *db)
 			usleep(100*YAAMP_MS);
 		}
 		coind->touch = true;
+		if(g_durable_rounds) round_resume_never_dispatched(db,coind);
 		coind_create_job(coind);
 	}
 

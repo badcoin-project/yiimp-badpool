@@ -1,4 +1,5 @@
 <?php
+require_once(dirname(__FILE__).'/BadpoolRoundGate.php');
 
 interface BadpoolLiveCaptureEarningsStore
 {
@@ -45,6 +46,7 @@ class BadpoolLiveCaptureEarningsBridge
 		$found = array(); $blocks = array(); $projected = array(); $models = array();
 		foreach ($inventory as $item) {
 			$id = intval($item['block_id']); $found[$id] = true; $reasons = array();
+			if(!BadpoolRoundGate::eligible($item)) $reasons[]='round_attribution_not_sealed';
 			if (empty($item['block_exists'])) $reasons[] = 'missing_block';
 			if (intval($item['candidate_coin_id']) !== $coinId) $reasons[] = 'candidate_coin_mismatch';
 			if (!empty($item['block_exists']) && intval($item['block_coin_id']) !== intval($item['candidate_coin_id'])) $reasons[] = 'block_coin_mismatch';
@@ -54,7 +56,7 @@ class BadpoolLiveCaptureEarningsBridge
 			usort($attrs, function($a,$b) { return intval($a['userid']) - intval($b['userid']); });
 			$zeroWidth = intval($item['share_floor_id']) === intval($item['share_ceiling_id']);
 			$model = $attrs ? 'share_window' : null;
-			if (!$attrs && $zeroWidth && intval(isset($item['block_userid']) ? $item['block_userid'] : 0) > 0 && !empty($item['block_user_exists']))
+			if ((!isset($item['attribution_version']) || intval($item['attribution_version'])===1) && !$attrs && $zeroWidth && intval(isset($item['block_userid']) ? $item['block_userid'] : 0) > 0 && !empty($item['block_user_exists']))
 				$model = 'block_userid_single_recipient';
 			if (!$attrs && $model === null) $reasons[] = $zeroWidth ? 'blocked_invalid_block_userid' : 'blocked_no_attribution';
 			$total = 0.0;
@@ -121,12 +123,12 @@ class BadpoolYiiLiveCaptureEarningsStore implements BadpoolLiveCaptureEarningsSt
 	private $db; public function __construct($db){$this->db=$db;}
 	public function inventory($coinId,$ids,$limit)
 	{
-		$p=array(':coin'=>$coinId);$where='C.coin_id=:coin';
+		$p=array(':coin'=>$coinId);$where=BadpoolRoundGate::sql().' AND C.coin_id=:coin';
 		if($ids){$in=array();foreach($ids as $n=>$id){$k=':id'.$n;$in[]=$k;$p[$k]=$id;}$where.=' AND C.block_id IN ('.implode(',',$in).')';}
 		$sql="SELECT C.*,B.id AS joined_block_id,B.coin_id AS block_coin_id,CO.algo AS block_algo,B.userid AS block_userid,A.id IS NOT NULL AS block_user_exists,IFNULL(A.no_fees,0) AS block_user_no_fees,IFNULL(A.donation,0) AS block_user_donation,B.amount AS block_amount,B.txhash AS block_txhash,B.confirmations AS block_confirmations,B.price AS block_price,B.category AS block_category,(SELECT COUNT(*) FROM earnings E WHERE E.blockid=C.block_id) AS earnings_count FROM live_block_candidates C LEFT JOIN blocks B ON B.id=C.block_id LEFT JOIN coins CO ON CO.id=B.coin_id LEFT JOIN accounts A ON A.id=B.userid WHERE $where ORDER BY C.block_id LIMIT ".intval($limit);
 		$rows=$this->db->createCommand($sql)->queryAll(true,$p);foreach($rows as &$r){$r['block_exists']=$r['joined_block_id']!==null;$r['candidate_coin_id']=$r['coin_id'];$r['candidate_algo']=$r['algo'];$r['attributions']=$this->db->createCommand('SELECT userid,difficulty,no_fees,donation FROM live_block_attributions WHERE block_id=:id ORDER BY userid')->queryAll(true,array(':id'=>$r['block_id']));}return $rows;
 	}
 	public function applyEarnings($rows,$expected)
 	{
-		$tx=$this->db->beginTransaction();try{$blocks=array();foreach($rows as $r)$blocks[intval($r['blockid'])]=true;foreach(array_keys($blocks) as $id){$n=$this->db->createCommand('SELECT COUNT(*) FROM earnings WHERE blockid=:id FOR UPDATE')->queryScalar(array(':id'=>$id));if(intval($n)!==0)throw new RuntimeException('duplicate earnings for block '.$id);}foreach($rows as $r)$this->db->createCommand()->insert('earnings',array('userid'=>$r['userid'],'coinid'=>$r['coinid'],'blockid'=>$r['blockid'],'create_time'=>$r['create_time'],'amount'=>$r['amount'],'price'=>$r['price'],'status'=>0));$count=0;foreach(array_keys($blocks) as $id)$count+=intval($this->db->createCommand('SELECT COUNT(*) FROM earnings WHERE blockid=:id')->queryScalar(array(':id'=>$id)));$tx->commit();return array('inserted_count'=>$count,'block_count'=>count($blocks));}catch(Exception $e){if($tx->active)$tx->rollback();throw $e;}}
+		$tx=$this->db->beginTransaction();try{$blocks=array();foreach($rows as $r)$blocks[intval($r['blockid'])]=true;foreach(array_keys($blocks) as $id){$eligible=$this->db->createCommand('SELECT C.block_id FROM live_block_candidates C WHERE C.block_id=:id AND '.BadpoolRoundGate::sql().' FOR UPDATE')->queryScalar(array(':id'=>$id));if(!$eligible)throw new RuntimeException('round attribution not sealed');$n=$this->db->createCommand('SELECT COUNT(*) FROM earnings WHERE blockid=:id FOR UPDATE')->queryScalar(array(':id'=>$id));if(intval($n)!==0)throw new RuntimeException('duplicate earnings for block '.$id);}foreach($rows as $r)$this->db->createCommand()->insert('earnings',array('userid'=>$r['userid'],'coinid'=>$r['coinid'],'blockid'=>$r['blockid'],'create_time'=>$r['create_time'],'amount'=>$r['amount'],'price'=>$r['price'],'status'=>0));$count=0;foreach(array_keys($blocks) as $id)$count+=intval($this->db->createCommand('SELECT COUNT(*) FROM earnings WHERE blockid=:id')->queryScalar(array(':id'=>$id)));$tx->commit();return array('inserted_count'=>$count,'block_count'=>count($blocks));}catch(Exception $e){if($tx->active)$tx->rollback();throw $e;}}
 }

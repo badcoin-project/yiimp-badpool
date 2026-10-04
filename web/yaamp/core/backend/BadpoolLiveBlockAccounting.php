@@ -1,6 +1,7 @@
 <?php
 
 require_once(dirname(__FILE__).'/BadpoolLivePaymentLaneConfiguration.php');
+require_once(dirname(__FILE__).'/BadpoolRoundGate.php');
 
 interface BadpoolLiveBlockDaemon { public function inspect($candidate); }
 interface BadpoolLiveBlockStore {
@@ -30,6 +31,7 @@ class BadpoolLiveBlockAccounting
 		$out=array('selected'=>0,'immature'=>0,'orphan'=>0,'skipped'=>0,'daemon_failed'=>0,'apply_failed'=>0,
 			'daemon_failures'=>array(),'apply_failures'=>array());
 		foreach($this->store->candidates($coinId,$algo,$after,$limit) as $candidate) {
+			if(!BadpoolRoundGate::eligible($candidate)) { $out['skipped']++; continue; }
 			$out['selected']++;
 			try { $result=$this->daemon->inspect($candidate); }
 			catch(Exception $e) { $out['daemon_failed']++; $out['daemon_failures'][]=array('block_id'=>intval($candidate['block_id']),'reason'=>'rpc_exception'); continue; }
@@ -84,14 +86,14 @@ class BadpoolYiiLiveBlockStore implements BadpoolLiveBlockStore
 	public function __construct($db) { $this->db=$db; }
 	public function candidates($coinId,$algo,$after,$limit)
 	{
-		return $this->db->createCommand("SELECT C.*,B.height,B.category FROM live_block_candidates C INNER JOIN blocks B ON B.id=C.block_id AND B.coin_id=C.coin_id AND B.blockhash=C.blockhash WHERE C.coin_id=:coin AND C.algo=:algo AND C.block_id > :after AND B.category='new' AND NOT EXISTS (SELECT 1 FROM earnings E WHERE E.blockid=B.id) ORDER BY C.block_id LIMIT ".intval($limit))->queryAll(true,array(':coin'=>$coinId,':algo'=>$algo,':after'=>$after));
+		return $this->db->createCommand("SELECT C.*,B.height,B.category FROM live_block_candidates C INNER JOIN blocks B ON B.id=C.block_id AND B.coin_id=C.coin_id AND B.blockhash=C.blockhash WHERE ".BadpoolRoundGate::sql()." AND C.coin_id=:coin AND C.algo=:algo AND C.block_id > :after AND B.category='new' AND NOT EXISTS (SELECT 1 FROM earnings E WHERE E.blockid=B.id) ORDER BY C.block_id LIMIT ".intval($limit))->queryAll(true,array(':coin'=>$coinId,':algo'=>$algo,':after'=>$after));
 	}
 	public function apply($candidate,$class)
 	{
 		$tx=$this->db->beginTransaction();
 		try {
 			$p=array(':id'=>$candidate['block_id'],':coin'=>$candidate['coin_id'],':hash'=>$candidate['blockhash'],':algo'=>$candidate['algo']);
-			$live=$this->db->createCommand("SELECT B.id FROM blocks B INNER JOIN live_block_candidates C ON C.block_id=B.id AND C.coin_id=B.coin_id AND C.blockhash=B.blockhash WHERE B.id=:id AND B.coin_id=:coin AND B.blockhash=:hash AND B.category='new' AND C.algo=:algo AND NOT EXISTS (SELECT 1 FROM earnings E WHERE E.blockid=B.id) FOR UPDATE")->queryRow(true,$p);
+			$live=$this->db->createCommand("SELECT B.id FROM blocks B INNER JOIN live_block_candidates C ON C.block_id=B.id AND C.coin_id=B.coin_id AND C.blockhash=B.blockhash WHERE ".BadpoolRoundGate::sql()." AND B.id=:id AND B.coin_id=:coin AND B.blockhash=:hash AND B.category='new' AND C.algo=:algo AND NOT EXISTS (SELECT 1 FROM earnings E WHERE E.blockid=B.id) FOR UPDATE")->queryRow(true,$p);
 			if(!$live) { $tx->rollback(); return array('status'=>'skipped','reason'=>'no_longer_eligible'); }
 			if($class['category']==='orphan') {
 				$n=$this->db->createCommand("UPDATE blocks SET category='orphan',amount=0,confirmations=0 WHERE id=:id AND coin_id=:coin AND blockhash=:hash AND category='new'")->execute(array(':id'=>$candidate['block_id'],':coin'=>$candidate['coin_id'],':hash'=>$candidate['blockhash']));
