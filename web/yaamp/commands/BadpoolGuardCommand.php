@@ -2342,13 +2342,22 @@ class BadpoolGuardCommand extends CConsoleCommand
 		return $this->guard->selectAll('SELECT P.id AS payout_id, P.account_id, P.idcoin AS payout_idcoin, CAST(P.amount AS CHAR) AS amount, P.completed, P.tx, A.username, A.coinid AS account_coinid, C.id AS coin_id, C.symbol, C.rpcencoding FROM payouts P INNER JOIN accounts A ON A.id=P.account_id INNER JOIN coins C ON C.id=P.idcoin WHERE P.id IN ('.implode(',', $placeholders).') ORDER BY P.id', $params);
 	}
 
+	/** DB decimal text is authority. Reject floats rather than guessing lost digits. */
+	private function payoutDecimalString($value)
+	{
+		if(is_int($value))$value=(string)$value;
+		if(!is_string($value)||!preg_match('/^(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$/D',$value))throw new RuntimeException('Payout preparation requires authoritative decimal text.');
+		return $value;
+	}
+
 	private function payoutRowApprovalPackageReport()
 	{
 		if ($this->guard->isAllCoinsPreview()) { $this->guard->addError('payout-row-approval-package requires --coin-id and refuses all-coin scope.'); return $this->guard->refusalReport(); }
 		$candidates = $this->buildReadOnlyPayoutCandidates(); $coinId = intval(arraySafeVal($this->guard->getScope(), 'coin_id')); $items = array();
-		foreach ($candidates as $c) $items[] = array('account_id'=>intval($c['account_id']),'account_coinid'=>intval($c['coin_id']),'current_balance'=>$this->decimalString($c['current_balance']),'payout_threshold'=>$this->decimalString($c['threshold']),'projected_payout_row_amount'=>$this->decimalString($c['projected_payout_amount']),'projected_account_debit_amount'=>$this->decimalString($c['projected_payout_amount']),'projected_remaining_balance'=>$this->decimalString($c['projected_remaining_balance']));
-		$r = $this->guard->baseReport(); $r['approval_package_type']='payout-row-creation'; $r['approval_required']=true; $r['scope_binding']=array('coin_id'=>$coinId,'source'=>'same buildReadOnlyPayoutCandidates source as payout-candidates-preview'); $r['safety_binding']=array('no_wallet_send'=>true,'no_withdraw_creation'=>true,'no_backend_loop'=>true,'no_share_deletion'=>true); $r['summary']['selected_account_count']=count($items); $r['summary']['projected_payout_total']=$this->sumColumn($items,'projected_payout_row_amount'); $r['items']['selected_accounts']=$items;
+		foreach ($candidates as $c) $items[] = array('account_id'=>intval($c['account_id']),'account_coinid'=>intval($c['coin_id']),'current_balance'=>$this->payoutDecimalString($c['current_balance']),'payout_threshold'=>$this->payoutDecimalString($c['threshold']),'projected_payout_row_amount'=>$this->payoutDecimalString($c['projected_payout_amount']),'projected_account_debit_amount'=>$this->payoutDecimalString($c['projected_payout_amount']),'projected_remaining_balance'=>$this->payoutDecimalString($c['projected_remaining_balance']));
+		$r = $this->guard->baseReport(); $r['approval_package_type']='payout-row-creation'; $r['approval_required']=true; $r['scope_binding']=array('coin_id'=>$coinId,'source'=>'same buildReadOnlyPayoutCandidates source as payout-candidates-preview'); $r['safety_binding']=array('no_wallet_send'=>true,'no_withdraw_creation'=>true,'no_backend_loop'=>true,'no_share_deletion'=>true); $r['summary']['selected_account_count']=count($items); $r['summary']['projected_payout_total']='0'; $r['items']['selected_accounts']=$items;
 		$r['selected_scope_checksum']=BadpoolGuardReport::checksum(array('coin_id'=>$coinId,'accounts'=>$items)); $r['projected_payout_row_checksum']=BadpoolGuardReport::checksum(array_map(function($i){return array('account_id'=>$i['account_id'],'idcoin'=>$i['account_coinid'],'amount'=>$i['projected_payout_row_amount'],'completed'=>0,'tx'=>null);}, $items)); $r['projected_account_debit_checksum']=BadpoolGuardReport::checksum(array_map(function($i){return array('account_id'=>$i['account_id'],'coinid'=>$i['account_coinid'],'from_balance'=>$i['current_balance'],'debit'=>$i['projected_account_debit_amount'],'to_balance'=>$i['projected_remaining_balance']);}, $items));
+		foreach($items as $item)$r['summary']['projected_payout_total']=$this->walletSendDryrunDecimalAdd($r['summary']['projected_payout_total'],$item['projected_payout_row_amount']);
 		$r['apply_command_shape']=array('cd',self::OPERATOR_WEB_CWD,'&&','php','yaamp/yiic.php','badpoolguard','payout-row-apply','--coin-id='.$coinId,'--selected-account-ids='.$this->csvIds($items,'account_id'),'--approval-package-checksum=<approval_package_checksum>','--selected-scope-checksum='.arraySafeVal($r['selected_scope_checksum'],'value'),'--projected-payout-row-checksum='.arraySafeVal($r['projected_payout_row_checksum'],'value'),'--projected-account-debit-checksum='.arraySafeVal($r['projected_account_debit_checksum'],'value'),'--operator-confirms-payout-row-creation=scrypt_balance_to_payout_rows_no_wallet_send','--format=json');
 		$this->standardizeApprovalPackageContract($r, 'payout-row-creation', array('approval_package_checksum','selected_scope_checksum','projected_payout_row_checksum','projected_account_debit_checksum')); $r=$this->guard->finalizeReport($r); unset($r['report_checksum']); $r['approval_package_checksum']=$this->stableApprovalChecksum($r,array('approval_package_type','scope_binding','safety_binding','selected_scope_checksum','projected_payout_row_checksum','projected_account_debit_checksum','items','apply_command_shape','selected_records','checksums','apply_command_args')); $this->standardizeApprovalPackageContract($r, 'payout-row-creation', array('approval_package_checksum','selected_scope_checksum','projected_payout_row_checksum','projected_account_debit_checksum')); $r['report_checksum']=BadpoolGuardReport::checksum($r); return $r;
 	}
@@ -2358,6 +2367,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 		$items = $this->filterRowsByIds(arraySafeVal(arraySafeVal($r, 'items', array()), 'selected_accounts', array()), 'account_id', $ids);
 		$r['items']['selected_accounts'] = $items;
 		$r['summary']['selected_account_count'] = count($items);
+		$r['summary']['projected_payout_total']='0';foreach($items as $item)$r['summary']['projected_payout_total']=$this->walletSendDryrunDecimalAdd($r['summary']['projected_payout_total'],$item['projected_payout_row_amount']);
 		$r['selected_scope_checksum'] = BadpoolGuardReport::checksum(array('coin_id'=>arraySafeVal($this->guard->getScope(), 'coin_id'), 'accounts'=>$items));
 		$r['projected_payout_row_checksum'] = BadpoolGuardReport::checksum(array_map(function($i){ return array('account_id'=>$i['account_id'], 'idcoin'=>$i['account_coinid'], 'amount'=>$i['projected_payout_row_amount'], 'completed'=>0, 'tx'=>null); }, $items));
 		$r['projected_account_debit_checksum'] = BadpoolGuardReport::checksum(array_map(function($i){ return array('account_id'=>$i['account_id'], 'coinid'=>$i['account_coinid'], 'from_balance'=>$i['current_balance'], 'debit'=>$i['projected_account_debit_amount'], 'to_balance'=>$i['projected_remaining_balance']); }, $items));
@@ -2414,17 +2424,17 @@ class BadpoolGuardCommand extends CConsoleCommand
 	private function applyPayoutRows($approval)
 	{
 		$items = arraySafeVal(arraySafeVal($approval, 'items', array()), 'selected_accounts', array());
-		$n = 0; $amount = 0.0; $ids = array(); $accounts = array();
+		$n = 0; $amount = '0'; $ids = array(); $accounts = array();
 		foreach ($items as $i) {
 			$createdAt = time();
 			$insert = app()->db->createCommand('INSERT INTO payouts (account_id, idcoin, time, amount, completed, tx) VALUES (:account_id, :idcoin, :time, :amount, 0, NULL)');
 			$insert->execute(array(':account_id'=>$i['account_id'], ':idcoin'=>$i['account_coinid'], ':time'=>$createdAt, ':amount'=>$i['projected_payout_row_amount']));
 			$payoutId = $this->captureInsertedPayoutId($i, $createdAt);
-			$u = app()->db->createCommand('UPDATE accounts SET balance=:new_balance WHERE id=:id AND coinid=:coinid AND balance=:old_balance')->execute(array(':new_balance'=>$i['projected_remaining_balance'], ':id'=>$i['account_id'], ':coinid'=>$i['account_coinid'], ':old_balance'=>$i['current_balance']));
+			$u = app()->db->createCommand('UPDATE accounts SET balance=:new_balance WHERE id=:id AND coinid=:coinid AND balance=:old_balance AND CAST(balance AS CHAR)=:old_balance_text')->execute(array(':new_balance'=>$i['projected_remaining_balance'], ':id'=>$i['account_id'], ':coinid'=>$i['account_coinid'], ':old_balance'=>$i['current_balance'], ':old_balance_text'=>$i['current_balance']));
 			if ($u !== 1) throw new Exception('selected account balance changed before apply: '.$i['account_id']);
-			$n++; $amount += floatval($i['projected_payout_row_amount']); $ids[] = $payoutId; $accounts[] = intval($i['account_id']);
+			$n++; $amount = $this->walletSendDryrunDecimalAdd($amount,$i['projected_payout_row_amount']); $ids[] = $payoutId; $accounts[] = intval($i['account_id']);
 		}
-		return array('created_count'=>$n, 'created_amount'=>$this->decimalString($amount), 'created_payout_ids'=>$ids, 'debited_account_ids'=>$accounts, 'payout_rows_inserted'=>$n, 'payout_count'=>$n, 'payout_rows_insert_only'=>true, 'accounts_debited_to_projected_remaining_balance'=>true, 'payouts_marked_completed'=>false, 'old_payouts_retried_or_deleted'=>false);
+		return array('created_count'=>$n, 'created_amount'=>$amount, 'created_payout_ids'=>$ids, 'debited_account_ids'=>$accounts, 'payout_rows_inserted'=>$n, 'payout_count'=>$n, 'payout_rows_insert_only'=>true, 'accounts_debited_to_projected_remaining_balance'=>true, 'payouts_marked_completed'=>false, 'old_payouts_retried_or_deleted'=>false);
 	}
 
 	private function captureInsertedPayoutId($item, $createdAt)
@@ -2485,7 +2495,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 	{
 		$out = array();
 		foreach ($ids as $id) {
-			$row = $this->guard->selectRow('SELECT id AS account_id, coinid, balance FROM accounts WHERE id=:id', array(':id'=>$id));
+			$row = $this->guard->selectRow('SELECT id AS account_id, coinid, CAST(balance AS CHAR) AS balance FROM accounts WHERE id=:id', array(':id'=>$id));
 			if ($row) $out[] = $row;
 		}
 		return $out;
@@ -3599,6 +3609,9 @@ class BadpoolGuardCommand extends CConsoleCommand
 
 	private function approvalPackageSelectedAmount($records, $packageType)
 	{
+		if($packageType==='payout-row-creation'){
+			$total='0';foreach($records as $record)$total=$this->walletSendDryrunDecimalAdd($total,$this->payoutDecimalString($record['amount']));return $total;
+		}
 		$total = 0.0;
 		foreach ($records as $record) {
 			$field = $packageType === 'account-credit-clear' ? 'expected_post_apply_account_delta' : 'amount';
@@ -3928,9 +3941,9 @@ class BadpoolGuardCommand extends CConsoleCommand
 
 		$sql = "SELECT A.id AS account_id, $username AS username, A.coinid AS coin_id, ".
 			"$coinSymbol AS coin_symbol, $coinAlgo AS coin_algo, ".
-			"A.balance AS current_balance, $payoutMinExpr AS payout_min, $txFeeExpr AS txfee, ".
-			"$thresholdExpr AS threshold, A.balance AS projected_payout_amount, ".
-			"0 AS projected_remaining_balance, ".
+			"CAST(A.balance AS CHAR) AS current_balance, $payoutMinExpr AS payout_min, $txFeeExpr AS txfee, ".
+			"CAST($thresholdExpr AS CHAR) AS threshold, CAST(A.balance AS CHAR) AS projected_payout_amount, ".
+			"'0' AS projected_remaining_balance, ".
 			"CASE WHEN A.balance > $thresholdExpr THEN 1 ELSE 0 END AS above_threshold ".
 			"FROM accounts A INNER JOIN coins C ON C.id=A.coinid ".
 			"WHERE ".$where['sql']." AND A.balance > $thresholdExpr ".

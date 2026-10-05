@@ -128,6 +128,7 @@ class BadpoolPaymentBatchPhaseAdapter
 		if($recovered!==null){$ledger['selected_account_ids']=$recovered['selected_account_ids'];$ledger['selected_accounts_by_coin']=$recovered['selected_accounts_by_coin'];}
 		$existing=$this->recoverExistingPayoutApply($ledger);
 		if($existing!==null){if($recovered!==null){$existing['selected_account_ids']=$recovered['selected_account_ids'];$existing['selected_accounts_by_coin']=$recovered['selected_accounts_by_coin'];}return $existing;}
+		if(file_exists($ledger['run_directory'].'/payout-row-apply-attempt.json')||is_link($ledger['run_directory'].'/payout-row-apply-attempt.json'))return $this->hold('Prior payout-row apply outcome has no durable completion evidence; investigate without reapplying.');
 		$packaged=$this->packages($ledger,6,'payout-row-approval-package','payout-row-packages.json','payout'); if(!$this->passed($packaged))return $packaged;
 		$applied=$this->applyPackages($ledger,6,6,'payout-row-apply','payout-row-apply-report.json',$packaged['package_path'],$packaged['checksums']); if(!$this->passed($applied))return $applied;
 		$ids=array();$inserted=0; foreach($this->readArtifact($applied['report_path']) as $report){$inserted+=intval(arraySafeVal($report,'payout_rows_inserted',arraySafeVal($report,'created_count',0)));foreach((array)arraySafeVal($report,'created_payout_ids',array()) as $id){$pid=$this->positiveId($id);if($pid!==null)$ids[]=$pid;}}
@@ -173,9 +174,51 @@ class BadpoolPaymentBatchPhaseAdapter
 	private function applyPackages($ledger,$sourcePhase,$phase,$command,$file,$path=null,$checksums=null)
 	{
 		if($path===null)$path=$this->phaseArtifact($ledger,$sourcePhase,'package_path');
-		$verify=$this->verifyArtifactChecksum($ledger,$sourcePhase,$path,$checksums); if($verify!==true)return $this->hold($verify);
-		$packages=$this->readArtifact($path);if(!is_array($packages))return $this->hold('Required approval package artifact is missing or invalid.');
-		$reports=array();foreach($packages as $package){$args=$this->applyArgs($package,$command);if($args===null)return $this->hold('Approval package has no compatible guarded apply command.',$reports);$r=$this->command($command,$args);if(!$this->passed($r))return $this->hold('Guarded apply did not pass.',$reports,arraySafeVal($r,'errors',array()));$reports[]=$r;}return $this->artifact($ledger,$phase,$file,$reports);
+		$verify=$this->verifyArtifactChecksum($ledger,$sourcePhase,$path,$checksums); if($verify!==true)return $this->applyRefusal($ledger,$phase,$file,array(),'approval_artifact_invalid',$verify,'none');
+		$packages=$this->readArtifact($path);if(!is_array($packages))return $this->applyRefusal($ledger,$phase,$file,array(),'approval_artifact_missing','Required approval package artifact is missing or invalid.','none');
+		$reports=array();foreach($packages as $package){
+			$args=$this->applyArgs($package,$command);if($args===null)return $this->applyRefusal($ledger,$phase,$file,$reports,'apply_contract_missing','Approval package has no compatible guarded apply command.',$reports?'unknown':'none');
+			$attemptPath=null;
+			if($command==='payout-row-apply'){
+				$attemptPath=$ledger['run_directory'].'/payout-row-apply-attempt.json';
+				if(file_exists($attemptPath)||is_link($attemptPath))return $this->applyRefusal($ledger,$phase,$file,$reports,'prior_apply_outcome_unknown','Prior payout-row apply attempt requires investigation.','unknown');
+				$attempt=$this->artifact($ledger,$phase,'payout-row-apply-attempt.json',array(array('batch_id'=>$ledger['batch_id'],'phase'=>$phase,'state'=>'APPLY_ATTEMPT_STARTED','package_checksum'=>hash_file('sha256',$path),'timestamp'=>gmdate('c'),'mutation_status'=>'unknown')));
+				if(!$this->passed($attempt))return $this->applyRefusal($ledger,$phase,$file,$reports,'attempt_evidence_failed','Cannot persist payout apply attempt barrier; no command dispatched.','none');
+			}
+			try{$r=$this->command($command,$args);}catch(Exception $e){return $this->applyRefusal($ledger,$phase,$file,$reports,'apply_exception','Guarded apply exception: '.$this->safeDiagnostic($e->getMessage()),'unknown');}
+			if(!$this->passed($r)){
+				// Retain only the guarded diagnostic contract, never arbitrary transport output.
+				$reason=(string)arraySafeVal($r,'abort_reason',arraySafeVal($r,'reason','guarded_apply_refused'));
+				$errors=(array)arraySafeVal($r,'errors',array());$message=$errors?implode('; ',array_map('strval',$errors)):'Guarded apply refused: '.$reason;
+				$reports[]=array('status'=>'hold','abort_reason'=>$reason,'errors'=>array($this->safeDiagnostic($message)),'db_mutations'=>arraySafeVal($r,'db_mutations',false));
+				$refused=$this->applyRefusal($ledger,$phase,$file,$reports,$reason,$message,arraySafeVal($r,'db_mutation_status',arraySafeVal($r,'db_mutations',false)?'unknown':'none'));
+				if($attemptPath&&arraySafeVal($r,'db_mutations')===false&&arraySafeVal($refused['failure_evidence'],'report_checksum')!==null)@unlink($attemptPath);
+				return $refused;
+			}
+			$reports[]=$r;
+			// Publish committed results before a later package can fail.
+			$saved=$this->artifact($ledger,$phase,$file,$reports);if(!$this->passed($saved))return $saved;
+			if($attemptPath&&!@unlink($attemptPath))return $this->applyRefusal($ledger,$phase,$file,$reports,'attempt_barrier_retained','Committed payout report retained, but attempt barrier could not be cleared; investigate without reapplying.','unknown');
+		}return $this->artifact($ledger,$phase,$file,$reports);
+	}
+
+	private function safeDiagnostic($message)
+	{
+		$message=preg_replace('/((?:password|passwd|rpcpassword|rpcuser|token|secret)["\']?\s*[=:]\s*["\']?)[^\s,"\']+/i','$1[REDACTED]',(string)$message);
+		$message=preg_replace('/((?:authorization|cookie)["\']?\s*[=:]\s*).*/i','$1[REDACTED]',$message);
+		return preg_replace('#(https?://)[^/\s@]+@#i','$1[REDACTED]@',$message);
+	}
+	private function applyRefusal($ledger,$phase,$file,$reports,$classification,$reason,$mutation)
+	{
+		foreach($reports as $report)if(arraySafeVal($report,'status')==='pass'&&arraySafeVal($report,'db_mutations',false))$mutation='partial_guarded_commit_requires_investigation';
+		$evidence=array('batch_id'=>$ledger['batch_id'],'phase'=>$phase,'refusal_classification'=>$this->safeDiagnostic($classification),'refusal_reason'=>$this->safeDiagnostic($reason),'report_path'=>$ledger['run_directory'].'/'.$file,'timestamp'=>gmdate('c'),'mutation_status'=>$mutation);
+		$reports[]=array('status'=>'hold','failure_evidence'=>$evidence);
+		$saved=$this->artifact($ledger,$phase,$file,$reports);
+		$evidence['report_checksum']=$this->passed($saved)?hash_file('sha256',$saved['report_path']):null;
+		$result=$this->hold($evidence['refusal_reason'],$reports,array($evidence['refusal_reason']));
+		$result['failure_evidence']=$evidence;$result['report_path']=$evidence['report_path'];$result['checksums']=arraySafeVal($saved,'checksums',array());
+		if(!$this->passed($saved))$result['errors'][]='Unable to atomically retain refusal report.';
+		return $result;
 	}
 
 	private function applyArgs($package,$command)
