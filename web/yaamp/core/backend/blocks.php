@@ -4,12 +4,14 @@ require_once(dirname(__FILE__).'/BadpoolShareDeleteGuard.php');
 
 function BackendBlockNew($coin, $db_block)
 {
+	// Round-owned blocks use the guarded immutable attribution bridge.
+	if(dboscalar('SELECT COUNT(*) FROM live_block_candidates WHERE block_id=:id AND attribution_version=2',array(':id'=>$db_block->id))) return;
 //	debuglog("NEW BLOCK $coin->name $db_block->height");
 	$reward = $db_block->amount;
 	if(!$reward || $db_block->algo == 'PoS' || $db_block->algo == 'MN') return;
 	if($db_block->category == 'stake' || $db_block->category == 'generated') return;
 
-	$sqlCond = "valid = 1";
+	$sqlCond = "valid = 1 AND round_id IS NULL";
 	if(!YAAMP_ALLOW_EXCHANGE) // only one coin mined
 		$sqlCond .= " AND coinid = ".intval($coin->id);
 
@@ -82,6 +84,7 @@ function BackendBlockFind1($coinid = NULL)
 	$list = getdbolist('db_blocks', "category='new' $sqlFilter ORDER BY time");
 	foreach($list as $db_block)
 	{
+		if(dboscalar('SELECT COUNT(*) FROM live_block_candidates WHERE block_id=:id AND attribution_version=2',array(':id'=>$db_block->id))) continue;
 		$coin = getdbo('db_coins', $db_block->coin_id);
 		if(!$coin || !$db_block->coin_id) {
 			debuglog("warning: bad coin id {$db_block->coin_id} for block id {$db_block->id}!");

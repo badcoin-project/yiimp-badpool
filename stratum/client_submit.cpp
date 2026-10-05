@@ -1,5 +1,6 @@
 #include "stratum.h"
 #include <atomic>
+#include "durable_round.h"
 
 extern bool g_debuglog_block_path;
 extern bool g_debuglog_block_path_verbose;
@@ -390,7 +391,7 @@ static void build_submit_values_decred(YAAMP_JOB_VALUES *submitvalues, YAAMP_JOB
 /////////////////////////////////////////////////////////////////////////////////
 
 static void client_do_submit(YAAMP_CLIENT *client, YAAMP_JOB *job, YAAMP_JOB_VALUES *submitvalues,
-	char *extranonce2, char *ntime, char *nonce, char *vote)
+	char *extranonce2, char *ntime, char *nonce, char *vote, ROUND_RECEIPT *round_receipt)
 {
 	YAAMP_COIND *coind = job->coind;
 	YAAMP_JOB_TEMPLATE *templ = job->templ;
@@ -512,6 +513,16 @@ static void client_do_submit(YAAMP_CLIENT *client, YAAMP_JOB *job, YAAMP_JOB_VAL
 		}
 
 		size_t block_hex_len = strlen(block_hex);
+		if(round_enabled(job)) {
+			if(round_prepare(client,job,submitvalues,round_receipt,block_hex,target_to_diff(coin_target),target_to_diff(hash_int))) {
+				if(round_dispatch(coind,round_receipt,block_hex)) job->block_found=true;
+			} else {
+				stratumlog("BADPOOL_ROUND_CANDIDATE_PAUSED coin_id=%d db_algo=%s work_id=%llu reason=pending_dependency_or_intent_failure\n",
+					coind->id,g_stratum_algo,round_receipt->work_id);
+			}
+			free(block_hex);
+			return;
+		}
 		block_path_log_submit_begin(&block_path, block_hex_len);
 		STRATUM_COIND_SUBMIT_OBSERVATION submit_observation;
 		bool b = coind_submit(coind, block_hex, &submit_observation);
@@ -996,7 +1007,7 @@ bool client_submit(YAAMP_CLIENT *client, json_value *json_params)
 	}
 
 	YAAMP_SHARE *share = share_find(job->id, extranonce2, ntime, nonce, client->extranonce1);
-	if(share)
+	if(share && !round_enabled(job))
 	{
 		client_submit_error_diag(client, job, 22, "Duplicate share", extranonce2, ntime, nonce, false, false, 0, 0, 0);
 		return true;
@@ -1090,10 +1101,19 @@ bool client_submit(YAAMP_CLIENT *client, json_value *json_params)
 	}
 
 	log_share_decision_diag(client, job, "PROCEED_TO_SUBMIT", "hash_target_gate_passed", hash_int, user_target, coin_target, 0);
+	ROUND_RECEIPT round_receipt={};
+	if(!round_journal(client,job,&submitvalues,&round_receipt)) {
+		client_submit_error(client,job,28,"Durable work journal unavailable",extranonce2,ntime,nonce);
+		return true;
+	}
+	if(round_receipt.duplicate) {
+		client_submit_error(client,job,22,"Duplicate durable work",extranonce2,ntime,nonce);
+		return true;
+	}
 	if(job->coind)
 	{
 		log_share_decision_diag(client, job, "PROCEED_TO_CLIENT_DO_SUBMIT", "begin", hash_int, user_target, coin_target, 0);
-		client_do_submit(client, job, &submitvalues, extranonce2, ntime, nonce, vote);
+		client_do_submit(client, job, &submitvalues, extranonce2, ntime, nonce, vote, &round_receipt);
 		log_share_decision_diag(client, job, "SUBMIT_RETURNED", "client_do_submit_returned", hash_int, user_target, coin_target, 0);
 	}
 	else
@@ -1125,7 +1145,8 @@ bool client_submit(YAAMP_CLIENT *client, json_value *json_params)
 	}
 
 	log_share_decision_diag(client, job, "SHARE_ADD_BEGIN", "valid_true", hash_int, user_target, coin_target, share_diff);
-	share_add(client, job, true, extranonce2, ntime, nonce, share_diff, 0);
+	share_add(client, job, true, extranonce2, ntime, nonce, share_diff, 0, round_receipt.round_id,
+		round_enabled(job)?round_receipt.assigned_weight:-1);
 	block_path_record_share(true);
 	log_share_decision_diag(client, job, "SHARE_ADD_DONE", "reached_after_share_add", hash_int, user_target, coin_target, share_diff);
 	object_unlock(job);

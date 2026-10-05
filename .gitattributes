@@ -1,0 +1,7 @@
+# Keep the new Linux operator interfaces and test entry points executable
+# after a Windows checkout with core.autocrlf enabled.
+ops/badpool-round-status text eol=lf
+ops/badpool-round-login-notice.sh text eol=lf
+tools/badpool-round-status.php text eol=lf
+tools/badpool-round-adjudicate.php text eol=lf
+tests/durable_round_*.py text eol=lf

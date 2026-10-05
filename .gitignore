@@ -43,6 +43,7 @@ web/yaamp/.idea/
 *.dump
 !sql/*.sql
 !sql/*.sql.gz
+!tests/fixtures/durable_round_schema.sql
 
 # Local env/secrets/wallet/runtime files.
 .env

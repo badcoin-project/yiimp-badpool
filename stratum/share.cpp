@@ -3,6 +3,7 @@
 #include <cmath>
 #include <cctype>
 #include <cerrno>
+#include "durable_round.h"
 
 #define BLOCK_DURABILITY_SCHEMA "badpool.stratum.blockdurability.v1"
 
@@ -73,6 +74,7 @@ static bool block_find_durable(YAAMP_DB *db, YAAMP_BLOCK *block,
 
 static bool block_persist_accepted(YAAMP_DB *db, YAAMP_BLOCK *block)
 {
+	const char *legacy_shares=g_durable_rounds?" AND S.round_id IS NULL ":"";
 	block->persistence_attempts++;
 	if(!block_hash_is_canonical(block->hash) || !block_hash_is_optional_pow(block->hash2)) {
 		if(block_log_attempt(block->persistence_attempts))
@@ -122,17 +124,17 @@ static bool block_persist_accepted(YAAMP_DB *db, YAAMP_BLOCK *block)
 	if(capture_ok) capture_ok = blockid > 0 && db_query_transaction(db,
 		"INSERT INTO live_block_candidates (block_id,coin_id,blockhash,algo,found_time,price,share_floor_id,share_ceiling_id) "
 		"SELECT %llu,%d,'%s','%s',%d,IFNULL(CO.price,0),C.last_share_id,IFNULL(MAX(S.id),C.last_share_id) "
-		"FROM live_block_share_cursors C INNER JOIN coins CO ON CO.id=%d LEFT JOIN shares S ON S.algo=C.algo AND S.id>C.last_share_id "
+		"FROM live_block_share_cursors C INNER JOIN coins CO ON CO.id=%d LEFT JOIN shares S ON S.algo=C.algo AND S.id>C.last_share_id %s "
 		"WHERE C.algo='%s' GROUP BY IFNULL(CO.price,0),C.last_share_id",
-		blockid, block->coinid, block->hash, g_stratum_algo, (int)block->created, block->coinid, g_stratum_algo);
+		blockid, block->coinid, block->hash, g_stratum_algo, (int)block->created, block->coinid,legacy_shares,g_stratum_algo);
 	if(capture_ok) capture_ok = mysql_affected_rows(&db->mysql) == 1;
 	if(capture_ok) capture_ok = db_query_transaction(db,
 		"INSERT INTO live_block_attributions (block_id,userid,difficulty,no_fees,donation) "
 		"SELECT %llu,S.userid,SUM(S.difficulty),IFNULL(A.no_fees,0),IFNULL(A.donation,0) FROM shares S "
 		"INNER JOIN live_block_candidates C ON C.block_id=%llu INNER JOIN accounts A ON A.id=S.userid "
-		"WHERE S.id>C.share_floor_id AND S.id<=C.share_ceiling_id AND S.valid=1 AND S.algo='%s' "
+		"WHERE S.id>C.share_floor_id AND S.id<=C.share_ceiling_id AND S.valid=1 AND S.algo='%s' %s "
 		"GROUP BY S.userid,IFNULL(A.no_fees,0),IFNULL(A.donation,0)",
-		blockid, blockid, g_stratum_algo);
+		blockid, blockid, g_stratum_algo,legacy_shares);
 	my_ulonglong normal_attributions = capture_ok ? mysql_affected_rows(&db->mysql) : 0;
 	if(capture_ok && normal_attributions == 0) {
 		capture_ok = std::isfinite(block->difficulty_user) && block->difficulty_user > 0;
@@ -180,7 +182,7 @@ static bool block_persist_accepted(YAAMP_DB *db, YAAMP_BLOCK *block)
 //	}
 //}
 
-static YAAMP_WORKER *share_find_worker(YAAMP_CLIENT *client, YAAMP_JOB *job, bool valid)
+static YAAMP_WORKER *share_find_worker(YAAMP_CLIENT *client, YAAMP_JOB *job, bool valid, unsigned long long round_id)
 {
 	for(CLI li = g_list_worker.first; li; li = li->next)
 	{
@@ -189,7 +191,7 @@ static YAAMP_WORKER *share_find_worker(YAAMP_CLIENT *client, YAAMP_JOB *job, boo
 
 		if(	worker->userid == client->userid &&
 			worker->workerid == client->workerid &&
-			worker->valid == valid)
+			worker->valid == valid && worker->round_id == round_id)
 		{
 			if(!job && !worker->coinid && !worker->remoteid)
 				return worker;
@@ -206,12 +208,12 @@ static YAAMP_WORKER *share_find_worker(YAAMP_CLIENT *client, YAAMP_JOB *job, boo
 	return NULL;
 }
 
-static void share_add_worker(YAAMP_CLIENT *client, YAAMP_JOB *job, bool valid, char *ntime, double share_diff, int error_number)
+static void share_add_worker(YAAMP_CLIENT *client, YAAMP_JOB *job, bool valid, char *ntime, double share_diff, int error_number, unsigned long long round_id, double assigned_weight)
 {
 //	check_job(job);
 	g_list_worker.Enter();
 
-	YAAMP_WORKER *worker = share_find_worker(client, job, valid);
+	YAAMP_WORKER *worker = share_find_worker(client, job, valid, round_id);
 	if(!worker)
 	{
 		worker = new YAAMP_WORKER;
@@ -222,6 +224,7 @@ static void share_add_worker(YAAMP_CLIENT *client, YAAMP_JOB *job, bool valid, c
 		worker->coinid = job? (job->coind? job->coind->id: 0): 0;
 		worker->remoteid = job? (job->remote? job->remote->id: 0): 0;
 		worker->valid = valid;
+		worker->round_id = round_id;
 		worker->error_number = error_number;
 		sscanf(ntime, "%x", &worker->ntime);
 		worker->share_diff = share_diff;
@@ -236,7 +239,7 @@ static void share_add_worker(YAAMP_CLIENT *client, YAAMP_JOB *job, bool valid, c
 
 	if(valid)
 	{
-		worker->difficulty += client->difficulty_actual / g_current_algo->diff_multiplier;
+		worker->difficulty += assigned_weight>=0?assigned_weight:client->difficulty_actual / g_current_algo->diff_multiplier;
 		client->speed += client->difficulty_actual / g_current_algo->diff_multiplier * 42;
 	//	client->source->speed += client->difficulty_actual / g_current_algo->diff_multiplier * 42;
 	}
@@ -246,11 +249,11 @@ static void share_add_worker(YAAMP_CLIENT *client, YAAMP_JOB *job, bool valid, c
 
 /////////////////////////////////////////////////////////////////////////
 
-void share_add(YAAMP_CLIENT *client, YAAMP_JOB *job, bool valid, char *extranonce2, char *ntime, char *nonce, double share_diff, int error_number)
+void share_add(YAAMP_CLIENT *client, YAAMP_JOB *job, bool valid, char *extranonce2, char *ntime, char *nonce, double share_diff, int error_number, unsigned long long round_id, double assigned_weight)
 {
 //	check_job(job);
 	g_shares_counter++;
-	share_add_worker(client, job, valid, ntime, share_diff, error_number);
+	share_add_worker(client, job, valid, ntime, share_diff, error_number, round_id, assigned_weight);
 
 	YAAMP_SHARE *share = new YAAMP_SHARE;
 	memset(share, 0, sizeof(YAAMP_SHARE));
@@ -291,7 +294,10 @@ void share_write(YAAMP_DB *db)
 	int count = 0;
 	int now = time(NULL);
 
-	char buffer[1024*1024] = "insert into shares (userid, workerid, coinid, jobid, pid, valid, extranonce1, difficulty, share_diff, time, algo, error) values ";
+	const char *columns=g_durable_rounds?
+		"insert into shares (userid, workerid, coinid, jobid, pid, valid, extranonce1, difficulty, share_diff, time, algo, error, round_id) values ":
+		"insert into shares (userid, workerid, coinid, jobid, pid, valid, extranonce1, difficulty, share_diff, time, algo, error) values ";
+	char buffer[1024*1024]; strcpy(buffer,columns);
 	g_list_worker.Enter();
 
 	for(CLI li = g_list_worker.first; li; li = li->next)
@@ -308,6 +314,11 @@ void share_write(YAAMP_DB *db)
 		sprintf(buffer+strlen(buffer), "(%d, %d, %d, %d, %d, %d, %d, %f, %f, %d, '%s', %d)",
 			worker->userid, worker->workerid, worker->coinid, worker->remoteid, pid,
 			worker->valid, worker->extranonce1, worker->difficulty, worker->share_diff, now, g_stratum_algo, worker->error_number);
+		if(g_durable_rounds) {
+			buffer[strlen(buffer)-1]=0;
+			if(worker->round_id) sprintf(buffer+strlen(buffer),",%llu)",worker->round_id);
+			else strcat(buffer,",NULL)");
+		}
 
 		// todo: link max_ttf ?
 		if((now - worker->ntime) > 15*60 || worker->ntime > now) {
@@ -318,7 +329,7 @@ void share_write(YAAMP_DB *db)
 		{
 			db_query(db, buffer);
 
-			strcpy(buffer, "insert into shares (userid, workerid, coinid, jobid, pid, valid, extranonce1, difficulty, share_diff, time, algo, error) values ");
+			strcpy(buffer,columns);
 			count = 0;
 		}
 

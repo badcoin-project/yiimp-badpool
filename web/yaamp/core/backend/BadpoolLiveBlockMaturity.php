@@ -1,4 +1,5 @@
 <?php
+require_once(dirname(__FILE__).'/BadpoolRoundGate.php');
 
 require_once(dirname(__FILE__).'/BadpoolLivePaymentLaneConfiguration.php');
 
@@ -94,7 +95,7 @@ class BadpoolYiiLiveBlockMaturityStore implements BadpoolLiveBlockMaturityStore
 	private $db,$lane;public function __construct($db,$lane=null){$this->db=$db;$this->lane=$lane?:BadpoolLivePaymentLaneRegistry::scryptCompatibility();}
 	public function candidates($coin,$algo,$after,$limit)
 	{
-		$sql="SELECT C.block_id,C.coin_id candidate_coin_id,C.algo candidate_algo,C.blockhash candidate_blockhash,B.coin_id block_coin_id,CO.algo block_algo,B.blockhash block_blockhash,B.txhash block_txhash,B.category block_category FROM live_block_candidates C INNER JOIN blocks B ON B.id=C.block_id INNER JOIN coins CO ON CO.id=B.coin_id WHERE C.coin_id=:coin AND C.algo=:algo AND C.block_id>:after AND B.category='immature' AND EXISTS (SELECT 1 FROM earnings E WHERE E.blockid=B.id AND E.coinid=C.coin_id AND E.status=0) AND NOT EXISTS (SELECT 1 FROM earnings E WHERE E.blockid=B.id AND (E.coinid<>C.coin_id OR E.status<>0)) ORDER BY C.block_id LIMIT ".intval($limit);
+		$sql="SELECT C.block_id,C.coin_id candidate_coin_id,C.algo candidate_algo,C.blockhash candidate_blockhash,B.coin_id block_coin_id,CO.algo block_algo,B.blockhash block_blockhash,B.txhash block_txhash,B.category block_category FROM live_block_candidates C INNER JOIN blocks B ON B.id=C.block_id INNER JOIN coins CO ON CO.id=B.coin_id WHERE ".BadpoolRoundGate::sql()." AND C.coin_id=:coin AND C.algo=:algo AND C.block_id>:after AND B.category='immature' AND EXISTS (SELECT 1 FROM earnings E WHERE E.blockid=B.id AND E.coinid=C.coin_id AND E.status=0) AND NOT EXISTS (SELECT 1 FROM earnings E WHERE E.blockid=B.id AND (E.coinid<>C.coin_id OR E.status<>0)) ORDER BY C.block_id LIMIT ".intval($limit);
 		$rows=$this->db->createCommand($sql)->queryAll(true,array(':coin'=>$coin,':algo'=>$algo,':after'=>$after));
 		foreach($rows as &$row){$row['lane_ownership']=$this->lane->ownershipEnvelope();$inventory=$this->db->createCommand('SELECT id,userid,coinid,blockid,amount,price,status,mature_time FROM earnings WHERE blockid=:id ORDER BY id')->queryAll(true,array(':id'=>$row['block_id']));try{$inventory=BadpoolLiveBlockMaturity::canonicalEarningInventory($inventory,$coin,$row['block_id'],true);$row['earnings']=$inventory;$row['earning_count']=count($inventory);$row['status0_count']=count($inventory);$row['earning_inventory_checksum']=BadpoolLiveBlockMaturity::earningInventoryChecksum($inventory);}catch(Exception $e){$row['earnings']=$inventory;$row['earning_count']=is_array($inventory)?count($inventory):0;$row['status0_count']=0;$row['earning_inventory_checksum']='';}}unset($row);
 		return $rows;
@@ -105,7 +106,7 @@ class BadpoolYiiLiveBlockMaturityStore implements BadpoolLiveBlockMaturityStore
 		try{
 			if(!$this->lane->isMaturityCommissioned()||!$this->lane->ownershipMatches(arraySafeVal($c,'lane_ownership')))throw new RuntimeException('lane ownership changed');
 			$p=array(':id'=>$c['block_id'],':coin'=>$this->lane->coinId(),':algo'=>$this->lane->dbAlgo(),':hash'=>$c['block_blockhash']);
-			$b=$this->db->createCommand("SELECT B.category,B.confirmations FROM blocks B INNER JOIN coins CO ON CO.id=B.coin_id INNER JOIN live_block_candidates C ON C.block_id=B.id AND C.coin_id=B.coin_id AND C.blockhash=B.blockhash AND C.algo=:algo WHERE B.id=:id AND B.coin_id=:coin AND B.blockhash=:hash AND CO.algo=:algo FOR UPDATE")->queryRow(true,$p);
+			$b=$this->db->createCommand("SELECT B.category,B.confirmations FROM blocks B INNER JOIN coins CO ON CO.id=B.coin_id INNER JOIN live_block_candidates C ON C.block_id=B.id AND C.coin_id=B.coin_id AND C.blockhash=B.blockhash AND C.algo=:algo WHERE ".BadpoolRoundGate::sql()." AND B.id=:id AND B.coin_id=:coin AND B.blockhash=:hash AND CO.algo=:algo FOR UPDATE")->queryRow(true,$p);
 			if(!$b){$tx->rollback();return array('status'=>'skipped','reason'=>'no_longer_eligible');}
 			$earnings=$this->db->createCommand('SELECT id,userid,coinid,blockid,amount,price,status,mature_time FROM earnings WHERE blockid=:id ORDER BY id FOR UPDATE')->queryAll(true,array(':id'=>$c['block_id']));
 			$locked=BadpoolLiveBlockMaturity::canonicalEarningInventory($earnings,$this->lane->coinId(),$c['block_id'],false);$expected=BadpoolLiveBlockMaturity::canonicalEarningInventory(arraySafeVal($c,'earnings'),$this->lane->coinId(),$c['block_id'],true);

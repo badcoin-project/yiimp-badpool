@@ -1,5 +1,6 @@
 
 #include "stratum.h"
+#include "durable_round.h"
 #include <signal.h>
 #include <sys/resource.h>
 
@@ -279,6 +280,7 @@ int main(int argc, char **argv)
 	g_stratum_max_ttf = iniparser_getint(ini, "STRATUM:max_ttf", 0x70000000);
 	g_stratum_reconnect = iniparser_getint(ini, "STRATUM:reconnect", true);
 	g_stratum_renting = iniparser_getint(ini, "STRATUM:renting", true);
+	g_durable_rounds = iniparser_getint(ini, "STRATUM:durable_rounds", false);
 	g_handle_haproxy_ips = iniparser_getint(ini, "STRATUM:haproxy_ips", g_handle_haproxy_ips);
 	g_socket_recv_timeout = iniparser_getint(ini, "STRATUM:recv_timeout", 0);
 
@@ -332,6 +334,7 @@ int main(int argc, char **argv)
 	if(!db) yaamp_error("Cant connect database");
 
 	db_register_stratum(db);
+	if(!round_startup(db)) yaamp_error("Durable round mode/schema/recovery unavailable; refusing startup");
 	db_update_algos(db);
 	db_update_coinds(db);
 
@@ -367,6 +370,7 @@ int main(int argc, char **argv)
 		share_prune(db);
 
 		block_prune(db);
+		if(g_durable_rounds) round_recover(db);
 		submit_prune(db);
 		block_path_maybe_log_summary();
 

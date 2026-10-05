@@ -1,4 +1,5 @@
 <?php
+require_once(dirname(__FILE__).'/BadpoolRoundGate.php');
 
 require_once(dirname(__FILE__).'/BadpoolConfirmedBlockPaymentDelayOverride.php');
 require_once(dirname(__FILE__).'/BadpoolLivePaymentLaneConfiguration.php');
@@ -50,7 +51,7 @@ class BadpoolPaymentBatchPhaseAdapter
 		if($excludedEarnings===null||$excludedBlocks===null)return $this->hold('Durable queue exclusion scope is malformed or duplicated.');
 		$exclusions='';$marks=array();foreach($excludedEarnings as$i=>$id){$key=':excluded_earning_'.$i;$marks[]=$key;$params[$key]=$id;}if($marks)$exclusions.=' AND E.id NOT IN ('.implode(',',$marks).')';
 		$marks=array();foreach($excludedBlocks as$i=>$id){$key=':excluded_block_'.$i;$marks[]=$key;$params[$key]=$id;}if($marks)$exclusions.=' AND B.id NOT IN ('.implode(',',$marks).')';
-		$sql="SELECT E.id earning_id,E.blockid block_id,E.userid account_id,E.coinid coin_id FROM earnings E INNER JOIN blocks B ON B.id=E.blockid AND B.coin_id=E.coinid INNER JOIN live_block_candidates C ON C.block_id=B.id AND C.coin_id=B.coin_id AND C.algo=:algo AND C.blockhash=B.blockhash INNER JOIN accounts A ON A.id=E.userid AND A.coinid=:coin WHERE E.coinid=:coin AND E.status=1 AND E.mature_time IS NOT NULL AND B.coin_id=:coin AND B.id>:boundary AND B.category='generate'".$exclusions." ORDER BY E.id LIMIT ".intval($limit);
+		$sql="SELECT E.id earning_id,E.blockid block_id,E.userid account_id,E.coinid coin_id FROM earnings E INNER JOIN blocks B ON B.id=E.blockid AND B.coin_id=E.coinid INNER JOIN live_block_candidates C ON C.block_id=B.id AND C.coin_id=B.coin_id AND C.algo=:algo AND C.blockhash=B.blockhash INNER JOIN accounts A ON A.id=E.userid AND A.coinid=:coin WHERE ".BadpoolRoundGate::sql()." AND E.coinid=:coin AND E.status=1 AND E.mature_time IS NOT NULL AND B.coin_id=:coin AND B.id>:boundary AND B.category='generate'".$exclusions." ORDER BY E.id LIMIT ".intval($limit);
 		$rows=$this->guard->selectAll($sql,$params);if(!is_array($rows))return $this->hold('Live status1 selection did not return a row set.');
 		$earnings=array();$blocks=array();$accounts=array();$items=array();
 		foreach($rows as $row){$eid=$this->positiveId(arraySafeVal($row,'earning_id'));$bid=$this->positiveId(arraySafeVal($row,'block_id'));$aid=$this->positiveId(arraySafeVal($row,'account_id'));if($eid===null||$bid===null||$aid===null||intval(arraySafeVal($row,'coin_id'))!==$lane->coinId())return $this->hold('Live status1 selection returned malformed or cross-coin evidence.');$earnings[]=$eid;$blocks[]=$bid;$accounts[]=$aid;$items[]=array('earning_id'=>$eid,'block_id'=>$bid,'account_id'=>$aid,'coin_id'=>$lane->coinId());}
