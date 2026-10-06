@@ -288,11 +288,12 @@ YAAMP_SHARE *share_find(int jobid, char *extranonce2, char *ntime, char *nonce, 
 	return NULL;
 }
 
-void share_write(YAAMP_DB *db)
+bool share_write(YAAMP_DB *db)
 {
 	int pid = getpid();
 	int count = 0;
 	int now = time(NULL);
+	YAAMP_WORKER *pending[1000];
 
 	const char *columns=g_durable_rounds?
 		"insert into shares (userid, workerid, coinid, jobid, pid, valid, extranonce1, difficulty, share_diff, time, algo, error, round_id) values ":
@@ -325,19 +326,41 @@ void share_write(YAAMP_DB *db)
 			debuglog("ntime warning: value %d (%08x) offset %d secs from uid %d\n", worker->ntime, worker->ntime, (now - worker->ntime), worker->userid);
 		}
 
-		if(++count >= 1000)
+		pending[count++] = worker;
+		if(count >= 1000)
 		{
-			db_query(db, buffer);
+			if(!db_query_write(db, buffer))
+			{
+				g_list_worker.Leave();
+				return false;
+			}
+			for(int i=0; i<count; i++) object_delete(pending[i]);
 
 			strcpy(buffer,columns);
 			count = 0;
 		}
-
-		object_delete(worker);
 	}
 
 	g_list_worker.Leave();
-	if(count) db_query(db, buffer);
+	if(count)
+	{
+		if(!db_query_write(db, buffer)) return false;
+		for(int i=0; i<count; i++) object_delete(pending[i]);
+	}
+	return true;
+}
+
+unsigned int share_pending_count()
+{
+	unsigned int count = 0;
+	g_list_worker.Enter();
+	for(CLI li = g_list_worker.first; li; li = li->next)
+	{
+		YAAMP_WORKER *worker = (YAAMP_WORKER *)li->data;
+		if(worker && !worker->deleted) count++;
+	}
+	g_list_worker.Leave();
+	return count;
 }
 
 void share_prune(YAAMP_DB *db)

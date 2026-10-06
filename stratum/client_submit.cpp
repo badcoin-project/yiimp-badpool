@@ -953,6 +953,16 @@ bool client_submit(YAAMP_CLIENT *client, json_value *json_params)
 			jobid, extranonce2, ntime, nonce, extra);
 	}
 
+	// This gate is deliberately held through share_add().  A shutdown that
+	// starts after it is acquired drains this submission; one that starts
+	// before it is acquired refuses the submission without acknowledging it.
+	StratumSubmissionGate submission_gate;
+	if(!submission_gate.entered())
+	{
+		client_send_error(client, 29, "Stratum is draining");
+		return true;
+	}
+
 	YAAMP_JOB *job = (YAAMP_JOB *)object_find(&g_list_job, jobid, true);
 	if(!job)
 	{

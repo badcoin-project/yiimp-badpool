@@ -49,7 +49,8 @@ inline void share_delete(YAAMP_OBJECT *object)
 YAAMP_SHARE *share_find(int jobid, char *extranonce2, char *ntime, char *nonce, char *nonce1);
 void share_add(YAAMP_CLIENT *client, YAAMP_JOB *job, bool valid, char *extranonce2, char *ntime, char *nonce, double share_diff, int error_number, unsigned long long round_id=0, double assigned_weight=-1);
 
-void share_write(YAAMP_DB *db);
+bool share_write(YAAMP_DB *db);
+unsigned int share_pending_count();
 void share_prune(YAAMP_DB *db);
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -108,7 +109,6 @@ bool block_confirm(int coinid, const char *hash);
 
 YAAMP_SUBMIT *submit_add(int remoteid, double difficulty);
 void submit_prune(YAAMP_DB *db);
-
 
 
 

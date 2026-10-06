@@ -13,6 +13,9 @@ char *db_clean_string(YAAMP_DB *db, char *string);
 
 void db_close(YAAMP_DB *p);
 void db_query(YAAMP_DB *db, const char *format, ...);
+// A single write attempt used by the shutdown drain.  It never reports
+// success after a failed MySQL call, allowing the owning queue to remain live.
+bool db_query_write(YAAMP_DB *db, const char *query);
 bool db_query_transaction(YAAMP_DB *db, const char *format, ...);
 
 void db_register_stratum(YAAMP_DB *db);

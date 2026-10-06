@@ -19,6 +19,7 @@ CLI CommonList::AddTail(void *data) { Enter();CLI n=new COMMONLISTITEM{data,NULL
 void object_delete(YAAMP_OBJECT *object) { object->deleted=true; }
 void debuglog(const char *,...) { }
 void db_query(YAAMP_DB *db,const char *format,...) { char q[1024*1024];va_list a;va_start(a,format);vsnprintf(q,sizeof(q),format,a);va_end(a);if(mysql_query(&db->mysql,q)) {fprintf(stderr,"aggregate SQL error %s\n",mysql_error(&db->mysql));exit(1);} }
+bool db_query_write(YAAMP_DB *db,const char *query) { if(mysql_query(&db->mysql,query)) {fprintf(stderr,"aggregate SQL error %s\n",mysql_error(&db->mysql));return false;} return true; }
 YAAMP_ALGO algorithm={}; YAAMP_ALGO *g_current_algo=&algorithm;
 void CommonLock(pthread_mutex_t *m) { pthread_mutex_lock(m); }
 void CommonUnlock(pthread_mutex_t *m) { pthread_mutex_unlock(m); }
