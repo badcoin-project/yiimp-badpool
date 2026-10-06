@@ -71,10 +71,29 @@ pthread_mutex_t g_job_create_mutex;
 struct ifaddrs *g_ifaddr;
 
 volatile bool g_exiting = false;
+static int g_listen_sock = -1;
+static pthread_mutex_t g_listen_sock_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 void *stratum_thread(void *p);
 void *monitor_thread(void *p);
 void block_path_maybe_log_summary();
+
+static void stratum_stop_listener()
+{
+	pthread_mutex_lock(&g_listen_sock_mutex);
+	int listen_sock = g_listen_sock;
+	pthread_mutex_unlock(&g_listen_sock_mutex);
+	if(listen_sock >= 0) shutdown(listen_sock, SHUT_RDWR);
+}
+
+static void stratum_wait_or_shutdown(unsigned int seconds)
+{
+	for(unsigned int waited = 0; waited < seconds * 5; waited++)
+	{
+		if(g_exiting || stratum_shutdown_requested()) return;
+		usleep(200000);
+	}
+}
 
 ////////////////////////////////////////////////////////////////////////////////////////
 
@@ -239,6 +258,7 @@ int main(int argc, char **argv)
 	getifaddrs(&g_ifaddr);
 
 	initlog(argv[1]);
+	if(!stratum_install_shutdown_handlers()) yaamp_error("cannot install graceful shutdown handlers");
 
 #ifdef NO_EXCHANGE
 	// todo: init with a db setting or a yiimp shell command
@@ -351,9 +371,9 @@ int main(int argc, char **argv)
 	pthread_t thread2;
 	pthread_create(&thread2, NULL, stratum_thread, NULL);
 
-	sleep(20);
+	stratum_wait_or_shutdown(20);
 
-	while(!g_exiting)
+	while(!g_exiting && !stratum_shutdown_requested())
 	{
 		db_register_stratum(db);
 		db_update_workers(db);
@@ -366,7 +386,8 @@ int main(int argc, char **argv)
 			db_update_remotes(db);
 		}
 
-		share_write(db);
+		if(!share_write(db))
+			stratumlog("share persistence deferred; retaining %u pending worker records\n", share_pending_count());
 		share_prune(db);
 
 		block_prune(db);
@@ -390,25 +411,53 @@ int main(int argc, char **argv)
 		object_prune(&g_list_share, share_delete);
 		object_prune(&g_list_submit, submit_delete);
 
-		if (!g_exiting) sleep(20);
+		if (!g_exiting && !stratum_shutdown_requested()) stratum_wait_or_shutdown(20);
 	}
+
+	int exit_status = 0;
+	if(stratum_shutdown_requested())
+	{
+		stratumlogdate("%s graceful shutdown: stopping legacy share acceptance\n", g_stratum_algo);
+		stratum_stop_listener();
+		stratum_begin_drain();
+
+		unsigned int before = share_pending_count();
+		bool flushed = share_write(db);
+		unsigned int after = share_pending_count();
+		if(!flushed || after)
+		{
+			stratumlogdate("STRATUM_DRAIN_FAILED algo=%s pending_before=%u pending_after=%u terminating_nonzero=1\n",
+				g_stratum_algo, before, after);
+			exit_status = 1;
+		}
+		else
+		{
+			stratumlogdate("STRATUM_DRAIN_COMPLETE algo=%s persisted_worker_records=%u pending_after=0\n",
+				g_stratum_algo, before);
+		}
+	}
+
+	// No client submission can now enter the gate.  Signal remaining worker
+	// loops only after the final persistence result has been recorded.
+	g_exiting = true;
+	stratum_stop_listener();
+	pthread_join(thread2, NULL);
 
 	stratumlog("closing database...\n");
 	db_close(db);
 
-	pthread_join(thread2, NULL);
 	db_close(g_db); // client threads (called by stratum one)
 
 	closelogs();
 
-	return 0;
+	return exit_status;
 }
 
 ///////////////////////////////////////////////////////////////////////////////
 
 void *monitor_thread(void *p)
 {
-	while(!g_exiting)
+	while(!g_exiting && !stratum_shutdown_requested())
 	{
 		sleep(120);
 
@@ -441,6 +490,9 @@ void *stratum_thread(void *p)
 {
 	int listen_sock = socket(AF_INET, SOCK_STREAM, 0);
 	if(listen_sock <= 0) yaamp_error("socket");
+	pthread_mutex_lock(&g_listen_sock_mutex);
+	g_listen_sock = listen_sock;
+	pthread_mutex_unlock(&g_listen_sock_mutex);
 
 	int optval = 1;
 	setsockopt(listen_sock, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof optval);
@@ -460,12 +512,14 @@ void *stratum_thread(void *p)
 	/////////////////////////////////////////////////////////////////////////
 
 	int failcount = 0;
-	while(!g_exiting)
+	while(!g_exiting && !stratum_shutdown_requested())
 	{
 		int sock = accept(listen_sock, NULL, NULL);
 		if(sock <= 0)
 		{
 			int error = errno;
+			if(g_exiting || stratum_shutdown_requested()) break;
+			if(error == EINTR) continue;
 			stratumlog("%s socket accept() error %d\n", g_stratum_algo, error);
 			failcount++;
 			usleep(50000);
@@ -490,5 +544,9 @@ void *stratum_thread(void *p)
 
 		pthread_detach(thread);
 	}
+	if(listen_sock >= 0) close(listen_sock);
+	pthread_mutex_lock(&g_listen_sock_mutex);
+	g_listen_sock = -1;
+	pthread_mutex_unlock(&g_listen_sock_mutex);
+	return NULL;
 }
-

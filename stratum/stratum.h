@@ -29,6 +29,7 @@ using namespace std;
 
 #include "json.h"
 #include "util.h"
+#include "shutdown_drain.h"
 
 #define YAAMP_RESTARTDELAY		(24*60*60)
 #define YAAMP_MAXJOBDELAY		(2*60)

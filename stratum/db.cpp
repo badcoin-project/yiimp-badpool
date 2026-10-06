@@ -98,6 +98,15 @@ void db_query(YAAMP_DB *db, const char *format, ...)
 	free(buffer);
 }
 
+bool db_query_write(YAAMP_DB *db, const char *query)
+{
+	if(!db || !query) return false;
+	if(!mysql_query(&db->mysql, query)) return true;
+
+	stratumlog("SQL WRITE ERROR: %d, %s\n", mysql_errno(&db->mysql), mysql_error(&db->mysql));
+	return false;
+}
+
 // Transactional callers must be able to roll back instead of allowing a
 // failed statement to be followed by COMMIT.  Unlike db_query(), this helper
 // deliberately does not reconnect: reconnecting would have already discarded
