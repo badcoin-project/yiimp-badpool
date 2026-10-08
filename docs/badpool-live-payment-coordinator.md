@@ -1,5 +1,38 @@
 # Configured live-payment lanes
 
+## Exact completed-payout batch resume
+
+`batch-run --resume-batch-id=<exact-id> --only=<operational-algorithm>` supports
+the completed-payout boundary for registry-owned Scrypt, Groestl, Yescrypt, and
+Skein batches. This does not generalize manual financial phase execution. The
+registry's `fromOwnershipEnvelope()` validates schema, lane, coin, database
+algorithm, activation boundary, and payout-preparation commissioning. Groestl
+uses operational `groestl` and database `badcoin-groestl`; SHA256d is refused.
+
+Under the exact batch's nonblocking resume lock, the runner requires phase 6,
+`READY_FOR_WALLET_APPROVAL` (or an idempotent
+`HOLD_COMPLETED_PAYOUT_RECONCILIATION` recheck), successful phases 0–6 with
+matching retained artifact checksums, and exact created payout IDs matching the
+phase-6 creation report. Every selected payout row must belong to the registered
+coin and already have `completed=1` plus a nonempty transaction ID. Invalid
+ownership, scope, state, or evidence refuses before financial phase dispatch.
+An explicit `--only` may not override durable ownership. A terminal `RECONCILED`
+batch is never moved back to HOLD.
+
+This path calls only the existing exact payout-row SELECT and the existing
+completed-payout boundary setter. It does not execute phases 0–6, construct a
+wallet gateway, invoke a guard command, or change payout/account/earning rows.
+Only boundary metadata in this batch's ledger changes; phase artifacts and
+wallet-send journals remain untouched. Journal reconciliation and wallet
+transaction verification remain operator prerequisites, not a new send/retry
+permission. The boundary detector itself does not read the send journal.
+
+Continue with the existing read-only `completed-payout-batch-closeout` proof and
+the separately confirmed, ledger-only `completed-payout-batch-closeout-apply`.
+Neither implementation is duplicated by resume. The four recurring payment
+timers remain under incident HOLD; deployment and production recovery are
+separate tasks.
+
 ## Implemented now
 
 `badpoolguard live-payment-coordinator --format=json` remains a CLI compatibility invocation for coin 1267, Scrypt, and `block_id > 29242`, but no source-managed recurring service relies on that default. Every recurring systemd invocation supplies one exact `--lane-id`. Each commissioned payout-preparation lane creates auto/all-active-payout-coins batches of at most 25 through `BadpoolPaymentBatchRunner`; the coordinator never implements financial SQL or wallet operations itself.

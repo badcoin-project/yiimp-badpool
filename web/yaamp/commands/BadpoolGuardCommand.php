@@ -457,6 +457,10 @@ class BadpoolGuardCommand extends CConsoleCommand
 		$options=array('mode'=>$mode,'scope'=>$scope,'only'=>$only===''?null:$only,'batch_size'=>preg_match('/^[1-9][0-9]*$/',$size)?intval($size):0);
 		if(!$this->guard->isValid()) return array_merge($this->paymentBatchRunRefusal($options),array('errors'=>array('Invalid batch-run options.')));
 		$resume=$this->guard->getOption('resume-batch-id',null); if($resume!==null)$options['resume_batch_id']=(string)$resume;
+		if($resume!==null)$options['require_owned_wallet_boundary']=true;
+		// Non-Scrypt CLI resumes only generalize the completed, owned boundary.
+		// They must never fall through to the adapter's legacy Scrypt defaults.
+		if($resume!==null&&$only!==''&&$only!=='scrypt')$options['completed_payout_resume']=true;
 		$overrideMap=array('payment-delay-override-package'=>'payment_delay_override_package','payment-delay-override-package-checksum'=>'payment_delay_override_package_checksum','operator-confirms-payment-delay-override'=>'operator_confirms_payment_delay_override');
 		foreach($overrideMap as $cli=>$key){$value=$this->guard->getOption($cli,null);if($value!==null)$options[$key]=(string)$value;}
 		$overrideValidation=BadpoolConfirmedBlockPaymentDelayOverride::validateOptions($options);
@@ -464,7 +468,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 		$adapter=$this->paymentBatchPhaseAdapter();
 		$runner=new BadpoolPaymentBatchRunner($adapter);
 		$report=$runner->run($options);
-		if($only==='' || $only!=='scrypt') $report['warnings'][]='Implementation support is currently narrowed to Scrypt; yescrypt, sha256d, skein, and groestl are not implemented and cannot be mutated.';
+		if($only==='' || $only!=='scrypt') $report['warnings'][]='Completed-payout resume supports exact registry-owned commissioned lanes only. This does not enable other manual financial phases or recurring wallet sends; SHA256d payout preparation remains uncommissioned.';
 		return $report;
 	}
 

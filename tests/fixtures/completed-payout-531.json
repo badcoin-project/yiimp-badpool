@@ -1,0 +1,13 @@
+{
+  "batch_id": "20261003T041722Z-60ae157ef88b",
+  "lane_id": "live-skein-v1",
+  "coin_id": 1268,
+  "db_algo": "skein",
+  "current_phase": 6,
+  "batch_state": "READY_FOR_WALLET_APPROVAL",
+  "created_payout_ids": [531],
+  "completed": 1,
+  "tx": "1f0d56712d4008da808796f236c887fbaa2d2246c67866a28f3f7d5486149ad7",
+  "journal_state": "RECONCILED",
+  "operation_state": "RECONCILED"
+}
