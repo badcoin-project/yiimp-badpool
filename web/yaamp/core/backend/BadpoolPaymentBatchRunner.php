@@ -1,5 +1,7 @@
 <?php
 
+require_once(dirname(__FILE__).'/BadpoolLivePaymentLaneConfiguration.php');
+
 /**
  * Phase 0-6 payment coordinator.  Mutation-capable operations are deliberately
  * supplied by an adapter; the coordinator owns persistence, ordering and the
@@ -24,6 +26,15 @@ class BadpoolPaymentBatchRunner
 		if ($resume) {
 			$ledger = $this->load($resume);
 			if (!$ledger) return $this->refusal($options, $resume, 'Batch ledger was not found or is invalid.');
+			// Owned wallet-boundary batches never enter the financial phase loop.
+			$owned=array_key_exists('coordinator_owner',$ledger);
+			$boundary=in_array($this->scalarValue($ledger,'batch_state'),array('READY_FOR_WALLET_APPROVAL','HOLD_COMPLETED_PAYOUT_RECONCILIATION','RECONCILED'),true)
+				||!empty($ledger['created_payout_ids']);
+			if(($boundary&&($owned||!empty($options['require_owned_wallet_boundary'])))||!empty($options['completed_payout_resume']))return $this->resumeCompletedPayout($ledger,$options);
+			if($owned){
+				$lane=(new BadpoolLivePaymentLaneRegistry())->fromOwnershipEnvelope($ledger['coordinator_owner']);
+				if(!$lane||!$this->resumeLaneMatches($lane,$options))return $this->refusal($options,$resume,'Resume lane does not match commissioned durable ownership.');
+			}
 			// The durable ledger, rather than new CLI defaults, is authoritative on resume.
 			foreach (array('mode','scope','only','batch_size') as $key) $options[$key]=$ledger[$key];
 		} else {
@@ -73,20 +84,102 @@ class BadpoolPaymentBatchRunner
 		return $this->report($ledger);
 	}
 
-	private function enforceCompletedPayoutBoundary(&$ledger)
+	/** The same completed-row boundary, with exact registry coin binding for owned resumes. */
+	private function enforceCompletedPayoutBoundary(&$ledger, $lane=null)
 	{
 		$ids=$this->positiveIdList($this->arrayValue($ledger,'created_payout_ids'));
 		if($ids===null||$ids===array()||!is_object($this->adapter)||!is_callable(array($this->adapter,'inspectCreatedPayoutRows')))return;
 		$rows=call_user_func(array($this->adapter,'inspectCreatedPayoutRows'),$ids);
 		if(!is_array($rows)||count($rows)!==count($ids))return;
-		$completed=array();foreach($rows as $row){$id=isset($row['id'])?intval($row['id']):0;$tx=trim((string)(isset($row['tx'])?$row['tx']:''));if($id>0&&intval(isset($row['completed'])?$row['completed']:0)===1&&$tx!=='')$completed[]=$id;}
+		$completed=array();
+		foreach($rows as $row){
+			if($lane){
+				if(!is_array($row)||!isset($row['id'],$row['idcoin'],$row['completed'],$row['tx']))return false;
+				if($this->positiveIdList(array($row['id']))===null||$this->positiveIdList(array($row['idcoin']))!==array($lane->coinId()))return false;
+				if(!in_array($row['completed'],array(1,'1'),true)||!is_string($row['tx']))return false;
+			}
+			$id=isset($row['id'])?intval($row['id']):0;$tx=trim((string)(isset($row['tx'])?$row['tx']:''));
+			if($id>0&&intval(isset($row['completed'])?$row['completed']:0)===1&&$tx!=='')$completed[]=$id;
+		}
 		sort($completed,SORT_NUMERIC);if($completed!==$ids)return;
 		$ledger['batch_state']='HOLD_COMPLETED_PAYOUT_RECONCILIATION';
 		$ledger['reconciliation_classification']='HOLD / COMPLETED PAYOUT WALLET PROOF REQUIRED';
 		$ledger['completed_payout_ids']=$completed;
 		$warning='Created payout rows are already completed with transaction IDs; wallet send and mutation phases must not be rerun. Use read-only wallet-proof-closeout.';
 		if(!in_array($warning,$ledger['warnings'],true))$ledger['warnings'][]=$warning;
-		$this->save($ledger);
+		return $this->save($ledger);
+	}
+
+	private function resumeLaneMatches($lane,$options)
+	{
+		if(isset($options['only'])&&$options['only']!==null&&$options['only']!==$lane->operationalAlgo())return false;
+		if(isset($options['coordinator_owner'])&&!$lane->ownershipMatches($options['coordinator_owner']))return false;
+		if(isset($options['lane_configuration'])){
+			$config=$options['lane_configuration'];
+			if(!$config instanceof BadpoolLivePaymentLaneConfiguration||$config->ownershipEnvelope()!==$lane->ownershipEnvelope())return false;
+		}
+		return true;
+	}
+
+	private function resumeCompletedPayout($ledger,$options)
+	{
+		$id=$options['resume_batch_id'];$dir=$this->root.'/'.$id;
+		if(!preg_match('/^[0-9]{8}T[0-9]{6}Z-[a-f0-9]{12}$/',$id)||is_link($this->root)||is_link($dir)||is_link($this->path($id))||realpath($this->root)!==dirname(realpath($dir)))return $this->refusal($options,$id,'Unsafe completed-payout batch path.');
+		$lockPath=$dir.'/resume.lock';if(is_link($lockPath))return $this->refusal($options,$id,'Unsafe batch resume lock.');
+		$lock=@fopen($lockPath,'c');
+		if(!$lock||!flock($lock,LOCK_EX|LOCK_NB)){if($lock)fclose($lock);return $this->refusal($options,$id,'Batch resume is already active.');}
+		try{
+			if($this->load($id)!==$ledger)return $this->refusal($options,$id,'Batch changed before completed-payout resume.');
+			$lane=(new BadpoolLivePaymentLaneRegistry())->fromOwnershipEnvelope(isset($ledger['coordinator_owner'])?$ledger['coordinator_owner']:null);
+			if(!$lane||!$this->resumeLaneMatches($lane,$options))return $this->refusal($options,$id,'Resume lane does not match commissioned durable ownership.');
+			$error=$this->completedPayoutContractError($ledger,$lane);
+			if($error!==null)return $this->refusal($options,$id,$error);
+			// No adapter phase or command executor is called here. Only exact SELECTs.
+			if($this->enforceCompletedPayoutBoundary($ledger,$lane)!==true)return $this->refusal($options,$id,'Exact owned payout rows must all be completed with transaction IDs; boundary was not persisted.');
+			return $this->report($ledger);
+		}catch(Exception $e){return $this->refusal($options,$id,'Completed-payout evidence could not be read or persisted; no financial phase was invoked.');}
+		finally{flock($lock,LOCK_UN);fclose($lock);}
+	}
+
+	private function completedPayoutContractError($ledger,$lane)
+	{
+		if(!isset($ledger['current_phase'])||$ledger['current_phase']!==6||!in_array($this->scalarValue($ledger,'batch_state'),array('READY_FOR_WALLET_APPROVAL','HOLD_COMPLETED_PAYOUT_RECONCILIATION'),true))return 'Completed-payout resume requires the phase-6 wallet boundary.';
+		if($this->scalarValue($ledger,'mode')!=='auto'||$this->scalarValue($ledger,'scope')!=='all-active-payout-coins'||$this->scalarValue($ledger,'only')!==$lane->operationalAlgo()||!isset($ledger['stop_before_wallet_send'])||$ledger['stop_before_wallet_send']!==true||!isset($ledger['batch_size'])||!is_int($ledger['batch_size'])||$ledger['batch_size']<1||$ledger['batch_size']>$lane->batchLimit())return 'Owned batch execution contract mismatch.';
+		$coins=$this->arrayValue($ledger,'selected_coin_scope');
+		if(count($coins)!==1)return 'Owned batch requires exactly one coin.';
+		$coin=reset($coins);
+		if(!isset($coin['id'],$coin['algo'])||$this->positiveIdList(array($coin['id']))!==array($lane->coinId())||$coin['algo']!==$lane->dbAlgo()||(isset($coin['coin_id'])&&$this->positiveIdList(array($coin['coin_id']))!==array($lane->coinId())))return 'Owned batch coin or database algorithm mismatch.';
+		foreach(array('warnings','errors') as $key)if(!isset($ledger[$key])||!is_array($ledger[$key]))return 'Malformed batch diagnostics.';
+		foreach(array('selected_earning_ids','selected_block_ids','selected_account_ids','created_payout_ids') as $key){
+			if(!isset($ledger[$key])||!is_array($ledger[$key])||$this->positiveIdList($ledger[$key])===null||!$ledger[$key])return 'Owned batch scope is missing or malformed: '.$key.'.';
+		}
+		foreach($ledger['selected_block_ids'] as $block)if(intval($block)<=$lane->blockBoundary())return 'Owned batch violates the activation boundary.';
+		$dir=realpath($this->root.'/'.$ledger['batch_id']);
+		if($this->scalarValue($ledger,'run_directory')===null||realpath($ledger['run_directory'])!==$dir)return 'Owned batch run directory mismatch.';
+		$phases=array();
+		foreach($this->arrayValue($ledger,'phase_results') as $entry){
+			if(!is_array($entry)||!isset($entry['phase_number'])||!is_int($entry['phase_number'])||$entry['phase_number']<0||$entry['phase_number']>6)return 'Malformed financial phase evidence.';
+			$phases[$entry['phase_number']]=$entry;
+		}
+		for($phase=0;$phase<=6;$phase++){
+			if(!isset($phases[$phase])||!in_array($this->scalarValue($phases[$phase],'status'),array('pass','ok'),true))return 'Completed-payout resume requires all financial phases to have passed.';
+			$entry=$phases[$phase];$path=$this->scalarValue($entry,'report_path')?:$this->scalarValue($entry,'package_path');
+			$key='phase_'.$phase.'_sha256';$checksums=$this->arrayValue($entry,'checksum_summary');$ledgerChecksums=$this->arrayValue($ledger,'checksums');
+			if(!$path||!is_file($path)||is_link($path)||dirname(realpath($path))!==$dir||!isset($checksums[$key],$ledgerChecksums[$key])||!is_string($checksums[$key])||!preg_match('/^[a-f0-9]{64}$/',$checksums[$key])||$checksums[$key]!==$ledgerChecksums[$key]||!hash_equals($checksums[$key],hash_file('sha256',$path)))return 'Financial phase artifact checksum mismatch: '.$phase.'.';
+			if($phase===6){
+				$reports=json_decode(file_get_contents($path),true);$ids=array();
+				if(!is_array($reports)||!$reports)return 'Payout creation evidence is missing.';
+				foreach($reports as $report){
+					if(!is_array($report)||!in_array($this->scalarValue($report,'status'),array('pass','ok'),true)||!isset($report['created_payout_ids'])||!is_array($report['created_payout_ids']))return 'Payout creation evidence is invalid.';
+					$count=isset($report['payout_rows_inserted'])?$report['payout_rows_inserted']:(isset($report['created_count'])?$report['created_count']:null);
+					if(!(is_int($count)&&$count>=0)&&!(is_string($count)&&preg_match('/^(0|[1-9][0-9]*)$/',$count)))return 'Payout creation count is invalid.';
+					if(intval($count)!==count($report['created_payout_ids']))return 'Payout creation count mismatch.';
+					$ids=array_merge($ids,$report['created_payout_ids']);
+				}
+				if($this->positiveIdList($ids)!==$this->positiveIdList($ledger['created_payout_ids']))return 'Created payout IDs changed from the financial phase evidence.';
+			}
+		}
+		return null;
 	}
 
 	private function invoke($phase, $ledger, $options)
@@ -116,7 +209,7 @@ class BadpoolPaymentBatchRunner
 	private function scalarValue($a,$k) { return isset($a[$k]) && is_string($a[$k]) ? $a[$k] : null; }
 	private function path($id) { return $this->root.'/'.$id.'/ledger.json'; }
 	private function load($id) { if (!preg_match('/^[A-Za-z0-9._-]+$/',$id)) return null; $p=$this->path($id); $v=is_file($p)?json_decode(file_get_contents($p),true):null; return is_array($v)&&isset($v['batch_id'])&&$v['batch_id']===$id?$v:null; }
-	private function save(&$l) { $l['updated_at']=gmdate('c'); $tmp=$this->path($l['batch_id']).'.tmp'; file_put_contents($tmp,json_encode($l,JSON_PRETTY_PRINT|JSON_UNESCAPED_SLASHES)."\n",LOCK_EX); rename($tmp,$this->path($l['batch_id'])); }
+	private function save(&$l) { $l['updated_at']=gmdate('c'); $tmp=$this->path($l['batch_id']).'.tmp'; if(is_link($tmp))return false; if(file_put_contents($tmp,json_encode($l,JSON_PRETTY_PRINT|JSON_UNESCAPED_SLASHES)."\n",LOCK_EX)===false)return false; return rename($tmp,$this->path($l['batch_id'])); }
 
 	private function report($l)
 	{
