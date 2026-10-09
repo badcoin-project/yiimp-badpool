@@ -140,8 +140,7 @@ class BadpoolPaymentBatchRunner
 		$id=$options['resume_batch_id'];$dir=$this->root.'/'.$id;
 		if(!preg_match('/^[0-9]{8}T[0-9]{6}Z-[a-f0-9]{12}$/',$id)||is_link($this->root)||is_link($dir)||is_link($this->path($id))||realpath($this->root)!==dirname(realpath($dir)))return $this->refusal($options,$id,'Unsafe completed-payout batch path.');
 		$lockPath=$dir.'/resume.lock';if(is_link($lockPath))return $this->refusal($options,$id,'Unsafe batch resume lock.');
-		$lock=@fopen($lockPath,'c');
-		if(!$lock||!flock($lock,LOCK_EX|LOCK_NB)){if($lock)fclose($lock);return $this->refusal($options,$id,'Batch resume is already active.');}
+		// run() owns the batch lock for both financial and completed-payout resumes.
 		try{
 			if($this->load($id)!==$ledger)return $this->refusal($options,$id,'Batch changed before completed-payout resume.');
 			$lane=(new BadpoolLivePaymentLaneRegistry())->fromOwnershipEnvelope(isset($ledger['coordinator_owner'])?$ledger['coordinator_owner']:null);
@@ -152,7 +151,6 @@ class BadpoolPaymentBatchRunner
 			if($this->enforceCompletedPayoutBoundary($ledger,$lane)!==true)return $this->refusal($options,$id,'Exact owned payout rows must all be completed with transaction IDs; boundary was not persisted.');
 			return $this->report($ledger);
 		}catch(Exception $e){return $this->refusal($options,$id,'Completed-payout evidence could not be read or persisted; no financial phase was invoked.');}
-		finally{flock($lock,LOCK_UN);fclose($lock);}
 	}
 
 	private function completedPayoutContractError($ledger,$lane)

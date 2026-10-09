@@ -6,6 +6,18 @@ require_once(dirname(__DIR__).'/web/yaamp/commands/BadpoolGuardCommand.php');
 
 $checks=0;$failures=array();
 function resume_expect($ok,$message){global $checks,$failures;$checks++;if(!$ok)$failures[]=$message;}
+function resume_lifecycle_report($name,$startingFailures){
+    global $failures;
+    $added=count($failures)-$startingFailures;
+    if($added===0)echo 'PASS '.$name.($name==='skein'?' payout-531':'').' resume -> proof -> ledger-only apply -> RECONCILED'."\n";
+    else echo 'FAIL '.$name.' resume lifecycle: '.$added.' assertion(s)'."\n";
+}
+function resume_lock_released($path,$label){
+    $lock=fopen($path,'c');$owned=$lock&&flock($lock,LOCK_EX|LOCK_NB);
+    resume_expect($owned,$label.': batch lock released');
+    if($owned)flock($lock,LOCK_UN);
+    if($lock)fclose($lock);
+}
 class ResumeFixtureGuard {
     public $payouts,$accounts=array(array('id'=>76,'balance'=>'123.45678900')),$earnings=array(array('id'=>901,'status'=>2,'amount'=>'12.50000000'));
     public $reads=0,$writes=0;
@@ -77,12 +89,14 @@ function resume_safety($guard,$adapter,$before,$label){
 
 $root=sys_get_temp_dir().'/badpool-completed-resume-'.bin2hex(random_bytes(6));mkdir($root);
 foreach(array('scrypt','skein','yescrypt','groestl') as $name){
+    $lifecycleFailures=count($failures);
     $shape=$name==='skein'?json_decode(file_get_contents(__DIR__.'/fixtures/completed-payout-531.json'),true):array();
     list($l,$g,$a,$lane)=resume_fixture($root.'/'.$name,'live-'.$name.'-v1',$shape);
     $before=serialize(array($g->payouts,$g->accounts,$g->earnings));$files=resume_snapshot($l['run_directory']);
     $runner=new BadpoolPaymentBatchRunner($a,dirname($l['run_directory']));
     $options=resume_options($l);unset($options['completed_payout_resume']); // Ownership alone selects the safe path.
     $r=$runner->run($options);$after=json_decode(file_get_contents($l['run_directory'].'/ledger.json'),true);
+    resume_lock_released($l['run_directory'].'/resume.lock',$name.' successful resume');
     resume_expect($r['status']==='hold'&&$r['batch_state']==='HOLD_COMPLETED_PAYOUT_RECONCILIATION',$name.': exact completed boundary');
     resume_expect($r['created_payout_ids']===$l['created_payout_ids']&&$r['batch_id']===$l['batch_id']&&$after['coordinator_owner']===$lane->ownershipEnvelope(),$name.': exact batch/payout/owner preserved');
     resume_expect($r['next_action']==='read_only_wallet_proof_closeout'&&$r['suggested_command']===null,$name.': no wallet-send recommendation');
@@ -104,7 +118,7 @@ foreach(array('scrypt','skein','yescrypt','groestl') as $name){
     $terminalHash=hash_file('sha256',$l['run_directory'].'/ledger.json');$replay=$runner->run(resume_options($l));
     resume_expect($replay['status']==='refused'&&hash_file('sha256',$l['run_directory'].'/ledger.json')===$terminalHash,$name.': terminal batch never regresses to HOLD');
     resume_safety($g,$a,$before,$name);
-    echo 'PASS '.$name.($name==='skein'?' payout-531':'').' resume -> proof -> ledger-only apply -> RECONCILED'."\n";
+    resume_lifecycle_report($name,$lifecycleFailures);
 }
 
 $cases=array(
@@ -163,15 +177,34 @@ foreach($cases as $case){
         $a=new ResumeFixtureAdapter($g);$before=serialize(array($g->payouts,$g->accounts,$g->earnings));
     }
     $r=(new BadpoolPaymentBatchRunner($a,$root.'/'.$case))->run($o);
+    resume_lock_released($dir.'/resume.lock',$case.' refusal');
     resume_expect($r['status']==='refused',$case.': fails closed');resume_expect($files===resume_snapshot($dir),$case.': all retained evidence unchanged');resume_safety($g,$a,$before,$case);
     if(!in_array($case,array('not-completed','missing-tx','missing-row','foreign-row-coin','malformed-row-coin','malformed-completed','malformed-tx','outside-created-ids','duplicate-row'),true))resume_expect($g->reads===0,$case.': refused before any DB access');
 }
 
-// The exact batch lock is nonblocking and preserves every evidence file.
-list($l,$g,$a)=resume_fixture($root.'/locked','live-skein-v1');$lock=fopen($l['run_directory'].'/resume.lock','c');flock($lock,LOCK_EX);
+// A separate PHP process owns the exact batch lock during contention.
+list($l,$g,$a)=resume_fixture($root.'/locked','live-skein-v1');
+$childCode='$lock=fopen($argv[1],"c");if(!$lock||!flock($lock,LOCK_EX)){exit(2);}echo "LOCKED\n";flush();fgets(STDIN);flock($lock,LOCK_UN);fclose($lock);';
+$child=proc_open(array(PHP_BINARY,'-r',$childCode,$l['run_directory'].'/resume.lock'),array(0=>array('pipe','r'),1=>array('pipe','w'),2=>array('pipe','w')),$pipes);
+resume_expect(is_resource($child)&&trim(fgets($pipes[1]))==='LOCKED','separate process owns batch lock before contention test');
 $files=resume_snapshot($l['run_directory']);$r=(new BadpoolPaymentBatchRunner($a,$root.'/locked'))->run(resume_options($l));
 resume_expect($r['status']==='refused'&&$files===resume_snapshot($l['run_directory'])&&$g->reads===0&&$a->phases===0,'concurrent resume refuses without reading rows or changing evidence');
-flock($lock,LOCK_UN);fclose($lock);
+fwrite($pipes[0],"\n");fclose($pipes[0]);fclose($pipes[1]);fclose($pipes[2]);resume_expect(proc_close($child)===0,'separate lock owner exits cleanly');
+resume_lock_released($l['run_directory'].'/resume.lock','contention refusal');
+$r=(new BadpoolPaymentBatchRunner($a,$root.'/locked'))->run(resume_options($l));
+resume_expect($r['batch_state']==='HOLD_COMPLETED_PAYOUT_RECONCILIATION','legitimate resume succeeds after competing owner releases lock');
+resume_lock_released($l['run_directory'].'/resume.lock','post-contention success');
+
+// An evidence-reader exception is refused, and the outer owner still releases.
+list($l,$g,$a)=resume_fixture($root.'/exception','live-skein-v1');
+$throwing=new class extends ResumeFixtureGuard {public function selectAll($sql,$params){$this->reads++;throw new RuntimeException('Fixture read failed');}};
+$throwing->payouts=$g->payouts;
+$files=resume_snapshot($l['run_directory']);
+$r=(new BadpoolPaymentBatchRunner(new ResumeFixtureAdapter($throwing),$root.'/exception'))->run(resume_options($l));
+resume_expect($r['status']==='refused'&&$files===resume_snapshot($l['run_directory'])&&$throwing->reads===1,'reader exception refuses without evidence mutation');
+resume_lock_released($l['run_directory'].'/resume.lock','reader exception');
+$r=(new BadpoolPaymentBatchRunner($a,$root.'/exception'))->run(resume_options($l));
+resume_expect($r['batch_state']==='HOLD_COMPLETED_PAYOUT_RECONCILIATION','legitimate resume succeeds after reader exception');
 
 // Multi-row batches must match the entire durable creation report.
 list($l,$g,$a)=resume_fixture($root.'/multi-row','live-groestl-v1',array('created_payout_ids'=>array(601,602)));
@@ -201,6 +234,10 @@ foreach(array('scrypt','skein','yescrypt','groestl') as $name){
     }
 }
 // Test-only cleanup is confined to the exact directories this fixture created.
+// A recorded lifecycle failure must never produce a visible PASS message.
+$beforeReportingCheck=count($failures);$failures[]='synthetic lifecycle assertion failure';
+ob_start();resume_lifecycle_report('reporting-self-check',$beforeReportingCheck);$reporting=ob_get_clean();array_pop($failures);
+resume_expect(strpos($reporting,'PASS')===false&&strpos($reporting,'FAIL reporting-self-check')===0,'lifecycle reporting cannot claim PASS after an assertion failure');
 function resume_cleanup($dir){foreach(new RecursiveIteratorIterator(new RecursiveDirectoryIterator($dir,FilesystemIterator::SKIP_DOTS),RecursiveIteratorIterator::CHILD_FIRST) as $p){if($p->isLink())throw new RuntimeException('Unexpected fixture symlink');if($p->isDir())rmdir($p->getPathname());else unlink($p->getPathname());}rmdir($dir);}
 resume_cleanup($root);foreach($commandDirs as $dir)resume_cleanup($dir);
 echo 'Completed-payout resume checks: '.($checks-count($failures)).' PASS / '.count($failures)." FAIL\n";
