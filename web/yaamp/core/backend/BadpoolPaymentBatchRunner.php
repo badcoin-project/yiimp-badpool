@@ -21,6 +21,16 @@ class BadpoolPaymentBatchRunner
 
 	public function run($options)
 	{
+		$resume=isset($options['resume_batch_id'])?$options['resume_batch_id']:null;
+		if(!$resume)return $this->runUnlocked($options);
+		if(!preg_match('/^[A-Za-z0-9._-]+$/',$resume)||!is_dir($this->root.'/'.$resume))return $this->refusal($options,$resume,'Batch directory is missing or invalid.');
+		$lockPath=$this->root.'/'.$resume.'/resume.lock';if(is_link($lockPath))return $this->refusal($options,$resume,'Unsafe batch lock.');
+		$lock=@fopen($lockPath,'c');if(!$lock||!flock($lock,LOCK_EX|LOCK_NB)){if($lock)fclose($lock);return $this->refusal($options,$resume,'Batch resume is already active.');}
+		try{return $this->runUnlocked($options);}finally{flock($lock,LOCK_UN);fclose($lock);}
+	}
+
+	private function runUnlocked($options)
+	{
 		$now = gmdate('c');
 		$resume = isset($options['resume_batch_id']) ? $options['resume_batch_id'] : null;
 		if ($resume) {
@@ -37,6 +47,10 @@ class BadpoolPaymentBatchRunner
 			}
 			// The durable ledger, rather than new CLI defaults, is authoritative on resume.
 			foreach (array('mode','scope','only','batch_size') as $key) $options[$key]=$ledger[$key];
+			// A phase-6 recovery must never walk backwards into account credit.
+			if(intval($ledger['current_phase'])===6){
+				for($phase=0;$phase<=5;$phase++)if(!$this->phasePassed($ledger,$phase))return $this->refusal($options,$resume,'Phase-6 recovery requires durable successful preceding phases and account-credit evidence; investigate without replaying credit.');
+			}
 		} else {
 			$id = gmdate('Ymd\THis\Z').'-'.substr(hash('sha256', uniqid('', true)), 0, 12);
 			$dir = $this->root.'/'.$id;
@@ -69,7 +83,7 @@ class BadpoolPaymentBatchRunner
 			$entry = array('phase_number'=>$number, 'phase_name'=>$name, 'status'=>$status,
 				'mutation_scope'=>$this->arrayValue($result, 'mutation_scope'), 'report_path'=>$this->scalarValue($result, 'report_path'),
 				'package_path'=>$this->scalarValue($result, 'package_path'), 'checksum_summary'=>$this->arrayValue($result, 'checksums'),
-				'started_at'=>$started, 'finished_at'=>gmdate('c'));
+				'started_at'=>$started, 'finished_at'=>gmdate('c'), 'failure_evidence'=>$this->arrayValue($result,'failure_evidence'));
 			$ledger['phase_results'][] = $entry;
 			$this->mergeResult($ledger, $result);
 			$ledger['current_phase'] = $number;
