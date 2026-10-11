@@ -33,7 +33,7 @@ function pr_state($root,$lane,$batch)
 }
 function pr_ledger($root,$lane,$batch,$ids)
 {
-	if(!is_dir($root.'/'.$batch))mkdir($root.'/'.$batch);$ledger=array('batch_id'=>$batch,'batch_state'=>'READY_FOR_WALLET_APPROVAL','coordinator_owner'=>$lane->ownershipEnvelope(),'created_payout_ids'=>$ids);
+	if(!is_dir($root.'/'.$batch))mkdir($root.'/'.$batch);$ledger=array('batch_id'=>$batch,'batch_state'=>'READY_FOR_WALLET_APPROVAL','current_phase'=>6,'coordinator_owner'=>$lane->ownershipEnvelope(),'created_payout_ids'=>$ids);
 	file_put_contents($root.'/'.$batch.'/ledger.json',json_encode($ledger));
 }
 function pr_clean($path){if(!is_dir($path))return;foreach(scandir($path)as$file)if($file!=='.'&&$file!=='..'){$child=$path.'/'.$file;if(is_dir($child))pr_clean($child);else unlink($child);}rmdir($path);}
@@ -92,6 +92,49 @@ pr_ok($db->rows[530]['completed']===0&&$db->rows[530]['tx']===null,'unrelated in
 foreach(array(526,527,528,529)as$id){$db->rows[$id]['completed']=0;$db->rows[$id]['tx']=null;}$db->failUpdateId=527;
 pr_ok(pr_throws(function()use($repo,$approved,$map){$repo->reconcileExactWithTransactionIds($approved,$map); }),'reconciliation failure reported');
 pr_ok($db->rollbacks===1&&$db->rows[526]['completed']===0&&$db->rows[527]['completed']===0&&$db->rows[528]['completed']===0&&$db->rows[529]['completed']===0,'fixture reconciliation rolls back all-or-none');
+$db->failUpdateId=null;
+
+// One approval spans two Scrypt batches and a Groestl batch. The production
+// repository, planner, journal and exact transactional reconciliation all run.
+class CrossBatchFixtureGateway implements BadpoolPerWalletOperationGateway {
+	public $calls=array(),$journal,$barriers=array();
+	function __construct($journal){$this->journal=$journal;}
+	function preflightApprovedWalletOperation($operation){return array('ready'=>true);}
+	function sendApprovedWalletOperation($operation,$capability){
+		$j=$this->journal->load($operation['approval_checksum']);
+		$this->barriers[]=$j['operations'][$operation['operation_id']]['state']==='SEND_ATTEMPT_STARTED';
+		$capability->claim($operation['approval_checksum'],$operation);
+		$this->calls[]=$operation;
+		return array('status'=>'txid','txid'=>str_repeat($operation['wallet_binding_identity']==='scrypt'?'a':'b',64));
+	}
+}
+$scope=array(526,527,530);$owned=$repo->loadExactPayouts($scope);$entries=array();
+foreach($owned as$row)$entries[]=array('payout_id'=>$row['payout_id'],'lane_id'=>$row['lane_id'],'coin_id'=>$row['coin_id'],'account_id'=>$row['account_id'],'amount'=>$row['amount'],'recipient'=>$row['recipient'],'wallet_binding_identity'=>$row['wallet_binding_identity'],'source_account_identity'=>$row['source_account_identity'],'expected_completed'=>0,'expected_tx'=>null,'expected_batch_state'=>'READY_FOR_WALLET_APPROVAL');
+$approval=array('schema'=>BadpoolMultiWalletApprovalPlanner::APPROVAL_SCHEMA,'human_approved'=>true,'entries'=>$entries);
+$journal=new BadpoolDurableMultiWalletSendJournal($root.'/journals');$gateway=new CrossBatchFixtureGateway($journal);$send=new BadpoolGuardedMultiWalletSend($repo,$gateway,$journal,$registry);
+$plan=$send->preflight($approval);
+pr_ok(array_column($plan['rows'],'batch_id')===array($batchIds[526],$batchIds[527],$queuedScryptBatch),'approved payouts retain three distinct READY owners');
+pr_ok(count($plan['operations'])===2&&$plan['operations'][0]['payout_ids']===array(526,530)&&$plan['operations'][1]['payout_ids']===array(527),'cross-batch scope partitions by wallet and source, not batch');
+$result=$send->execute($approval);$saved=$journal->load(BadpoolMultiWalletApprovalPlanner::checksum($approval));
+pr_ok($result['status']==='pass'&&$result['reason']==='reconciled'&&$saved['global_state']==='RECONCILED','cross-batch approved send reaches durable reconciliation');
+pr_ok(count($gateway->calls)===2&&$gateway->barriers===array(true,true),'each wallet operation crosses its durable replay barrier once');
+pr_ok($db->rows[526]['tx']===str_repeat('a',64)&&$db->rows[530]['tx']===str_repeat('a',64)&&$db->rows[527]['tx']===str_repeat('b',64),'exact payout rows receive their wallet operation txid');
+pr_ok($db->rows[528]['completed']===0&&$db->rows[529]['completed']===0,'unapproved payouts remain untouched');
+$replay=$send->execute($approval);pr_ok($replay['reason']==='already_reconciled'&&count($gateway->calls)===2,'replay cannot send another wallet operation');
+foreach(array(526,527,530)as$id){$ledger=json_decode(file_get_contents($root.'/'.($id===530?$queuedScryptBatch:$batchIds[$id]).'/ledger.json'),true);pr_ok($ledger['batch_state']==='READY_FOR_WALLET_APPROVAL'&&$ledger['created_payout_ids']===array($id),'payout '.$id.' keeps its independent batch closeout obligation');}
+if(!function_exists('arraySafeVal')){
+	function arraySafeVal($a,$key,$default=null){return is_array($a)&&array_key_exists($key,$a)?$a[$key]:$default;}
+}
+require_once(dirname(__FILE__).'/../web/yaamp/core/backend/BadpoolCompletedPayoutBatchCloseout.php');
+class CrossBatchCloseoutRows {
+	private $db;
+	function __construct($db){$this->db=$db;}
+	function inspectCreatedPayoutRows($ids){$out=array();foreach($ids as$id)$out[]=array('id'=>$id,'idcoin'=>$this->db->rows[$id]['coin_id'],'completed'=>$this->db->rows[$id]['completed'],'tx'=>$this->db->rows[$id]['tx']);return$out;}
+}
+$proofCalls=array();$proof=function($coin,$ids)use(&$proofCalls){$proofCalls[]=array($coin,$ids);return array('selected_payout_ids'=>$ids,'scope'=>array('coin_id'=>$coin),'closeout_valid'=>true,'wallet_lookup_success'=>true,'wallet_txid_expected'=>true,'wallet_amount_matches_expected'=>true,'wallet_confirmations_present'=>true,'wallet_sends'=>false,'db_mutations'=>false);};
+$closeout=new BadpoolCompletedPayoutBatchCloseout(new CrossBatchCloseoutRows($db),$proof,$root);
+foreach(array(526,527,530)as$id){$batch=$id===530?$queuedScryptBatch:$batchIds[$id];$report=$closeout->preview($batch);pr_ok($report['status']==='pass'&&$report['created_payout_ids']===array($id)&&$report['batch_id']===$batch,'batch '.$batch.' needs its own exact completed-payout proof');}
+pr_ok($proofCalls===array(array(1267,array(526)),array(1269,array(527)),array(1267,array(530))),'closeout proof runs once per owning batch, even when two batches share a wallet operation');
 
 pr_clean($root);
 if($failures){echo"FAIL multi-wallet production repository harness ($checks checks)\n - ".implode("\n - ",$failures)."\n";exit(1);}
