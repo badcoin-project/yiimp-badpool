@@ -9,7 +9,6 @@ Run commands on the production host in `/srv/badpool/yiimp-badpool/web` as an op
 Set these values from current coordinator ledgers and database rows, not from an earlier task. Use strictly ascending, unique payout IDs. For a single payout, `PAYOUT_IDS` contains one ID. Build and retain a payout-ID-to-owning-batch map, with each batch's `LANE` (`scrypt`, `groestl`, `yescrypt`, or `skein`); the batch-run `--only` value may differ from the database algorithm (`badcoin-groestl`). Set `BATCH_ID` and `LANE` for **one owning batch at a time** when performing steps 5–6. Verify the installed runner supports that lane's completed-payout resume before using it.
 
 ```bash
-set -euo pipefail
 cd /srv/badpool/yiimp-badpool/web
 export PAYOUT_IDS='<ascending-comma-separated-existing-ids>'
 export BATCH_ID='<one-owning-batch-id-for-closeout-steps>'
