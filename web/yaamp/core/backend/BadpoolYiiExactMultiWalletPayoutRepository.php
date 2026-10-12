@@ -20,6 +20,19 @@ class BadpoolYiiExactMultiWalletPayoutRepository implements BadpoolExactMultiWal
 		$ids=$this->ids($payoutIds);$rows=$this->queryRows($ids,false);return$this->bindOwnership($ids,$rows);
 	}
 
+	/** Completed rows for read-only journal proof; ownership is checked by the proof. */
+	public function loadCompletedExactPayouts($payoutIds)
+	{
+		$ids=$this->ids($payoutIds);$rows=$this->queryRows($ids,false);$out=array();
+		foreach($rows as $row){
+			$id=intval($row['payout_id']);
+			if(!in_array($id,$ids,true)||isset($out[$id])||intval($row['account_id'])!==intval($row['joined_account_id'])||intval($row['coin_id'])!==intval($row['joined_coin_id']))throw new RuntimeException('Completed payout row identity mismatch.');
+			$out[$id]=array('payout_id'=>$id,'account_id'=>intval($row['account_id']),'coin_id'=>intval($row['coin_id']),'amount'=>(string)$row['amount'],'recipient'=>(string)$row['recipient'],'completed'=>intval($row['completed']),'tx'=>$row['tx']);
+		}
+		ksort($out,SORT_NUMERIC);if(array_keys($out)!==$ids)throw new RuntimeException('Completed payout row scope mismatch.');
+		return array_values($out);
+	}
+
 	public function reconcileExactWithTransactionIds($approvedRows,$txidByPayoutId)
 	{
 		$ids=array();$expected=array();foreach((array)$approvedRows as$row){if(!is_array($row)||!isset($row['payout_id']))throw new InvalidArgumentException('Malformed approved payout row.');$id=intval($row['payout_id']);if($id<1||isset($expected[$id]))throw new InvalidArgumentException('Invalid or duplicate approved payout ID.');$ids[]=$id;$expected[$id]=$row;}

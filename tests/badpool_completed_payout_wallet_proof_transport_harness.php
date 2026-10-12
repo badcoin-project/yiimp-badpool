@@ -35,7 +35,7 @@ proof_cli_ok($ineligible->contextForCoin(1267)['supported']===false,'human-appro
 try{$ineligible->getTransaction(1267,$txid);proof_cli_ok(false,'ineligible lane executed');}catch(Exception$e){proof_cli_ok($e->getMessage()==='Unsupported completed-payout wallet proof context.','ineligible lane did not fail closed');}
 
 $public=array();foreach((new ReflectionClass('BadpoolCompletedPayoutWalletProof'))->getMethods(ReflectionMethod::IS_PUBLIC)as$m)if($m->class==='BadpoolCompletedPayoutWalletProof')$public[]=$m->name;sort($public);
-proof_cli_ok($public===array('__construct','contextForCoin','getTransaction'),'transport exposes a generic method or arbitrary arguments');
+proof_cli_ok($public===array('__construct','contextForCoin','getTransaction','getTransactionExact'),'transport exposes a generic method or arbitrary arguments');
 
 $before=count($calls);try{$reader->getTransaction(1267,'not-a-txid');proof_cli_ok(false,'malformed txid accepted');}catch(Exception$e){proof_cli_ok(count($calls)===$before&&$e->getMessage()==='Wallet-proof transaction ID is malformed.','malformed txid reached process execution');}
 $failureCases=array(
@@ -55,6 +55,9 @@ foreach($failureCases as$name=>$result){
 $valid=new BadpoolCompletedPayoutWalletProof($registry,1,function()use($txid){return proof_cli_result('{"txid":"'.$txid.'","amount":-2.50000000,"confirmations":0}');});
 $value=$valid->getTransaction(1267,$txid);
 proof_cli_ok($value['txid']===$txid&&$value['amount']==='-2.50000000'&&array_key_exists('confirmations',$value),'valid response did not preserve exact debit token and confirmations presence');
+$exact=new BadpoolCompletedPayoutWalletProof($registry,1,function()use($txid){return proof_cli_result('{"txid":"'.$txid.'","amount":-2.50000000,"fee":-0.00001000,"confirmations":2,"walletconflicts":[],"details":[{"category":"send","address":"target","amount":-2.50000000}]}');});
+$exactValue=$exact->getTransactionExact(1267,$txid);
+proof_cli_ok($exactValue['amount']==='-2.50000000'&&$exactValue['fee']==='-0.00001000'&&$exactValue['details'][0]['amount']==='-2.50000000','exact proof lost decimal tokens');
 
 if($fail){echo "Badpool completed-payout wallet proof transport harness FAILED ($checks checks)\n - ".implode("\n - ",$fail)."\n";exit(1);}
 echo "Badpool completed-payout wallet proof transport harness passed ($checks checks)\n";

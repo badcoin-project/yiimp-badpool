@@ -19,6 +19,24 @@ class BadpoolPaymentBatchRunner
 		$this->root = $root ?: dirname(__FILE__).'/../../../../runtime/badpool-payment-batches';
 	}
 
+	/** Reuse the resume boundary's phase and ownership checks without its ledger write. */
+	public function inspectCompletedPayoutContract($batchId)
+	{
+		if(!is_string($batchId)||!preg_match('/^[0-9]{8}T[0-9]{6}Z-[a-f0-9]{12}$/',$batchId)||is_link($this->root)||is_link($this->root.'/'.$batchId))return array('status'=>'hold','reason'=>'unsafe_batch_path');
+		$path=$this->root.'/'.$batchId.'/ledger.json';
+		if(is_link($path)||!is_file($path))return array('status'=>'hold','reason'=>'batch_ledger_missing');
+		$ledger=json_decode(file_get_contents($path),true);
+		if(!is_array($ledger)||!isset($ledger['batch_id'])||$ledger['batch_id']!==$batchId)return array('status'=>'hold','reason'=>'batch_ledger_invalid');
+		$lane=(new BadpoolLivePaymentLaneRegistry())->fromOwnershipEnvelope(isset($ledger['coordinator_owner'])?$ledger['coordinator_owner']:null);
+		if(!$lane)return array('status'=>'hold','reason'=>'coordinator_ownership_invalid');
+		$state=isset($ledger['batch_state'])?$ledger['batch_state']:null;
+		if(!in_array($state,array('READY_FOR_WALLET_APPROVAL','HOLD_COMPLETED_PAYOUT_RECONCILIATION','RECONCILED'),true))return array('status'=>'hold','reason'=>'batch_not_at_completed_payout_boundary');
+		$check=$ledger;if($state==='RECONCILED')$check['batch_state']='HOLD_COMPLETED_PAYOUT_RECONCILIATION';
+		$error=$this->completedPayoutContractError($check,$lane);
+		if($error!==null)return array('status'=>'hold','reason'=>$error);
+		return array('status'=>'pass','batch_id'=>$batchId,'batch_state'=>$state,'lane_id'=>$lane->laneId(),'coin_id'=>$lane->coinId(),'operational_algo'=>$lane->operationalAlgo(),'created_payout_ids'=>$this->positiveIdList($ledger['created_payout_ids']),'ledger_sha256'=>hash_file('sha256',$path),'ledger'=>$ledger);
+	}
+
 	public function run($options)
 	{
 		$resume=isset($options['resume_batch_id'])?$options['resume_batch_id']:null;
