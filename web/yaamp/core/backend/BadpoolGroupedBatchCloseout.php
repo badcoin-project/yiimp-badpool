@@ -1,19 +1,18 @@
 <?php
 
 require_once(dirname(__FILE__).'/BadpoolOperationWalletProof.php');
-require_once(dirname(__FILE__).'/BadpoolCompletedPayoutBatchCloseoutApply.php');
 
 /** Bounded ledger-only coordinator. Wallet proof and batch resume remain authoritative. */
 class BadpoolGroupedBatchCloseout
 {
 	const SCHEMA='badpool.payment_batch.grouped_closeout.v1';
 	const CONFIRMATION='reconcile_exact_grouped_batches_ledger_only';
-	private $proof,$resume,$apply,$runner,$root,$batchRoot;
+	private $proof,$resume,$runner,$root,$batchRoot;
 
-	public function __construct($proof,$resume,$apply,$runner,$root=null,$batchRoot=null)
+	public function __construct($proof,$resume,$runner,$root=null,$batchRoot=null)
 	{
-		if(!is_object($proof)||!is_callable(array($proof,'preview'))||!is_callable($resume)||!is_object($apply)||!is_callable(array($apply,'apply'))||!is_object($runner)||!is_callable(array($runner,'inspectCompletedPayoutContract')))throw new InvalidArgumentException('Grouped closeout authorities required.');
-		$this->proof=$proof;$this->resume=$resume;$this->apply=$apply;$this->runner=$runner;
+		if(!is_object($proof)||!is_callable(array($proof,'preview'))||!is_callable($resume)||!is_object($runner)||!is_callable(array($runner,'inspectCompletedPayoutContract')))throw new InvalidArgumentException('Grouped closeout authorities required.');
+		$this->proof=$proof;$this->resume=$resume;$this->runner=$runner;
 		$this->root=rtrim($root?:dirname(__FILE__).'/../../../../runtime/badpool-grouped-closeouts','/\\');
 		$this->batchRoot=rtrim($batchRoot?:dirname(__FILE__).'/../../../../runtime/badpool-payment-batches','/\\');
 	}
@@ -41,13 +40,14 @@ class BadpoolGroupedBatchCloseout
 			$fresh=$this->preview(arraySafeVal($approved,'journal_path'),arraySafeVal($approved,'journal_sha256'));
 			if(!$this->sameProof($approved,$fresh))throw new RuntimeException('approved_proof_changed');
 			if(is_link($this->root)||(!is_dir($this->root)&&!mkdir($this->root,0770,true)))throw new RuntimeException('progress_root_unsafe');
-			$path=$this->root.'/'.$previewChecksum.'.json';$r['progress_path']=$path;$lockPath=$this->root.'/'.$previewChecksum.'.lock';if(is_link($lockPath)||is_link($path))throw new RuntimeException('progress_path_unsafe');
-			$lock=fopen($lockPath,'c');if(!$lock||!flock($lock,LOCK_EX|LOCK_NB))throw new RuntimeException('group_closeout_already_active');
+			$path=$this->root.'/'.$previewChecksum.'.json';$r['progress_path']=$path;$lockPath=$this->root.'/group-closeout.lock';if(is_link($lockPath)||is_link($path))throw new RuntimeException('progress_path_unsafe');
+			$lock=fopen($lockPath,'c');if(!$lock)throw new RuntimeException('group_closeout_already_active');if(!flock($lock,LOCK_EX|LOCK_NB)){fclose($lock);throw new RuntimeException('group_closeout_already_active');}
 			try{
 				$exists=is_file($path);$progress=$exists?json_decode(file_get_contents($path),true):null;
 				if($exists&&!is_array($progress))throw new RuntimeException('progress_journal_malformed');
 				if($progress===null){$states=array();foreach($ids as $id)$states[$id]='PENDING';$progress=array('schema'=>self::SCHEMA,'preview_sha256'=>$previewChecksum,'journal_sha256'=>$approved['journal_sha256'],'batch_ids'=>$ids,'batch_proof_hashes'=>$approved['batch_proof_hashes'],'states'=>$states,'updated_at'=>gmdate('c'));$this->write($path,$progress);}
 				if(!is_array($progress)||arraySafeVal($progress,'schema')!==self::SCHEMA||arraySafeVal($progress,'preview_sha256')!==$previewChecksum||arraySafeVal($progress,'journal_sha256')!==$approved['journal_sha256']||arraySafeVal($progress,'batch_ids')!==$ids||arraySafeVal($progress,'batch_proof_hashes')!==$approved['batch_proof_hashes'])throw new RuntimeException('progress_identity_mismatch');
+				if(!is_array(arraySafeVal($progress,'states'))||array_keys($progress['states'])!==$ids)throw new RuntimeException('progress_state_scope_mismatch');
 				$activeId=null;
 				try{foreach($ids as $id){
 					$activeId=$id;
@@ -70,16 +70,30 @@ class BadpoolGroupedBatchCloseout
 						if(arraySafeVal($check,'status')!=='pass'||$check['batch_state']!=='HOLD_COMPLETED_PAYOUT_RECONCILIATION')throw new RuntimeException('batch_resume_not_verified_'.$id);
 					}
 					if($check['batch_state']!=='HOLD_COMPLETED_PAYOUT_RECONCILIATION')throw new RuntimeException('batch_not_at_closeout_boundary_'.$id);
+					$fresh=$this->preview($approved['journal_path'],$approved['journal_sha256']);
+					if(!$this->sameProof($approved,$fresh))throw new RuntimeException('approved_proof_changed_after_resume_'.$id);
 					$proofPath=$this->root.'/'.$previewChecksum.'.'.$id.'.proof.json';if(is_link($proofPath))throw new RuntimeException('batch_proof_path_unsafe');$proofBytes=json_encode($batch,JSON_PRETTY_PRINT|JSON_UNESCAPED_SLASHES)."\n";
 					if(is_file($proofPath)){if(file_get_contents($proofPath)!==$proofBytes)throw new RuntimeException('batch_proof_file_changed');}else $this->writeBytes($proofPath,$proofBytes);
-					$proofSha=hash('sha256',$proofBytes);$applied=$this->apply->apply($id,$proofPath,$proofSha,BadpoolCompletedPayoutBatchCloseoutApply::CONFIRMATION,true);
-					if(!is_array($applied)||arraySafeVal($applied,'status')!=='pass'||!$this->terminal($id,$batch,$proofSha))throw new RuntimeException('batch_ledger_closeout_not_verified_'.$id);
+					$proofSha=hash('sha256',$proofBytes);$this->applyLedger($id,$batch,$proofSha);
+					if(!$this->terminal($id,$batch,$proofSha))throw new RuntimeException('batch_ledger_closeout_not_verified_'.$id);
 					$progress['states'][$id]='VERIFIED';$this->write($path,$progress);$r['batch_results'][$id]='verified';
 				}}catch(Exception $e){if($activeId!==null&&arraySafeVal($progress['states'],$activeId)==='APPLYING'){$progress['states'][$activeId]='HOLD';$progress['hold_reason']=$e->getMessage();$this->write($path,$progress);}throw $e;}
 				$r['status']='pass';$r['classification']='PASS / GROUPED LEDGERS RECONCILED';
 			}finally{flock($lock,LOCK_UN);fclose($lock);}
 		}catch(Exception $e){$r['errors'][]=$e->getMessage();$r['classification']='HOLD / GROUPED CLOSEOUT INCOMPLETE';}
 		return $r;
+	}
+
+	/** Only the verified grouped flow calls this private ledger transition. */
+	private function applyLedger($id,$batch,$proofSha)
+	{
+		$check=$this->runner->inspectCompletedPayoutContract($id);
+		if(arraySafeVal($check,'status')!=='pass'||arraySafeVal($check,'batch_state')!=='HOLD_COMPLETED_PAYOUT_RECONCILIATION'||arraySafeVal($check,'created_payout_ids')!==arraySafeVal($batch,'created_payout_ids')||arraySafeVal($check,'lane_id')!==arraySafeVal($batch,'lane_id')||arraySafeVal($check,'coin_id')!==arraySafeVal($batch,'coin_id')||arraySafeVal($batch,'phase_0_6_verified')!==true||BadpoolMultiWalletApprovalPlanner::checksum(arraySafeVal($check['ledger'],'checksums'))!==arraySafeVal($batch,'phase_checksums_sha256'))throw new RuntimeException('batch_contract_changed_before_ledger_apply_'.$id);
+		$dir=$this->batchRoot.'/'.$id;$path=$dir.'/ledger.json';
+		if(is_link($this->batchRoot)||is_link($dir)||is_link($path)||!is_file($path)||realpath($this->batchRoot)!==dirname(realpath($dir)))throw new RuntimeException('batch_ledger_path_unsafe_'.$id);
+		if(!hash_equals($check['ledger_sha256'],hash_file('sha256',$path)))throw new RuntimeException('batch_ledger_changed_before_apply_'.$id);
+		$ledger=$check['ledger'];$ledger['batch_state']='RECONCILED';$ledger['reconciled_at']=gmdate('c');$ledger['reconciliation_proof_checksum']=$proofSha;$ledger['reconciled_payout_ids']=$batch['created_payout_ids'];
+		$this->writeBytes($path,json_encode($ledger,JSON_PRETTY_PRINT|JSON_UNESCAPED_SLASHES)."\n");
 	}
 
 	private function terminal($id,$batch,$expectedSha=null)
@@ -90,8 +104,9 @@ class BadpoolGroupedBatchCloseout
 		return arraySafeVal($ledger,'reconciliation_proof_checksum')===$proofSha&&($expectedSha===null||$expectedSha===$proofSha);
 	}
 	private function batchProof($batches,$id){foreach((array)$batches as $batch)if(is_array($batch)&&arraySafeVal($batch,'batch_id')===$id)return $batch;return null;}
-	private function sameProof($a,$b){return is_array($b)&&arraySafeVal($b,'status')==='pass'&&arraySafeVal($a,'journal_sha256')===arraySafeVal($b,'journal_sha256')&&arraySafeVal($a,'batch_ids')===arraySafeVal($b,'batch_ids')&&arraySafeVal($a,'operation_proof_hashes')===arraySafeVal($b,'operation_proof_hashes')&&arraySafeVal($a,'batch_proof_hashes')===arraySafeVal($b,'batch_proof_hashes');}
+	private function sameProof($a,$b){return is_array($b)&&arraySafeVal($b,'status')==='pass'&&$this->stablePreview($a)===$this->stablePreview($b);}
+	private function stablePreview($preview){if(!is_array($preview)||!is_array(arraySafeVal($preview,'proof'))||!is_array(arraySafeVal($preview['proof'],'operations')))return null;foreach($preview['proof']['operations'] as &$operation)if(is_array($operation))unset($operation['confirmations']);unset($operation);return $preview;}
 	private function batchIds($ids){if(!is_array($ids)||!$ids||count($ids)>BadpoolOperationWalletProof::MAX_PAYOUTS)return false;$last='';foreach($ids as $id){if(!is_string($id)||!preg_match('/^[0-9]{8}T[0-9]{6}Z-[a-f0-9]{12}$/D',$id)||$id<=$last)return false;$last=$id;}return true;}
 	private function write($path,$data){$data['updated_at']=gmdate('c');$this->writeBytes($path,json_encode($data,JSON_PRETTY_PRINT|JSON_UNESCAPED_SLASHES)."\n");}
-	private function writeBytes($path,$bytes){$tmp=$path.'.tmp.'.getmypid();if(!is_string($bytes)||is_link($path)||is_link($tmp))throw new RuntimeException('durable_group_write_failed');$h=@fopen($tmp,'x');if(!$h)throw new RuntimeException('durable_group_write_failed');$ok=fwrite($h,$bytes)===strlen($bytes)&&fflush($h);fclose($h);if(!$ok||!@rename($tmp,$path)){@unlink($tmp);throw new RuntimeException('durable_group_write_failed');}}
+	private function writeBytes($path,$bytes){$tmp=$path.'.tmp.'.getmypid().'.'.bin2hex(random_bytes(8));if(!is_string($bytes)||is_link($path)||is_link($tmp))throw new RuntimeException('durable_group_write_failed');$h=@fopen($tmp,'x');if(!$h)throw new RuntimeException('durable_group_write_failed');$ok=fwrite($h,$bytes)===strlen($bytes)&&fflush($h)&&(!function_exists('fsync')||fsync($h));fclose($h);if(!$ok||!@rename($tmp,$path)){@unlink($tmp);throw new RuntimeException('durable_group_write_failed');}}
 }

@@ -531,7 +531,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 	private function groupedBatchCloseout()
 	{
 		$resume=function($batchId,$algo){return $this->executePaymentBatchPhaseCommand('batch-run',array('--resume-batch-id='.$batchId,'--only='.$algo,'--format=json'));};
-		return new BadpoolGroupedBatchCloseout($this->operationWalletProof(),$resume,new BadpoolCompletedPayoutBatchCloseoutApply(),new BadpoolPaymentBatchRunner($this->paymentBatchPhaseAdapter()));
+		return new BadpoolGroupedBatchCloseout($this->operationWalletProof(),$resume,new BadpoolPaymentBatchRunner($this->paymentBatchPhaseAdapter()));
 	}
 
 	protected function paymentBatchPhaseAdapter()
