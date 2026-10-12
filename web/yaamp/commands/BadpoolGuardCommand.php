@@ -522,7 +522,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 
 	private function exactGroupedOptions($args,$required)
 	{
-		$seen=array();foreach($args as $arg){if(!preg_match('/^--([a-z-]+)=(.+)$/D',(string)$arg,$m)||isset($seen[$m[1]])){$this->guard->addError('Malformed or duplicate grouped-closeout option.');return false;}$seen[$m[1]]=true;}
+		$seen=array();foreach($args as $arg){if(!preg_match('/^--([a-z0-9-]+)=(.+)$/D',(string)$arg,$m)||isset($seen[$m[1]])){$this->guard->addError('Malformed or duplicate grouped-closeout option.');return false;}$seen[$m[1]]=true;}
 		$actual=array_keys($seen);sort($actual,SORT_STRING);sort($required,SORT_STRING);
 		if($actual!==$required||$this->guard->getFormat()!=='json'){$this->guard->addError('Exact grouped-closeout options and --format=json are required.');return false;}
 		return true;

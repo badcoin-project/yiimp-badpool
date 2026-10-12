@@ -435,7 +435,7 @@ class BadpoolGuardContext
 			return;
 		}
 		if (!$hasCoinId && !$allCoins) {
-			if ($this->command === 'status-runner' || $this->command === 'batch-run-preview' || $this->command === 'batch-run' || $this->command === 'completed-payout-batch-closeout' || $this->command === 'completed-payout-batch-closeout-apply' || $this->command === 'live-payment-coordinator') {
+			if ($this->command === 'status-runner' || $this->command === 'batch-run-preview' || $this->command === 'batch-run' || $this->command === 'completed-payout-batch-closeout' || $this->command === 'completed-payout-batch-closeout-apply' || $this->command === 'operation-wallet-proof' || $this->command === 'grouped-batch-closeout-preview' || $this->command === 'grouped-batch-closeout-apply' || $this->command === 'live-payment-coordinator') {
 				$allCoins = true;
 			} else {
 				$this->addError('Refusing implicit all-coin preview. Pass --coin-id=<id> or --all-coins-preview.');
