@@ -105,7 +105,15 @@ class BadpoolGroupedBatchCloseout
 	}
 	private function batchProof($batches,$id){foreach((array)$batches as $batch)if(is_array($batch)&&arraySafeVal($batch,'batch_id')===$id)return $batch;return null;}
 	private function sameProof($a,$b){return is_array($b)&&arraySafeVal($b,'status')==='pass'&&$this->stablePreview($a)===$this->stablePreview($b);}
-	private function stablePreview($preview){if(!is_array($preview)||!is_array(arraySafeVal($preview,'proof'))||!is_array(arraySafeVal($preview['proof'],'operations')))return null;foreach($preview['proof']['operations'] as &$operation)if(is_array($operation))unset($operation['confirmations']);unset($operation);return $preview;}
+	private function stablePreview($preview){if(!is_array($preview)||!is_array(arraySafeVal($preview,'proof'))||!is_array(arraySafeVal($preview['proof'],'operations')))return null;foreach($preview['proof']['operations'] as &$operation)if(is_array($operation))unset($operation['confirmations']);unset($operation);
+        $fields=array(
+            'schema','command','status','classification',
+            'read_only','wallet_sends','db_mutations',
+            'batch_count','batch_ids','operation_proof_hashes',
+            'batch_proof_hashes','journal_path','journal_sha256',
+            'proof','errors'
+        );
+        return array_intersect_key($preview,array_fill_keys($fields,true));}
 	private function batchIds($ids){if(!is_array($ids)||!$ids||count($ids)>BadpoolOperationWalletProof::MAX_PAYOUTS)return false;$last='';foreach($ids as $id){if(!is_string($id)||!preg_match('/^[0-9]{8}T[0-9]{6}Z-[a-f0-9]{12}$/D',$id)||$id<=$last)return false;$last=$id;}return true;}
 	private function write($path,$data){$data['updated_at']=gmdate('c');$this->writeBytes($path,json_encode($data,JSON_PRETTY_PRINT|JSON_UNESCAPED_SLASHES)."\n");}
 	private function writeBytes($path,$bytes){$tmp=$path.'.tmp.'.getmypid().'.'.bin2hex(random_bytes(8));if(!is_string($bytes)||is_link($path)||is_link($tmp))throw new RuntimeException('durable_group_write_failed');$h=@fopen($tmp,'x');if(!$h)throw new RuntimeException('durable_group_write_failed');$ok=fwrite($h,$bytes)===strlen($bytes)&&fflush($h)&&(!function_exists('fsync')||fsync($h));fclose($h);if(!$ok||!@rename($tmp,$path)){@unlink($tmp);throw new RuntimeException('durable_group_write_failed');}}
