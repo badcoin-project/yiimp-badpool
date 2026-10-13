@@ -44,6 +44,37 @@ class BadpoolCompletedPayoutWalletProof
 
 	public function getTransaction($coinId,$txid)
 	{
+		$raw=$this->transactionJson($coinId,$txid);
+		$decoded=json_decode($raw,true);
+		$decoded['txid']=strtolower($decoded['txid']);
+		// Keep the historical response contract for existing single-batch proofs.
+		$exactAmount=$this->exactDecimalField($raw,'amount');if($exactAmount!==null)$decoded['amount']=$exactAmount;
+		return $decoded;
+	}
+
+	/** All JSON number tokens remain decimal strings, including detail amounts and fee. */
+	public function getTransactionExact($coinId,$txid)
+	{
+		$raw=$this->transactionJson($coinId,$txid);
+		$quoted='';$inside=false;$escaped=false;$length=strlen($raw);
+		for($i=0;$i<$length;$i++){
+			$c=$raw[$i];
+			if($inside){$quoted.=$c;if($escaped)$escaped=false;elseif($c==='\\')$escaped=true;elseif($c==='"')$inside=false;continue;}
+			if($c==='"'){$inside=true;$quoted.=$c;continue;}
+			if($c==='-'||ctype_digit($c)){
+				if(!preg_match('/\G-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?/A',$raw,$m,0,$i))throw new RuntimeException('Malformed wallet numeric token.');
+				$quoted.='"'.$m[0].'"';$i+=strlen($m[0])-1;continue;
+			}
+			$quoted.=$c;
+		}
+		$decoded=json_decode($quoted,true);
+		if(!is_array($decoded)||json_last_error()!==JSON_ERROR_NONE)throw new RuntimeException('Malformed exact wallet transaction JSON.');
+		$decoded['txid']=strtolower($decoded['txid']);
+		return $decoded;
+	}
+
+	private function transactionJson($coinId,$txid)
+	{
 		$lane=$this->eligibleLane($coinId);
 		if(!is_string($txid)||preg_match('/^[0-9a-fA-F]{64}$/D',$txid)!==1)throw new RuntimeException('Wallet-proof transaction ID is malformed.');
 		$expectedTxid=strtolower($txid);
@@ -62,8 +93,7 @@ class BadpoolCompletedPayoutWalletProof
 		if($decoded['txid']!==$expectedTxid)throw new RuntimeException('Completed-payout wallet proof transaction ID mismatch.');
 		// json_decode converts JSON numbers to PHP floats. Preserve the exact
 		// daemon decimal token so authorization comparison remains string-based.
-		$exactAmount=$this->exactDecimalField($raw,'amount');if($exactAmount!==null)$decoded['amount']=$exactAmount;
-		return $decoded;
+		return $raw;
 	}
 
 	private function exactDecimalField($json,$field)

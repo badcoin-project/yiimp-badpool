@@ -13,6 +13,7 @@ require_once(dirname(__FILE__).'/../core/backend/BadpoolPaymentBatchPhaseAdapter
 require_once(dirname(__FILE__).'/../core/backend/BadpoolCompletedPayoutBatchCloseout.php');
 require_once(dirname(__FILE__).'/../core/backend/BadpoolCompletedPayoutBatchCloseoutApply.php');
 require_once(dirname(__FILE__).'/../core/backend/BadpoolCompletedPayoutWalletProof.php');
+require_once(dirname(__FILE__).'/../core/backend/BadpoolGroupedBatchCloseout.php');
 require_once(dirname(__FILE__).'/../core/backend/BadpoolWalletFundingGuard.php');
 require_once(dirname(__FILE__).'/../core/backend/BadpoolYiiExactMultiWalletPayoutRepository.php');
 require_once(dirname(__FILE__).'/../core/backend/BadpoolMultiWalletProductionPreflight.php');
@@ -95,6 +96,9 @@ class BadpoolGuardCommand extends CConsoleCommand
 		'live-payment-coordinator',
 		'completed-payout-batch-closeout',
 		'completed-payout-batch-closeout-apply',
+		'operation-wallet-proof',
+		'grouped-batch-closeout-preview',
+		'grouped-batch-closeout-apply',
 	);
 
 	public function run($args)
@@ -333,6 +337,15 @@ class BadpoolGuardCommand extends CConsoleCommand
 			case 'completed-payout-batch-closeout-apply':
 				$report = $this->completedPayoutBatchCloseoutApplyReport();
 				break;
+			case 'operation-wallet-proof':
+				$report = $this->exactGroupedOptions($args,array('journal-path','journal-sha256','format')) ? $this->operationWalletProof()->preview((string)$this->guard->getOption('journal-path',''),(string)$this->guard->getOption('journal-sha256','')) : $this->guard->refusalReport();
+				break;
+			case 'grouped-batch-closeout-preview':
+				$report = $this->exactGroupedOptions($args,array('journal-path','journal-sha256','format')) ? $this->groupedBatchCloseout()->preview((string)$this->guard->getOption('journal-path',''),(string)$this->guard->getOption('journal-sha256','')) : $this->guard->refusalReport();
+				break;
+			case 'grouped-batch-closeout-apply':
+				$report = $this->exactGroupedOptions($args,array('group-preview','group-preview-checksum','operator-confirms-grouped-closeout','format')) ? $this->groupedBatchCloseout()->apply((string)$this->guard->getOption('group-preview',''),(string)$this->guard->getOption('group-preview-checksum',''),(string)$this->guard->getOption('operator-confirms-grouped-closeout','')) : $this->guard->refusalReport();
+				break;
 			default:
 				$this->guard->addError("Unhandled action: $action");
 				$report = $this->guard->refusalReport();
@@ -378,6 +391,9 @@ class BadpoolGuardCommand extends CConsoleCommand
 			"       php yaamp/yiic.php badpoolguard batch-run --resume-batch-id=<id> --payment-delay-override-package=<path> --payment-delay-override-package-checksum=<file-sha256> --operator-confirms-payment-delay-override=".BadpoolConfirmedBlockPaymentDelayOverride::CONFIRMATION." --format=json\n".
 			"       php yaamp/yiic.php badpoolguard completed-payout-batch-closeout --batch-id=<id> --format=json\n".
 			"       php yaamp/yiic.php badpoolguard completed-payout-batch-closeout-apply --batch-id=<id> --closeout-proof=<path> --closeout-proof-checksum=<sha256> --operator-confirms-closeout=".BadpoolCompletedPayoutBatchCloseoutApply::CONFIRMATION." --format=json\n".
+			"       php yaamp/yiic.php badpoolguard operation-wallet-proof --journal-path=<path> --journal-sha256=<sha256> --format=json\n".
+			"       php yaamp/yiic.php badpoolguard grouped-batch-closeout-preview --journal-path=<path> --journal-sha256=<sha256> --format=json\n".
+			"       php yaamp/yiic.php badpoolguard grouped-batch-closeout-apply --group-preview=<path> --group-preview-checksum=<sha256> --operator-confirms-grouped-closeout=".BadpoolGroupedBatchCloseout::CONFIRMATION." --format=json\n".
 			"       php yaamp/yiic.php badpoolguard forward-catchup-stage1-apply --coin-id=<id> --limit=<approved_n> --selected-count=<approved_n> --approval-package-checksum=<sha256> --batch-scope-checksum=<sha256> --projected-mutation-checksum=<sha256> --projected-earnings-checksum=<sha256> --operator-confirms-attribution-model=block_userid_single_recipient --format=json\n".
 			"       php yaamp/yiic.php badpoolguard earnings-maturity-transition-dryrun --coin-id=<id> [--selected-block-ids=<csv>] [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard backward-maturity-transition-dryrun --coin-id=1267 --selected-earning-ids=<explicit-csv> --selected-block-ids=<explicit-csv> --expected-inventory-checksum=<sha256> --format=json\n".
@@ -494,6 +510,28 @@ class BadpoolGuardCommand extends CConsoleCommand
 	{
 		$apply=new BadpoolCompletedPayoutBatchCloseoutApply();
 		return $apply->apply((string)$this->guard->getOption('batch-id',''),(string)$this->guard->getOption('closeout-proof',''),(string)$this->guard->getOption('closeout-proof-checksum',''),(string)$this->guard->getOption('operator-confirms-closeout',''));
+	}
+
+	private function operationWalletProof()
+	{
+		$repository=new BadpoolYiiExactMultiWalletPayoutRepository(app()->db);
+		$rows=function($ids)use($repository){return $repository->loadCompletedExactPayouts($ids);};
+		$adapter=$this->paymentBatchPhaseAdapter();
+		return new BadpoolOperationWalletProof($rows,new BadpoolCompletedPayoutWalletProof(),new BadpoolPaymentBatchRunner($adapter));
+	}
+
+	private function exactGroupedOptions($args,$required)
+	{
+		$seen=array();foreach($args as $arg){if(!preg_match('/^--([a-z0-9-]+)=(.+)$/D',(string)$arg,$m)||isset($seen[$m[1]])){$this->guard->addError('Malformed or duplicate grouped-closeout option.');return false;}$seen[$m[1]]=true;}
+		$actual=array_keys($seen);sort($actual,SORT_STRING);sort($required,SORT_STRING);
+		if($actual!==$required||$this->guard->getFormat()!=='json'){$this->guard->addError('Exact grouped-closeout options and --format=json are required.');return false;}
+		return true;
+	}
+
+	private function groupedBatchCloseout()
+	{
+		$resume=function($batchId,$algo){return $this->executePaymentBatchPhaseCommand('batch-run',array('--resume-batch-id='.$batchId,'--only='.$algo,'--format=json'));};
+		return new BadpoolGroupedBatchCloseout($this->operationWalletProof(),$resume,new BadpoolPaymentBatchRunner($this->paymentBatchPhaseAdapter()));
 	}
 
 	protected function paymentBatchPhaseAdapter()
@@ -7311,7 +7349,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 
 	private function finalizeCommandReport($report)
 	{
-		$closeoutErrors = in_array(arraySafeVal($report, 'command'),array('completed-payout-batch-closeout','completed-payout-batch-closeout-apply'),true) ? arraySafeVal($report, 'errors', array()) : null;
+		$closeoutErrors = in_array(arraySafeVal($report, 'command'),array('completed-payout-batch-closeout','completed-payout-batch-closeout-apply','operation-wallet-proof','grouped-batch-closeout-preview','grouped-batch-closeout-apply'),true) ? arraySafeVal($report, 'errors', array()) : null;
 		$report = $this->guard->finalizeReport($report);
 		// Closeout lane HOLD reasons are domain validation results, not parser
 		// errors held by BadpoolGuardContext. Preserve them through finalization.

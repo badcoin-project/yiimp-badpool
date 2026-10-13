@@ -98,6 +98,25 @@ list($exec,$repo,$gateway,$journal)=sm_system($rows,'restart-uncertain');$plan=$
 
 $same=$rows;$same[527]['recipient']=$same[526]['recipient'];list($exec,$repo,$gateway,$journal)=sm_system($same,'cross-recipient');$cross=$exec->preflight(sm_approval($same));sm_ok(count($cross['operations'])===3,'same recipient across independent wallets is safe');
 $sameWallet=$rows;$sameWallet[529]=$rows[526];$sameWallet[529]['payout_id']=529;$sameWallet[529]['account_id']=90;$sameWallet[529]['recipient']=$rows[526]['recipient'];list($exec,$repo,$gateway,$journal)=sm_system($sameWallet,'duplicate-recipient');$aggregate=$exec->preflight(sm_approval($sameWallet,array(526,529)));sm_ok($aggregate['operations'][0]['recipients']===array($rows[526]['recipient']=>'108223.06162330')&&$aggregate['operations'][0]['payout_ids']===array(526,529),'duplicate recipient aggregates with exact payout identities');
+foreach(array(2,10,25)as$count){
+	$scope=array();$ids=array();for($i=0;$i<$count;$i++){$id=800+$i;$scope[$id]=$rows[526];$scope[$id]['payout_id']=$id;$scope[$id]['batch_id']=sprintf('20261003T%06dZ-%012x',$i,$id);$ids[]=$id;}
+	list($exec,$repo,$gateway,$journal)=sm_system($scope,'same-recipient-'.$count);
+	$approved=sm_approval($scope,$ids);$planned=$exec->preflight($approved);$op=$planned['operations'][0];
+	sm_ok(count($planned['operations'])===1&&count($op['recipients'])===1&&$op['payout_ids']===$ids,$count.' payouts form one wallet operation');
+	sm_ok(count(array_unique(array_column($planned['rows'],'batch_id')))===$count&&array_column($planned['rows'],'payout_id')===$ids,$count.' individual payout and batch mappings retained');
+	$sent=$exec->execute($approved);sm_ok($sent['status']==='pass'&&$sent['journal_state']==='RECONCILED'&&$gateway->calls===array('scrypt'),$count.' payouts send once and reconcile');
+	$stored=$journal->load($planned['approval_checksum']);sm_ok($stored['payout_evidence']===$planned['rows']&&$stored['wallet_operation_evidence'][0]['payout_ids']===$ids&&array_keys($repo->reconciled)===$ids,$count.' journal and database retain exact payout mapping');
+	$replay=$exec->execute($approved);sm_ok($replay['status']==='pass'&&$gateway->calls===array('scrypt'),$count.' replay does not resend');
+}
+$mixed=array();$mixedIds=array();for($i=0;$i<25;$i++){$id=900+$i;$mixed[$id]=$rows[$i%2===0?526:527];$mixed[$id]['payout_id']=$id;$mixed[$id]['batch_id']=sprintf('20261004T%06dZ-%012x',$i,$id);$mixedIds[]=$id;}
+list($exec,$repo,$gateway,$journal)=sm_system($mixed,'mixed-wallet-recipients');$mixedApproval=sm_approval($mixed,$mixedIds);$mixedPlan=$exec->preflight($mixedApproval);
+sm_ok(count($mixedPlan['operations'])===2&&array_column($mixedPlan['operations'],'wallet_binding_identity')===array('scrypt','groestl'),'25 payout mixed scope keeps wallets independent');
+sm_ok(count($mixedPlan['operations'][0]['recipients'])===1&&count($mixedPlan['operations'][1]['recipients'])===1,'duplicate destinations aggregate only within their wallet');
+$mixedResult=$exec->execute($mixedApproval);sm_ok($mixedResult['status']==='pass'&&$gateway->calls===array('scrypt','groestl'),'mixed wallet scope sends each wallet once');
+$reconciledIds=array_keys($repo->reconciled);sort($reconciledIds,SORT_NUMERIC);sm_ok(count(array_unique(array_values($repo->reconciled)))===2&&$reconciledIds===$mixedIds,'mixed wallet payouts receive their own wallet txids');
+$rounding=$sameWallet;$rounding[526]['amount']='0.000000005';$rounding[529]['amount']='0.000000005';
+list($exec,$repo,$gateway,$journal)=sm_system($rounding,'rounding-drift');
+sm_ok(sm_throws(function()use($exec,$rounding){$exec->preflight(sm_approval($rounding,array(526,529)));}),'two individually rounded satoshis cannot exceed rounded raw total');
 
 $registry=new BadpoolLivePaymentLaneRegistry();sm_ok($registry->get('live-skein-v1')->isHumanApprovedWalletSendEligible()&&!$registry->get('live-skein-v1')->isWalletSendCommissioned(),'Skein wallet-ready lane is operator eligible while recurring send stays disabled');sm_ok(!$registry->get('live-sha256d-v1')->isHumanApprovedWalletSendEligible()&&!$registry->get('live-sha256d-v1')->isPayoutPreparationCommissioned(),'SHA256d excluded');sm_ok(!$registry->get('live-groestl-v1')->isWalletSendCommissioned()&&!$registry->get('live-yescrypt-v1')->isWalletSendCommissioned(),'recurring wallet flags remain disabled');
 $coordinator=file_get_contents(dirname(__FILE__).'/../web/yaamp/core/backend/BadpoolLivePaymentCoordinator.php');sm_ok(strpos($coordinator,'BadpoolPerWalletOperationGateway')===false&&strpos($coordinator,'sendApprovedWalletOperation')===false,'recurring coordinator cannot reach gateway');

@@ -100,7 +100,7 @@ class BadpoolMultiWalletApprovalPlanner
 		$byId=array();foreach($rows as$row){if(!is_array($row)||!isset($row['payout_id']))throw new RuntimeException('Payout repository returned a malformed row.');$id=$this->positiveInt($row['payout_id'],'stored payout_id');if(!isset($entries[$id]))throw new RuntimeException('Repository returned an unapproved payout: '.$id);if(isset($byId[$id]))throw new RuntimeException('Repository returned duplicate payout: '.$id);$byId[$id]=$row;}
 		if(count($byId)!==count($entries))throw new RuntimeException('One or more explicitly approved payouts are unknown.');
 
-		$approvalChecksum=self::checksum($approval);$rawTotal='0';$walletTotal='0';$validated=array();$groups=array();
+		$approvalChecksum=self::checksum($approval);$rawTotal='0';$walletTotal='0';$validated=array();$groups=array();$recipientRawTotals=array();
 		foreach($entries as$id=>$entry){
 			$row=$byId[$id];$lane=$this->lane($entry['lane_id']);
 			if(!$lane->isPayoutPreparationCommissioned()||!$lane->isHumanApprovedWalletSendEligible())throw new RuntimeException('Lane is not eligible for human-approved wallet send: '.$entry['lane_id']);
@@ -113,8 +113,18 @@ class BadpoolMultiWalletApprovalPlanner
 			$key=$entry['wallet_binding_identity']."\n".$entry['source_account_identity'];if(!isset($groups[$key]))$groups[$key]=array('lane_id'=>$entry['lane_id'],'coin_id'=>$entry['coin_id'],'wallet_binding_identity'=>$entry['wallet_binding_identity'],'source_account_identity'=>$entry['source_account_identity'],'rpc_config_identity'=>$lane->get('rpc_config_identity'),'wallet_datadir_identity'=>$lane->get('wallet_datadir_identity'),'payout_ids'=>array(),'recipients'=>array(),'raw_total'=>'0','wallet_send_total'=>'0');
 			$prior=isset($groups[$key]['recipients'][$entry['recipient']])?$groups[$key]['recipients'][$entry['recipient']]:'0';
 			$groups[$key]['payout_ids'][]=$id;$groups[$key]['recipients'][$entry['recipient']]=$this->projectEight($this->add($prior,$walletAmount));$groups[$key]['raw_total']=$this->add($groups[$key]['raw_total'],$entry['amount']);$groups[$key]['wallet_send_total']=$this->add($groups[$key]['wallet_send_total'],$walletAmount);
+			$recipientRaw=isset($recipientRawTotals[$key][$entry['recipient']])?$recipientRawTotals[$key][$entry['recipient']]:'0';
+			$recipientRawTotals[$key][$entry['recipient']]=$this->add($recipientRaw,$entry['amount']);
 		}
-		foreach($groups as $group){$total='0';foreach($group['recipients'] as $amount)$total=$this->add($total,$amount);if($total!==$group['wallet_send_total'])throw new RuntimeException('Wallet destination aggregation total mismatch.');}
+		foreach($groups as $key=>$group){
+			$total='0';foreach($group['recipients'] as $amount)$total=$this->add($total,$amount);
+			if($total!==$group['wallet_send_total'])throw new RuntimeException('Wallet destination aggregation total mismatch.');
+			foreach($group['recipients'] as $recipient=>$amount)if($this->projectEight($recipientRawTotals[$key][$recipient])!==$amount)throw new RuntimeException('Per-payout rounding does not reconcile for recipient.');
+			// Every payout is projected once. A scope whose individual projections
+			// differ from the rounded raw wallet total loses or creates a satoshi.
+			if($this->projectEight($group['raw_total'])!==$this->projectEight($total))throw new RuntimeException('Per-payout rounding does not reconcile with wallet operation total.');
+			if($this->projectEight($total)==='0.00000000')throw new RuntimeException('Wallet operation amount projects to zero.');
+		}
 		$operations=array_values($groups);usort($operations,function($a,$b){$x=$a['payout_ids'][0];$y=$b['payout_ids'][0];if($x===$y)return strcmp($a['wallet_binding_identity'],$b['wallet_binding_identity']);return$x<$y?-1:1;});
 		foreach($operations as$i=>&$operation){$operation['sequence']=$i+1;$operation['approval_checksum']=$approvalChecksum;$operation['operation_id']='wallet-op-'.substr(self::checksum(array('approval_checksum'=>$approvalChecksum,'wallet_binding_identity'=>$operation['wallet_binding_identity'],'source_account_identity'=>$operation['source_account_identity'],'payout_ids'=>$operation['payout_ids'],'recipients'=>$operation['recipients'])),0,24);}unset($operation);
 		$plan=array('schema'=>self::PLAN_SCHEMA,'approval_checksum'=>$approvalChecksum,'approval_document'=>$approval,'payout_ids'=>array_keys($entries),'rows'=>$validated,'operations'=>$operations,'raw_total'=>$rawTotal,'wallet_send_total'=>$walletTotal);
