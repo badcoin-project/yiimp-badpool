@@ -14,12 +14,15 @@ These steps create no wallet send or completed payout marker. `READY_FOR_WALLET_
 
 ## Operator procedure
 
-Run only after deploying and reviewing this change. Use the actual batch directory under `runtime/badpool-payment-batches`; keep the existing ledger, `payout-row-packages.json`, phase-6 refusal report, and their SHA-256 values as immutable evidence. Do not edit these files. Read-only database checks must show coin `1267`, account `79`, exact balance text `4541.6627178399995`, earnings `20144` and `20145` at status `2`, and **zero** phase-6 payout rows. Confirm the ledger remains `HOLD` at `current_phase: 6`, with successful phases 0–5 and no created payout IDs. A changed balance, extra selected account, payout row, missing artifact, or unresolved `payout-row-apply-attempt.json` is a stop condition.
+Run only after deploying and reviewing this change. **Before approval regeneration, verify the deployed code**: record `git -C /srv/badpool/yiimp-badpool rev-parse HEAD`, compare it with the explicitly approved deployment commit, and confirm `git -C /srv/badpool/yiimp-badpool status --porcelain -- web/yaamp/commands/BadpoolGuardCommand.php web/yaamp/core/backend/BadpoolGuardContext.php web/yaamp/core/backend/BadpoolPaymentBatchPhaseAdapter.php web/yaamp/core/backend/BadpoolPaymentBatchRunner.php` is empty. If the deployment is not a Git checkout, compare SHA-256 values for those four deployed PHP files against the approved release manifest instead. Stop if code identity or local modifications cannot be verified.
+
+Use the actual batch directory under `runtime/badpool-payment-batches`; keep the existing ledger, `payout-row-packages.json`, phase-6 refusal report, and their SHA-256 values as immutable evidence. Do not edit these files. Read-only database checks must show coin `1267`, account `79`, exact balance text `4541.6627178399995`, earnings `20144` and `20145` at status `2`, and **zero** phase-6 payout rows. Confirm the ledger remains `HOLD` at `current_phase: 6`, with successful phases 0–5 and no created payout IDs. A changed balance, extra selected account, payout row, missing artifact, or unresolved `payout-row-apply-attempt.json` is a stop condition.
 
 From `/srv/badpool/yiimp-badpool/web`, generate the new approval:
 
 ```sh
-php yaamp/yiic.php badpoolguard batch-run \
+sudo -v
+sudo -u zako /usr/bin/php yaamp/yiic.php badpoolguard batch-run \
   --resume-batch-id=20261004T072007Z-d73ffc159420 \
   --only=scrypt --phase6-approval-only=1 --format=json
 ```
@@ -29,7 +32,8 @@ Retain the JSON output and the returned `package_path`. Independently calculate 
 **Stop here for explicit human approval of that exact package SHA-256 and selected amount.** Do not use the old phase-6 approval, an unreviewed regenerated approval, or a checksum copied from another batch. After approval, an operator may run the single guarded phase-6 resume with the reviewed SHA-256:
 
 ```sh
-php yaamp/yiic.php badpoolguard batch-run \
+sudo -v
+sudo -u zako /usr/bin/php yaamp/yiic.php badpoolguard batch-run \
   --resume-batch-id=20261004T072007Z-d73ffc159420 \
   --only=scrypt --phase6-approval-sha256=<reviewed-package-file-sha256> \
   --format=json
@@ -40,3 +44,5 @@ Require a passing result, one created payout ID, one payout row for account `79`
 ## Local regression
 
 `tests/badpool_phase6_precision_recovery_harness.php` reproduces the stale checksum using the two supplied balance texts, checks eight-decimal rounding and the exact account update predicate, proves rollback after a concurrent balance change, and exercises approval-only regeneration and explicit phase-6 resume without earlier phase calls. The existing payout-row and batch harnesses remain part of the verification set.
+
+`tests/badpool_phase6_double_mariadb_harness.py` starts a disposable socket-only MariaDB server, extracts the existing guarded `UPDATE` from the PHP source, and runs it with a real `DOUBLE` account balance. It requires one affected account row for the unchanged authoritative text, zero after a separate connection changes the balance, and rollback of the payout insert on the failed debit. Run with `python3 tests/badpool_phase6_double_mariadb_harness.py` on a Linux host with MariaDB test binaries. It uses no production configuration or service.
