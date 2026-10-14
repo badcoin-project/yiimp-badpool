@@ -130,12 +130,47 @@ class BadpoolPaymentBatchPhaseAdapter
 		$existing=$this->recoverExistingPayoutApply($ledger);
 		if($existing!==null){if($recovered!==null){$existing['selected_account_ids']=$recovered['selected_account_ids'];$existing['selected_accounts_by_coin']=$recovered['selected_accounts_by_coin'];}return $existing;}
 		if(file_exists($ledger['run_directory'].'/payout-row-apply-attempt.json')||is_link($ledger['run_directory'].'/payout-row-apply-attempt.json'))return $this->hold('Prior payout-row apply outcome has no durable completion evidence; investigate without reapplying.');
+		if(isset($options['phase6_approval_sha256'])){
+			$sha=$options['phase6_approval_sha256'];$approval=null;
+			foreach((array)arraySafeVal($ledger,'phase6_recovery_approvals',array()) as $record)if(is_array($record)&&arraySafeVal($record,'package_sha256')===$sha)$approval=$record;
+			$path=arraySafeVal((array)$approval,'package_path');
+			if(!is_string($path)||!is_file($path)||is_link($path)||realpath(dirname($path))!==realpath($ledger['run_directory'])||!hash_equals($sha,hash_file('sha256',$path)))return $this->hold('Reviewed phase-6 approval artifact is missing, changed, or outside this batch.');
+			$packages=$this->readArtifact($path);if(!is_array($packages)||!$packages)return $this->hold('Reviewed phase-6 approval package is empty or malformed.');
+			foreach($packages as $package){$coinId=$this->packageCoinId($package);$coin=null;foreach((array)$ledger['selected_coin_scope'] as $candidate)if(intval(arraySafeVal($candidate,'id'))===$coinId)$coin=$candidate;if($coin===null||!$this->packageWithinLedgerScope($package,$ledger,'payout',$coin))return $this->hold('Reviewed phase-6 approval no longer matches durable account scope.');}
+			$file='payout-row-apply-report-recovery-'.uniqid('',true).'.json';
+			$applied=$this->applyPackages($ledger,6,6,'payout-row-apply',$file,$path,array('phase_6_sha256'=>$sha)); if(!$this->passed($applied))return $applied;
+			$applied['package_path']=$path;
+			return $this->finishPreparedPayoutRows($ledger,$applied,$recovered);
+		}
 		$packaged=$this->packages($ledger,6,'payout-row-approval-package','payout-row-packages.json','payout'); if(!$this->passed($packaged))return $packaged;
 		$applied=$this->applyPackages($ledger,6,6,'payout-row-apply','payout-row-apply-report.json',$packaged['package_path'],$packaged['checksums']); if(!$this->passed($applied))return $applied;
+		return $this->finishPreparedPayoutRows($ledger,$applied,$recovered);
+	}
+
+	private function finishPreparedPayoutRows($ledger,$applied,$recovered)
+	{
 		$ids=array();$inserted=0; foreach($this->readArtifact($applied['report_path']) as $report){$inserted+=intval(arraySafeVal($report,'payout_rows_inserted',arraySafeVal($report,'created_count',0)));foreach((array)arraySafeVal($report,'created_payout_ids',array()) as $id){$pid=$this->positiveId($id);if($pid!==null)$ids[]=$pid;}}
 		$ids=$this->normalizeIdList($ids);if($inserted>0&&($ids===null||count($ids)!==$inserted))return $this->hold('Payout-row apply did not return one positive created payout ID per inserted row.');
 		if($recovered!==null){$applied['selected_account_ids']=$recovered['selected_account_ids'];$applied['selected_accounts_by_coin']=$recovered['selected_accounts_by_coin'];}
 		$applied['created_payout_ids']=$ids;$applied['payout_rows_inserted']=$inserted; return $applied;
+	}
+
+	/** Persist a fresh, scope-bound approval without invoking any apply command. */
+	public function regeneratePayoutApproval($ledger,$options)
+	{
+		if(!$this->lane($options)->isPayoutPreparationCommissioned())return $this->hold('Payout preparation lane is not commissioned.');
+		if(file_exists($ledger['run_directory'].'/payout-row-apply-attempt.json')||is_link($ledger['run_directory'].'/payout-row-apply-attempt.json'))return $this->hold('A payout apply attempt remains unresolved.');
+		if($this->recoverExistingPayoutApply($ledger)!==null)return $this->hold('Existing phase-6 payout apply evidence requires investigation before approval regeneration.');
+		$recovered=$this->recoverAccountScope($ledger);
+		if($recovered!==null){$ledger['selected_account_ids']=$recovered['selected_account_ids'];$ledger['selected_accounts_by_coin']=$recovered['selected_accounts_by_coin'];}
+		if(!$this->normalizeIdList((array)arraySafeVal($ledger,'selected_account_ids',array())))return $this->hold('Durable payout account scope is empty or malformed.');
+		$file='payout-row-packages-recovery-'.uniqid('',true).'.json';
+		$result=$this->packages($ledger,6,'payout-row-approval-package',$file,'payout');
+		if(!$this->passed($result))return $result;
+		if(!$this->readArtifact($result['package_path']))return $this->hold('Fresh phase-6 approval has no payout accounts.');
+		$result['package_sha256']=hash_file('sha256',$result['package_path']);
+		$result['selected_account_ids']=$ledger['selected_account_ids'];$result['selected_accounts_by_coin']=$ledger['selected_accounts_by_coin'];
+		return $result;
 	}
 
 	/** Read-only classification at the wallet boundary; never dispatches a guard apply command. */
@@ -164,6 +199,7 @@ class BadpoolPaymentBatchPhaseAdapter
 		$reports=array();foreach((array)$ledger['selected_coin_scope'] as $coin){
 			$args=array('--coin-id='.$coin['id']);if($kind==='maturity'){$work=(array)arraySafeVal((array)arraySafeVal($ledger,'selected_work_by_coin',array()),(string)$coin['id'],array());$ids=(array)arraySafeVal($work,'block_ids',array());if(!$ids)continue;$args[]='--selected-block-ids='.implode(',',$ids);}
 			if($kind==='credit'){$work=(array)arraySafeVal((array)arraySafeVal($ledger,'selected_work_by_coin',array()),(string)$coin['id'],array());$ids=$this->normalizeIdList((array)arraySafeVal($work,'earning_ids',array()));if(!$ids)continue;$args[]='--selected-earning-ids='.implode(',',$ids);}
+			if($kind==='payout'){$scope=(array)arraySafeVal((array)arraySafeVal($ledger,'selected_accounts_by_coin',array()),(string)$coin['id'],array());$ids=$this->normalizeIdList((array)arraySafeVal($scope,'account_ids',array()));if($ids===null)return $this->hold('Durable payout account scope is malformed.',$reports);if($ids)$args[]='--selected-account-ids='.implode(',',$ids);}
 			$args[]='--format=json';$r=$this->command($command,$args);if(!$this->passed($r))return $this->hold('Approval package generation did not pass for coin '.$coin['id'].'.',$reports);
 			$r['batch_coin_id']=intval($coin['id']);
 			if(!$this->packageWithinLedgerScope($r,$ledger,$kind,$coin))return $this->hold('Approval package did not exactly match the durable per-coin batch selection for coin '.$coin['id'].'.',$reports);
@@ -177,7 +213,7 @@ class BadpoolPaymentBatchPhaseAdapter
 		if($path===null)$path=$this->phaseArtifact($ledger,$sourcePhase,'package_path');
 		$verify=$this->verifyArtifactChecksum($ledger,$sourcePhase,$path,$checksums); if($verify!==true)return $this->applyRefusal($ledger,$phase,$file,array(),'approval_artifact_invalid',$verify,'none');
 		$packages=$this->readArtifact($path);if(!is_array($packages))return $this->applyRefusal($ledger,$phase,$file,array(),'approval_artifact_missing','Required approval package artifact is missing or invalid.','none');
-		$reports=array();foreach($packages as $package){
+		$reports=array();$attemptArchives=array();foreach($packages as $package){
 			$args=$this->applyArgs($package,$command);if($args===null)return $this->applyRefusal($ledger,$phase,$file,$reports,'apply_contract_missing','Approval package has no compatible guarded apply command.',$reports?'unknown':'none');
 			$attemptPath=null;
 			if($command==='payout-row-apply'){
@@ -193,14 +229,18 @@ class BadpoolPaymentBatchPhaseAdapter
 				$errors=(array)arraySafeVal($r,'errors',array());$message=$errors?implode('; ',array_map('strval',$errors)):'Guarded apply refused: '.$reason;
 				$reports[]=array('status'=>'hold','abort_reason'=>$reason,'errors'=>array($this->safeDiagnostic($message)),'db_mutations'=>arraySafeVal($r,'db_mutations',false));
 				$refused=$this->applyRefusal($ledger,$phase,$file,$reports,$reason,$message,arraySafeVal($r,'db_mutation_status',arraySafeVal($r,'db_mutations',false)?'unknown':'none'));
-				if($attemptPath&&arraySafeVal($r,'db_mutations')===false&&arraySafeVal($refused['failure_evidence'],'report_checksum')!==null)@unlink($attemptPath);
+				if($attemptPath&&arraySafeVal($r,'db_mutations')===false&&arraySafeVal($refused['failure_evidence'],'report_checksum')!==null){
+					$archive=$ledger['run_directory'].'/payout-row-apply-attempt-refused-'.uniqid('',true).'.json';
+					if(@rename($attemptPath,$archive))$refused['failure_evidence']['attempt_path']=$archive;
+					else $refused['errors'][]='Payout apply attempt evidence could not be archived; investigate the retained barrier before retrying.';
+				}
 				return $refused;
 			}
 			$reports[]=$r;
 			// Publish committed results before a later package can fail.
 			$saved=$this->artifact($ledger,$phase,$file,$reports);if(!$this->passed($saved))return $saved;
-			if($attemptPath&&!@unlink($attemptPath))return $this->applyRefusal($ledger,$phase,$file,$reports,'attempt_barrier_retained','Committed payout report retained, but attempt barrier could not be cleared; investigate without reapplying.','unknown');
-		}return $this->artifact($ledger,$phase,$file,$reports);
+			if($attemptPath){$archive=$ledger['run_directory'].'/payout-row-apply-attempt-committed-'.uniqid('',true).'.json';if(!@rename($attemptPath,$archive))return $this->applyRefusal($ledger,$phase,$file,$reports,'attempt_barrier_retained','Committed payout report retained, but attempt barrier could not be archived; investigate without reapplying.','unknown');$attemptArchives[]=$archive;}
+		}$result=$this->artifact($ledger,$phase,$file,$reports);if($attemptArchives)$result['mutation_scope']['payout_apply_attempt_paths']=$attemptArchives;return $result;
 	}
 
 	private function safeDiagnostic($message)

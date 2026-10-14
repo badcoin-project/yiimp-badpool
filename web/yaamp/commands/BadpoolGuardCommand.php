@@ -199,7 +199,9 @@ class BadpoolGuardCommand extends CConsoleCommand
 				$report = $this->payoutRowDryRunPlanReport();
 				break;
 			case 'payout-row-approval-package':
-				$report = $this->payoutRowApprovalPackageReport();
+				$selected=$this->guard->getOption('selected-account-ids',null);
+				if($selected===null)$report=$this->payoutRowApprovalPackageReport();
+				else{$ids=$this->parseCsvIds((string)$selected);if(!$ids||$this->hasDuplicateIds($ids)){$this->guard->addError('Exact payout approval requires unique selected account IDs.');$report=$this->guard->refusalReport();}else{$report=$this->payoutRowApprovalForIds($ids);if(count((array)arraySafeVal(arraySafeVal($report,'items',array()),'selected_accounts',array()))!==count($ids)){$this->guard->addError('Every selected account must be a current payout candidate.');$report=$this->guard->refusalReport();}}}
 				break;
 			case 'payout-row-apply':
 				$report = $this->payoutRowApplyReport($args);
@@ -367,6 +369,7 @@ class BadpoolGuardCommand extends CConsoleCommand
 			"       php yaamp/yiic.php badpoolguard payout-row-preflight-preview --coin-id=<id> [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard payout-row-dryrun-plan --coin-id=<id> [--format=json|text]\n".
 			"       php yaamp/yiic.php badpoolguard payout-row-approval-package --coin-id=<id> [--format=json|text]\n".
+			"       php yaamp/yiic.php badpoolguard payout-row-approval-package --coin-id=<id> [--selected-account-ids=<csv>] --format=json\n".
 			"       php yaamp/yiic.php badpoolguard payout-row-apply --coin-id=<id> --selected-account-ids=<csv> --approval-package-checksum=<sha256> --selected-scope-checksum=<sha256> --projected-payout-row-checksum=<sha256> --projected-account-debit-checksum=<sha256> --operator-confirms-payout-row-creation=scrypt_balance_to_payout_rows_no_wallet_send --format=json\n".
 			"       php yaamp/yiic.php badpoolguard wallet-send-dryrun --coin-id=<id> --selected-payout-ids=<csv> --format=json\n".
 			"       php yaamp/yiic.php badpoolguard wallet-funding-preflight --coin-id=<id> --selected-payout-ids=<csv> --format=json\n".
@@ -389,6 +392,8 @@ class BadpoolGuardCommand extends CConsoleCommand
 			"       php yaamp/yiic.php badpoolguard forward-catchup-stage1-drain-approval-package --coin-id=<id> --selection-limit=<n> [--internal-batch-size=25] --format=json\n".
 			"       ".implode(' ', BadpoolStage1Manifest::applyCommandShape())."\n".
 			"       php yaamp/yiic.php badpoolguard batch-run --resume-batch-id=<id> --payment-delay-override-package=<path> --payment-delay-override-package-checksum=<file-sha256> --operator-confirms-payment-delay-override=".BadpoolConfirmedBlockPaymentDelayOverride::CONFIRMATION." --format=json\n".
+			"       php yaamp/yiic.php badpoolguard batch-run --resume-batch-id=<held-scrypt-id> --only=scrypt --phase6-approval-only=1 --format=json\n".
+			"       php yaamp/yiic.php badpoolguard batch-run --resume-batch-id=<held-scrypt-id> --only=scrypt --phase6-approval-sha256=<reviewed-file-sha256> --format=json\n".
 			"       php yaamp/yiic.php badpoolguard completed-payout-batch-closeout --batch-id=<id> --format=json\n".
 			"       php yaamp/yiic.php badpoolguard completed-payout-batch-closeout-apply --batch-id=<id> --closeout-proof=<path> --closeout-proof-checksum=<sha256> --operator-confirms-closeout=".BadpoolCompletedPayoutBatchCloseoutApply::CONFIRMATION." --format=json\n".
 			"       php yaamp/yiic.php badpoolguard operation-wallet-proof --journal-path=<path> --journal-sha256=<sha256> --format=json\n".
@@ -473,6 +478,10 @@ class BadpoolGuardCommand extends CConsoleCommand
 		$options=array('mode'=>$mode,'scope'=>$scope,'only'=>$only===''?null:$only,'batch_size'=>preg_match('/^[1-9][0-9]*$/',$size)?intval($size):0);
 		if(!$this->guard->isValid()) return array_merge($this->paymentBatchRunRefusal($options),array('errors'=>array('Invalid batch-run options.')));
 		$resume=$this->guard->getOption('resume-batch-id',null); if($resume!==null)$options['resume_batch_id']=(string)$resume;
+		$approvalOnly=$this->guard->getOption('phase6-approval-only',null);
+		$approvalSha=$this->guard->getOption('phase6-approval-sha256',null);
+		if($approvalOnly!==null)$options['phase6_approval_only']=(string)$approvalOnly;
+		if($approvalSha!==null)$options['phase6_approval_sha256']=(string)$approvalSha;
 		if($resume!==null)$options['require_owned_wallet_boundary']=true;
 		// Non-Scrypt CLI resumes only generalize the completed, owned boundary.
 		// They must never fall through to the adapter's legacy Scrypt defaults.
@@ -2392,11 +2401,29 @@ class BadpoolGuardCommand extends CConsoleCommand
 		return $value;
 	}
 
+	/** Round authoritative balance text to BAD's eight decimal places without a float conversion. */
+	private function payoutCoinAmount($balance)
+	{
+		$balance=$this->payoutDecimalString($balance);
+		$parts=explode('.', $balance, 2);
+		$whole=$parts[0]; $fraction=isset($parts[1])?$parts[1]:'';
+		$digits=$whole.str_pad(substr($fraction,0,8),8,'0');
+		if(strlen($fraction)>8 && $fraction[8]>='5'){
+			$carry=1;
+			for($n=strlen($digits)-1;$n>=0&&$carry;$n--){$d=ord($digits[$n])-48+$carry;$digits[$n]=chr(48+($d%10));$carry=$d>9?1:0;}
+			if($carry)$digits='1'.$digits;
+		}
+		$digits=str_pad($digits,9,'0',STR_PAD_LEFT);
+		$amount=substr($digits,0,-8).'.'.substr($digits,-8);
+		if($amount==='0.00000000')throw new RuntimeException('Payout amount rounds to zero at coin precision.');
+		return $amount;
+	}
+
 	private function payoutRowApprovalPackageReport()
 	{
 		if ($this->guard->isAllCoinsPreview()) { $this->guard->addError('payout-row-approval-package requires --coin-id and refuses all-coin scope.'); return $this->guard->refusalReport(); }
 		$candidates = $this->buildReadOnlyPayoutCandidates(); $coinId = intval(arraySafeVal($this->guard->getScope(), 'coin_id')); $items = array();
-		foreach ($candidates as $c) $items[] = array('account_id'=>intval($c['account_id']),'account_coinid'=>intval($c['coin_id']),'current_balance'=>$this->payoutDecimalString($c['current_balance']),'payout_threshold'=>$this->payoutDecimalString($c['threshold']),'projected_payout_row_amount'=>$this->payoutDecimalString($c['projected_payout_amount']),'projected_account_debit_amount'=>$this->payoutDecimalString($c['projected_payout_amount']),'projected_remaining_balance'=>$this->payoutDecimalString($c['projected_remaining_balance']));
+		foreach ($candidates as $c) { $rawBalance=$this->payoutDecimalString($c['current_balance']); $coinAmount=$this->payoutCoinAmount($rawBalance); $items[] = array('account_id'=>intval($c['account_id']),'account_coinid'=>intval($c['coin_id']),'current_balance'=>$rawBalance,'payout_threshold'=>$this->payoutDecimalString($c['threshold']),'projected_payout_row_amount'=>$coinAmount,'projected_account_debit_amount'=>$coinAmount,'projected_remaining_balance'=>$this->payoutDecimalString($c['projected_remaining_balance'])); }
 		$r = $this->guard->baseReport(); $r['approval_package_type']='payout-row-creation'; $r['approval_required']=true; $r['scope_binding']=array('coin_id'=>$coinId,'source'=>'same buildReadOnlyPayoutCandidates source as payout-candidates-preview'); $r['safety_binding']=array('no_wallet_send'=>true,'no_withdraw_creation'=>true,'no_backend_loop'=>true,'no_share_deletion'=>true); $r['summary']['selected_account_count']=count($items); $r['summary']['projected_payout_total']='0'; $r['items']['selected_accounts']=$items;
 		$r['selected_scope_checksum']=BadpoolGuardReport::checksum(array('coin_id'=>$coinId,'accounts'=>$items)); $r['projected_payout_row_checksum']=BadpoolGuardReport::checksum(array_map(function($i){return array('account_id'=>$i['account_id'],'idcoin'=>$i['account_coinid'],'amount'=>$i['projected_payout_row_amount'],'completed'=>0,'tx'=>null);}, $items)); $r['projected_account_debit_checksum']=BadpoolGuardReport::checksum(array_map(function($i){return array('account_id'=>$i['account_id'],'coinid'=>$i['account_coinid'],'from_balance'=>$i['current_balance'],'debit'=>$i['projected_account_debit_amount'],'to_balance'=>$i['projected_remaining_balance']);}, $items));
 		foreach($items as $item)$r['summary']['projected_payout_total']=$this->walletSendDryrunDecimalAdd($r['summary']['projected_payout_total'],$item['projected_payout_row_amount']);

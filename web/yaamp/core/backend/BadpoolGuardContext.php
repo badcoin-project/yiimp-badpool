@@ -31,6 +31,9 @@ class BadpoolGuardContext
 		'batch-size',
 		'stop-before-wallet-send',
 		'resume-batch-id',
+		'phase6-approval-only',
+		'phase6-approval-sha256',
+		'selected-account-ids',
 		'lane-id',
 		'batch-id',
 		'closeout-proof',
@@ -329,7 +332,7 @@ class BadpoolGuardContext
 	private function parseOptions($args)
 	{
 		$options = array();
-		$batchOptions = array('mode', 'scope', 'only', 'batch-size', 'stop-before-wallet-send', 'resume-batch-id', 'payment-delay-override-package', 'payment-delay-override-package-checksum', 'operator-confirms-payment-delay-override');
+		$batchOptions = array('mode', 'scope', 'only', 'batch-size', 'stop-before-wallet-send', 'resume-batch-id', 'phase6-approval-only', 'phase6-approval-sha256', 'payment-delay-override-package', 'payment-delay-override-package-checksum', 'operator-confirms-payment-delay-override');
 		$liveBridgeSharedOptions = array('approval-package');
 		$liveCaptureEarningsOptions = array('source-live-candidate-checksum','attribution-checksum','attribution-model-checksum','projected-earnings-checksum','operator-confirms-live-capture-earnings');
 		$liveBlockEnrichmentOptions = array('candidate-inventory-checksum','block-inventory-checksum','rpc-result-checksum','operator-confirms-live-capture-block-enrichment');
@@ -383,6 +386,8 @@ class BadpoolGuardContext
 				$this->addError("Option --$name is only available for payment batch commands.");
 				return array();
 			}
+			if(in_array($lower,array('phase6-approval-only','phase6-approval-sha256'),true)&&($this->command!=='batch-run'||!isset($matches[2]))){$this->addError("Option --$name requires batch-run and an explicit value.");return array();}
+			if($lower==='selected-account-ids'&&($this->command!=='payout-row-approval-package'||!isset($matches[2]))){$this->addError("Option --$name requires payout-row-approval-package and an explicit value.");return array();}
 			if ($lower === 'lane-id' && $this->command !== 'live-payment-coordinator') {
 				$this->addError("Option --$name is only available for live-payment-coordinator.");
 				return array();
