@@ -51,6 +51,8 @@ class BadpoolPaymentBatchRunner
 	{
 		$now = gmdate('c');
 		$resume = isset($options['resume_batch_id']) ? $options['resume_batch_id'] : null;
+		if(isset($options['phase6_approval_only'])&&($options['phase6_approval_only']!=='1'||isset($options['phase6_approval_sha256'])))return $this->refusal($options,$resume,'Phase-6 approval regeneration requires --phase6-approval-only=1 without an apply checksum.');
+		if((isset($options['phase6_approval_only'])||isset($options['phase6_approval_sha256']))&&!$resume)return $this->refusal($options,null,'Phase-6 recovery requires an existing batch ID.');
 		if ($resume) {
 			$ledger = $this->load($resume);
 			if (!$ledger) return $this->refusal($options, $resume, 'Batch ledger was not found or is invalid.');
@@ -68,7 +70,26 @@ class BadpoolPaymentBatchRunner
 			// A phase-6 recovery must never walk backwards into account credit.
 			if(intval($ledger['current_phase'])===6){
 				for($phase=0;$phase<=5;$phase++)if(!$this->phasePassed($ledger,$phase))return $this->refusal($options,$resume,'Phase-6 recovery requires durable successful preceding phases and account-credit evidence; investigate without replaying credit.');
+				if($owned&&$ledger['batch_state']==='HOLD'&&$ledger['only']==='scrypt'&&!$ledger['created_payout_ids']){
+					$evidenceError=$this->phase6RecoveryEvidenceError($ledger);if($evidenceError!==null)return $this->refusal($options,$resume,$evidenceError);
+				if(isset($options['phase6_approval_only'])){
+					if(!is_object($this->adapter)||!is_callable(array($this->adapter,'regeneratePayoutApproval')))return $this->refusal($options,$resume,'Phase-6 approval regeneration is unavailable.');
+					$result=$this->adapter->regeneratePayoutApproval($ledger,$options);
+					if(!is_array($result)||$this->scalarValue($result,'status')!=='pass')return $this->refusal($options,$resume,'Phase-6 approval regeneration did not pass; no financial phase was invoked.');
+					$path=$this->scalarValue($result,'package_path');$sha=$this->scalarValue($result,'package_sha256');
+					if(!$path||!is_file($path)||!preg_match('/^[a-f0-9]{64}$/',$sha)||!hash_equals($sha,hash_file('sha256',$path)))return $this->refusal($options,$resume,'Phase-6 approval artifact could not be verified.');
+					if(!isset($ledger['phase6_recovery_approvals']))$ledger['phase6_recovery_approvals']=array();
+					$ledger['phase6_recovery_approvals'][]=array('package_path'=>$path,'package_sha256'=>$sha,'created_at'=>$now,'account_ids'=>$this->arrayValue($result,'selected_account_ids'));
+					if(isset($result['selected_account_ids']))$ledger['selected_account_ids']=$result['selected_account_ids'];
+					if(isset($result['selected_accounts_by_coin']))$ledger['selected_accounts_by_coin']=$result['selected_accounts_by_coin'];
+					if(!$this->save($ledger))return $this->refusal($options,$resume,'Phase-6 recovery approval was written but ledger registration failed; investigate the artifact.');
+					$report=$this->report($ledger);$report['approval_only']=true;$report['package_path']=$path;$report['package_sha256']=$sha;$report['next_action']='review_phase6_approval_then_explicit_resume';$report['suggested_command']=null;return $report;
+				}
+				$sha=isset($options['phase6_approval_sha256'])?$options['phase6_approval_sha256']:null;
+				if(!is_string($sha)||!preg_match('/^[a-f0-9]{64}$/',$sha))return $this->refusal($options,$resume,'Phase-6 HOLD requires an explicitly reviewed recovery approval SHA-256; no phase was invoked.');
+				}elseif(isset($options['phase6_approval_only'])||isset($options['phase6_approval_sha256']))return $this->refusal($options,$resume,'Phase-6 recovery options require an owned Scrypt phase-6 HOLD with no payout IDs.');
 			}
+			elseif(isset($options['phase6_approval_only'])||isset($options['phase6_approval_sha256']))return $this->refusal($options,$resume,'Phase-6 recovery options require a phase-6 HOLD.');
 		} else {
 			$id = gmdate('Ymd\THis\Z').'-'.substr(hash('sha256', uniqid('', true)), 0, 12);
 			$dir = $this->root.'/'.$id;
@@ -231,6 +252,18 @@ class BadpoolPaymentBatchRunner
 	}
 
 	private function phasePassed($ledger, $phase) { foreach ($ledger['phase_results'] as $r) if (is_array($r) && isset($r['phase_number'],$r['status']) && (int)$r['phase_number']===$phase && in_array($r['status'],array('ok','pass'),true)) return $phase!==6 || $this->ledgerHasPositivePayoutIds($ledger); return false; }
+	private function phase6RecoveryEvidenceError($ledger)
+	{
+		$id=$this->scalarValue($ledger,'batch_id');$dir=$this->root.'/'.$id;
+		if(!preg_match('/^[0-9]{8}T[0-9]{6}Z-[a-f0-9]{12}$/',$id)||is_link($this->root)||is_link($dir)||is_link($this->path($id))||realpath($this->root)!==dirname(realpath($dir))||realpath($ledger['run_directory'])!==realpath($dir))return 'Unsafe phase-6 recovery batch path.';
+		foreach(range(0,5) as $phase){
+			$match=null;foreach($ledger['phase_results'] as $entry)if(is_array($entry)&&isset($entry['phase_number'])&&$entry['phase_number']===$phase&&in_array($this->scalarValue($entry,'status'),array('pass','ok'),true))$match=$entry;
+			if($match===null)return 'Phase-6 recovery is missing successful phase '.$phase.' evidence.';
+			$path=$this->scalarValue($match,'report_path')?:$this->scalarValue($match,'package_path');$key='phase_'.$phase.'_sha256';$checksums=$this->arrayValue($match,'checksum_summary');$ledgerChecksums=$this->arrayValue($ledger,'checksums');
+			if(!$path||!is_file($path)||is_link($path)||realpath(dirname($path))!==realpath($dir)||!isset($checksums[$key],$ledgerChecksums[$key])||$checksums[$key]!==$ledgerChecksums[$key]||!preg_match('/^[a-f0-9]{64}$/',$checksums[$key])||!hash_equals($checksums[$key],hash_file('sha256',$path)))return 'Phase-6 recovery artifact checksum mismatch: phase '.$phase.'.';
+		}
+		return null;
+	}
 	private function validPhaseSixPayoutIds($ledger, $result) { $inserted=$this->positiveCount($result,'payout_rows_inserted'); if($inserted===0)$inserted=$this->positiveCount($result,'created_count'); $ids=$this->positiveIdList($this->arrayValue($result,'created_payout_ids')); if($inserted>0)return $ids!==null&&count($ids)===$inserted; if(count((array)$this->arrayValue($ledger,'selected_account_ids'))>0)return $ids!==null&&count($ids)>0; return $ids!==null; }
 	private function ledgerHasPositivePayoutIds($ledger) { $ids=$this->positiveIdList($this->arrayValue($ledger,'created_payout_ids')); return $ids!==null&&count($ids)>0; }
 	private function positiveCount($a,$key) { $v=isset($a[$key])?$a[$key]:0; return is_numeric($v)&&intval($v)>0?intval($v):0; }
