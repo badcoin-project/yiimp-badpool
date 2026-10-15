@@ -5,7 +5,7 @@ require_once(dirname(__DIR__).'/web/yaamp/commands/BadpoolGuardCommand.php');
 
 $fail=array();
 function phase6_ok($value,$message){global $fail;if(!$value)$fail[]=$message;}
-function phase6_call($object,$name,$args=array()){$m=new ReflectionMethod($object,$name);return $m->invokeArgs($object,$args);}
+function phase6_call($object,$name,$args=array()){$m=new ReflectionMethod($object,$name);$m->setAccessible(true);return $m->invokeArgs($object,$args);}
 class Phase6Guard {
 	public $balance='4541.6627178399995';
 	public function isAllCoinsPreview(){return false;}
@@ -32,7 +32,7 @@ class Phase6App {public $db;public function __construct(){$this->db=new Phase6Db
 $phase6App=new Phase6App();
 function app(){global $phase6App;return $phase6App;}
 
-$guard=new Phase6Guard();$command=new BadpoolGuardCommand();$property=new ReflectionProperty($command,'guard');$property->setValue($command,$guard);
+$guard=new Phase6Guard();$command=new BadpoolGuardCommand();$property=new ReflectionProperty($command,'guard');$property->setAccessible(true);$property->setValue($command,$guard);
 $old=$guard->balance='4541.662717839999';$retained=phase6_call($command,'payoutRowApprovalPackageReport');
 $guard->balance='4541.6627178399995';$fresh=phase6_call($command,'payoutRowApprovalPackageReport');
 $item=$fresh['items']['selected_accounts'][0];

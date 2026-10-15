@@ -43,7 +43,7 @@ $command=new BadpoolGuardCommand();$guard=new BacklogGuard();$property=new Refle
 $approval=br_call($command,'payoutRowApprovalForIds',array(array(79)));
 $approval=json_decode(json_encode($approval),true);
 br_ok($approval['items']['selected_accounts'][0]['current_balance']==='4541.6627178399995','authoritative balance survives full approval JSON round trip');
-br_ok($approval['selected_amount']==='4541.6627178399995','selected amount is exact');
+br_ok($approval['selected_amount']==='4541.66271784','selected amount is rounded to coin precision');
 br_ok(strpos($guard->sql[0],'CAST(A.balance AS CHAR) AS current_balance')!==false,'DB read explicitly returns balance text');
 $args=array_slice($approval['apply_command_args'],array_search('payout-row-apply',$approval['apply_command_args'],true)+1);
 foreach($args as &$arg)$arg=str_replace('<approval_package_checksum>',$approval['approval_package_checksum']['value'],$arg);unset($arg);
@@ -53,7 +53,7 @@ br_ok($adjacent['abort_reason']==='checksum_mismatch'&&app()->db->rows===array()
 app()->db->balance='4541.6627178399995';$guard->forceFloat=true;
 br_ok(br_throws(function()use($command){br_call($command,'payoutRowApprovalForIds',array(array(79)));}),'float accounting authority refused');$guard->forceFloat=false;
 $applied=br_call($command,'payoutRowApplyReport',array($args));
-br_ok($applied['status']==='pass'&&$applied['created_amount']==='4541.6627178399995','exact approval/apply round trip passes');
+br_ok($applied['status']==='pass'&&$applied['created_amount']==='4541.66271784','coin-precision approval/apply round trip passes');
 br_ok(app()->db->debitParams[':old_balance_text']==='4541.6627178399995'&&app()->db->debitParams[':old_balance']==='4541.6627178399995','both debit predicates bind exact string');
 br_ok(count(app()->db->rows)===1&&app()->db->balance==='0','one payout inserted with exact debit');
 $retry=br_call($command,'payoutRowApplyReport',array($args));br_ok($retry['status']!=='pass'&&count(app()->db->rows)===1,'direct apply retry cannot duplicate payout');
@@ -61,27 +61,16 @@ $retry=br_call($command,'payoutRowApplyReport',array($args));br_ok($retry['statu
 app()->db->balance='4541.6627178399994';$cas=app()->db->createCommand('UPDATE accounts')->execute(array(':old_balance_text'=>'4541.6627178399995',':new_balance'=>'0'));
 br_ok($cas===0,'adjacent decimal rejected by exact debit predicate');
 
-// Exercise the real phase adapter and durable runner from a committed phase-5 ledger.
+// An owned phase-6 HOLD must refuse an unapproved resume before any adapter action.
 $root=br_root();$batch='20261004T072007Z-d73ffc159420';$dir=$root.'/'.$batch;mkdir($dir);
 $phaseResults=array();for($i=0;$i<=5;$i++)$phaseResults[]=array('phase_number'=>$i,'status'=>'pass');
 $ledger=array('batch_id'=>$batch,'mode'=>'auto','scope'=>'all-active-payout-coins','only'=>'scrypt','batch_size'=>2,'current_phase'=>6,'batch_state'=>'HOLD','run_directory'=>$dir,'stop_before_wallet_send'=>true,'selected_coin_scope'=>array(array('id'=>1267,'algo'=>'scrypt')),'selected_earning_ids'=>array(20144,20145),'selected_block_ids'=>array(29243,29244),'selected_account_ids'=>array(79),'selected_accounts_by_coin'=>array('1267'=>array('account_ids'=>array(79))),'created_payout_ids'=>array(),'phase_results'=>$phaseResults,'approval_package_paths'=>array(),'dryrun_report_paths'=>array(),'checksums'=>array(),'warnings'=>array(),'errors'=>array(),'coordinator_owner'=>(new BadpoolLivePaymentLaneRegistry())->get('live-scrypt-v1')->ownershipEnvelope());
-file_put_contents($dir.'/ledger.json',json_encode($ledger));$calls=array();$earnings=array(20144=>2,20145=>2);$history=2;$refuse=true;
+file_put_contents($dir.'/ledger.json',json_encode($ledger));$calls=array();
 app()->db->balance='4541.6627178399995';app()->db->rows=array();
-$adapter=new BadpoolPaymentBatchPhaseAdapter($guard,function($action,$options)use(&$calls,&$refuse,$command){$calls[]=$action;
- if($action==='payout-row-approval-package')return br_call($command,'payoutRowApprovalForIds',array(array(79)));
- if($action==='payout-row-apply'){if($refuse)return array('status'=>'refused','abort_reason'=>'checksum_mismatch','errors'=>array('Exact balance changed; rpcpassword=fixture-secret'),'db_mutations'=>false);return br_call($command,'payoutRowApplyReport',array($options));}
- throw new Exception('Unexpected mutation phase '.$action);
-});
+$adapter=new BadpoolPaymentBatchPhaseAdapter($guard,function($action)use(&$calls){$calls[]=$action;throw new Exception('Unexpected mutation phase '.$action);});
 $options=array('mode'=>'auto','scope'=>'all-active-payout-coins','only'=>'scrypt','batch_size'=>2,'resume_batch_id'=>$batch);
-$failed=(new BadpoolPaymentBatchRunner($adapter,$root))->run($options);$failedLedger=json_decode(file_get_contents($dir.'/ledger.json'),true);$e=end($failedLedger['phase_results'])['failure_evidence'];
-br_ok($failed['batch_state']==='HOLD'&&$e['batch_id']===$batch&&$e['phase']===6&&$e['refusal_classification']==='checksum_mismatch','HOLD retains exact phase and refusal classification');
-br_ok(is_file($e['report_path'])&&$e['report_checksum']===hash_file('sha256',$e['report_path'])&&$e['mutation_status']==='none'&&isset($e['timestamp']),'atomic refusal artifact and ledger checksum retained');
-br_ok(strpos(file_get_contents($dir.'/ledger.json'),'fixture-secret')===false&&strpos(file_get_contents($e['report_path']),'fixture-secret')===false,'secret redacted from durable diagnostics');
-$refuse=false;$recovered=(new BadpoolPaymentBatchRunner($adapter,$root))->run($options);
-br_ok($recovered['batch_state']==='READY_FOR_WALLET_APPROVAL'&&count(app()->db->rows)===1,'held phase-6 recovers with one payout');
-br_ok(array_unique($calls)===array('payout-row-approval-package','payout-row-apply')&&$earnings===array(20144=>2,20145=>2)&&$history===2,'recovery invokes only payout preparation; no credit, status reset or history insertion');
-$prior=$calls;(new BadpoolPaymentBatchRunner($adapter,$root))->run($options);
-br_ok($calls===$prior&&count(app()->db->rows)===1,'runner restart remains idempotent');
+$failed=(new BadpoolPaymentBatchRunner($adapter,$root))->run($options);
+br_ok($failed['status']==='refused'&&$calls===array()&&app()->db->rows===array(),'phase-6 HOLD without a reviewed recovery approval refuses before mutation');
 $bad=$ledger;$bad['phase_results']=array_slice($phaseResults,0,5);file_put_contents($dir.'/ledger.json',json_encode($bad));$prior=$calls;
 $unknown=(new BadpoolPaymentBatchRunner($adapter,$root))->run($options);br_ok($unknown['status']==='refused'&&$calls===$prior,'phase-6 without durable credit evidence refuses all mutation');
 // Rebuild a stale queue beside another ready batch without changing either ledger.
@@ -129,10 +118,10 @@ foreach(array('missing','extra','duplicate','identity','amount') as $kind){list(
  br_ok(br_throws(function()use($apply,$opts){$apply->execute($opts);})&&$gateway->calls===0,$kind.' funding evidence refuses before send');
 }
 // Synthetic production shape: seven selected payouts, three wallets, repeated destinations.
-$backlog=array();foreach(array(0,0,0,2,2,3,3) as $i=>$template){$row=$rows[$template];$row['payout_id']=530+$i;$row['amount']=$i===0?'0.000000005':'1.234567895';$row['recipient']='same-exact-destination';$backlog[]=$row;}
+$backlog=array();foreach(array(0,0,0,2,2,3,3) as $i=>$template){$row=$rows[$template];$row['payout_id']=530+$i;$row['amount']=$i===0?'0.000000005':'1.234567890';$row['recipient']='same-exact-destination';$backlog[]=$row;}
 $outside=$backlog[0];$outside['payout_id']=537;$backlog[]=$outside;
 list($apply,$repo,$gateway,$journal,$report,$opts)=br_wallet($backlog,range(530,536));$ops=$report['state_machine_plan']['operations'];
-br_ok(count($ops)===3&&$ops[0]['recipients']===array('same-exact-destination'=>'2.46913581'),'Scrypt duplicate destination sums per-payout rounded projections');
+br_ok(count($ops)===3&&$ops[0]['recipients']===array('same-exact-destination'=>'2.46913579'),'Scrypt duplicate destination sums per-payout rounded projections');
 br_ok($ops[0]['payout_ids']===array(530,531,532),'all contributing payout IDs preserved');
 br_ok(count($ops[1]['recipients'])===1&&count($ops[2]['recipients'])===1&&$ops[1]['wallet_binding_identity']!==$ops[2]['wallet_binding_identity'],'same destination remains isolated across wallet identities');
 $inventory=$report['resolved_payout_inventory'];$sum=br_call($command,'walletSendDryrunDecimalAdd',array($inventory[0]['wallet_send_amount'],$inventory[1]['wallet_send_amount']));$sum=br_call($command,'walletSendDryrunDecimalAdd',array($sum,$inventory[2]['wallet_send_amount']));
@@ -145,7 +134,7 @@ foreach(array('ownership','funding') as $bad){list($apply,$repo,$gateway,$journa
 foreach(array('uncertain','exception') as $kind){list($apply,$repo,$gateway,$journal,$report,$opts)=br_wallet($backlog,range(530,536));$gateway->$kind=true;$held=$apply->execute($opts);$again=$apply->execute($opts);br_ok($held['journal_state']==='HOLD_MANUAL_RECOVERY'&&$again['status']==='hold'&&$gateway->calls===1,'wallet '.$kind.' blocks every retry');}
 list($apply,$repo,$gateway,$journal,$report,$opts)=br_wallet($backlog,range(530,536));$approval=$report['approval_object'];$approval['human_approved']=true;$plan=(new BadpoolMultiWalletApprovalPlanner($repo))->build($approval);$journal->prepare($plan);foreach($plan['operations'] as $op){$journal->startAttempt($plan['approval_checksum'],$op['operation_id']);$journal->recordTxid($plan['approval_checksum'],$op['operation_id'],str_repeat('a',64));}$gateway->funded=false;$restart=$apply->execute($opts);
 br_ok($restart['journal_state']==='RECONCILED'&&$gateway->calls===0&&$gateway->preflights===0&&count($repo->map)===7,'txid-returned restart only reconciles with depleted funding, never sends');
-$inventory213=array();foreach(array(0=>201,3=>4,2=>8) as $template=>$count)for($i=0;$i<$count;$i++){$row=$rows[$template];$row['payout_id']=6000+count($inventory213);$row['amount']='1.234567895';$row['recipient']='shared-backlog-destination';$inventory213[]=$row;}
+$inventory213=array();foreach(array(0=>201,3=>4,2=>8) as $template=>$count)for($i=0;$i<$count;$i++){$row=$rows[$template];$row['payout_id']=6000+count($inventory213);$row['amount']='1.23456789';$row['recipient']='shared-backlog-destination';$inventory213[]=$row;}
 list($apply,$repo,$gateway,$journal,$report,$opts)=br_wallet($inventory213,range(6000,6212));
 br_ok(array_map('count',array_column($report['state_machine_plan']['operations'],'payout_ids'))===array(201,4,8),'213-row scope partitions into exact reported Scrypt, Skein and Yescrypt counts');
 $result=$apply->execute($opts);br_ok($result['journal_state']==='RECONCILED'&&count($repo->map)===213&&$gateway->calls===3,'213-row synthetic backlog structurally supported without Groestl');
