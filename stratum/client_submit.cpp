@@ -710,7 +710,7 @@ static void log_share_reject_diag(YAAMP_CLIENT *client, YAAMP_JOB *job, int id, 
 		(unsigned long long)hash_int, (unsigned long long)user_target, (unsigned long long)coin_target);
 }
 
-bool dump_submit_debug(const char *title, YAAMP_CLIENT *client, YAAMP_JOB *job, char *extranonce2, char *ntime, char *nonce)
+void dump_submit_debug(const char *title, YAAMP_CLIENT *client, YAAMP_JOB *job, char *extranonce2, char *ntime, char *nonce)
 {
 	debuglog("ERROR %s, %s subs %d, job %x, %s, id %x, %d, %s, %s %s\n",
 		title, client->sock->ip, client->extranonce_subscribe, job? job->id: 0, client->extranonce1,
@@ -720,7 +720,7 @@ bool dump_submit_debug(const char *title, YAAMP_CLIENT *client, YAAMP_JOB *job, 
 void client_submit_error(YAAMP_CLIENT *client, YAAMP_JOB *job, int id, const char *message, char *extranonce2, char *ntime, char *nonce)
 {
 //	if(job->templ->created+2 > time(NULL))
-	if(job && job->deleted)
+	if(job && job->deleted && !g_durable_rounds)
 		client_send_result(client, "true");
 
 	else
@@ -914,6 +914,18 @@ bool client_submit(YAAMP_CLIENT *client, json_value *json_params)
 		return false;
 	}
 
+	// A connection has one authorized accounting identity. The first submit
+	// parameter must name that same authorization; never let a claimed worker
+	// reach the durable journal or the share accumulator.
+	if(!client->workerid || !client->authorized_worker_name[0] ||
+		strcmp(json_params->u.array.values[0]->u.string.ptr,
+			client->authorized_worker_name))
+	{
+		client_send_error(client, 24, "Unauthorized worker");
+		client->submit_bad++;
+		return true;
+	}
+
 	char extranonce2[32] = { 0 };
 	char extra[160] = { 0 };
 	char nonce[80] = { 0 };
@@ -972,8 +984,12 @@ bool client_submit(YAAMP_CLIENT *client, json_value *json_params)
 
 	if(job->deleted)
 	{
-		client_send_result(client, "true");
-		object_unlock(job);
+		if(g_durable_rounds)
+			client_submit_error(client, job, 21, "Invalid job id", extranonce2, ntime, nonce);
+		else {
+			client_send_result(client, "true");
+			object_unlock(job);
+		}
 
 		return true;
 	}
@@ -1114,7 +1130,10 @@ bool client_submit(YAAMP_CLIENT *client, json_value *json_params)
 	ROUND_RECEIPT round_receipt={};
 	if(!round_journal(client,job,&submitvalues,&round_receipt)) {
 		client_submit_error(client,job,28,"Durable work journal unavailable",extranonce2,ntime,nonce);
-		return true;
+		// The commit may have succeeded even when its acknowledgement was lost.
+		// Close this session so it cannot continue with a broken SQL connection;
+		// a retry must be checked against the durable work identity on a new one.
+		return false;
 	}
 	if(round_receipt.duplicate) {
 		client_submit_error(client,job,22,"Duplicate durable work",extranonce2,ntime,nonce);

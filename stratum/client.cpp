@@ -200,6 +200,8 @@ bool client_subscribe(YAAMP_CLIENT *client, json_value *json_params)
 
 			client->userid = client1->userid;
 			client->workerid = client1->workerid;
+			strncpy(client->authorized_worker_name, client1->authorized_worker_name,
+				sizeof(client->authorized_worker_name)-1);
 
 			memcpy(client->job_history, client1->job_history, sizeof(client->job_history));
 			client1->lock_count = 0;
@@ -340,6 +342,14 @@ bool client_authorize(YAAMP_CLIENT *client, json_value *json_params)
 		int len = strlen(client->username);
 		if (!len)
 			return false;
+		if(client->workerid && strcmp(client->authorized_worker_name, client->username)) {
+			client_send_error(client, 24, "Unauthorized worker");
+			return false;
+		}
+		// Keep the full, validated login. Accounting uses the split address and
+		// worker IDs, while mining.submit names this authorization verbatim.
+		strncpy(client->authorized_worker_name, client->username,
+			sizeof(client->authorized_worker_name)-1);
 
 		char *sep = strpbrk(client->username, ".,;:");
 		if (sep) {
@@ -675,8 +685,11 @@ void *client_thread(void *p)
 			break;
 		}
 
-		client->id_int = json_get_int(json, "id");
-		client->id_str = json_get_string(json, "id");
+		// json_get_string reads the union without checking its type. Numeric
+		// request IDs were interpreted as pointers and crashed error replies.
+		json_value *request_id = json_get_object(json, "id");
+		client->id_int = json_is_integer(request_id) ? json_integer_value(request_id) : 0;
+		client->id_str = json_is_string(request_id) ? json_string_value(request_id) : NULL;
 		if (client->id_str && strlen(client->id_str) > 32) {
 			clientlog(client, "bad id");
 			break;

@@ -3,6 +3,7 @@
 
 CXX       := g++
 CXXFLAGS  := -O2 -march=native -std=c++17 -Wall -Wno-unused-result -fPIC
+CXXFLAGS += -MMD -MP
 CXXFLAGS += -I/usr/include/x86_64-linux-gnu
 CXXFLAGS += -I/usr/include/mariadb
 CXXFLAGS += -I/usr/include/x86_64-linux-gnu/curl
@@ -23,6 +24,7 @@ SOURCES := stratum.cpp db.cpp coind.cpp coind_aux.cpp coind_template.cpp coind_s
            json.cpp base58.cpp rpc_curl.cpp durable_round.cpp shutdown_drain.cpp
 
 OBJECTS := $(SOURCES:.cpp=.o)
+-include $(OBJECTS:.o=.d)
 OUTPUT  := stratum
 
 CODEDIRS := algos sha3
@@ -41,7 +43,7 @@ $(OUTPUT): $(OBJECTS)
 	$(CXX) $(CXXFLAGS) $(CPPFLAGS) $(SQLFLAGS) -c $< -o $@
 
 clean:
-	rm -f $(OBJECTS) $(OUTPUT)
+	rm -f $(OBJECTS) $(OBJECTS:.o=.d) $(OUTPUT)
 	for d in $(CODEDIRS); do $(MAKE) -C $$d clean; done
 
 install: all

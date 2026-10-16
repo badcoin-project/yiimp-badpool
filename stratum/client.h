@@ -59,6 +59,7 @@ public:
 
 	char version[1024];
 	char username[1024];
+	char authorized_worker_name[1024];
 	char password[1024];
 	char worker[1024];
 
