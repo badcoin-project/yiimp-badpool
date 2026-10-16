@@ -353,8 +353,11 @@ int main(int argc, char **argv)
 	YAAMP_DB *db = db_connect();
 	if(!db) yaamp_error("Cant connect database");
 
-	db_register_stratum(db);
+	// Preserve legacy registration order; durable mode must inspect the complete
+	// schema before any registration or accounting recovery can write.
+	if(!g_durable_rounds) db_register_stratum(db);
 	if(!round_startup(db)) yaamp_error("Durable round mode/schema/recovery unavailable; refusing startup");
+	if(g_durable_rounds) db_register_stratum(db);
 	db_update_algos(db);
 	db_update_coinds(db);
 

@@ -33,7 +33,8 @@ bool ishexa(char *s,int n) { for(int i=0;i<n;++i) if(!isxdigit((unsigned char)s[
 int main(int argc,char **argv) {
  if(argc<3) return 64;
  YAAMP_DB database;g_db=&database;mysql_init(&g_db->mysql);
- if(!mysql_real_connect(&g_db->mysql,"localhost","root","","round_test",0,argv[1],0)) { fprintf(stderr,"%s\n",mysql_error(&g_db->mysql));return 65; }
+ const char *db_user=getenv("ROUND_TEST_DB_USER"),*db_password=getenv("ROUND_TEST_DB_PASSWORD");
+ if(!mysql_real_connect(&g_db->mysql,"localhost",db_user?db_user:"root",db_password?db_password:"","round_test",0,argv[1],0)) { fprintf(stderr,"%s\n",mysql_error(&g_db->mysql));return 65; }
  g_durable_rounds=true;
  if(!strcmp(argv[2],"startup")) {
   strcpy(g_stratum_algo,argv[3]);g_durable_rounds=getenv("ROUND_TEST_DISABLED")==NULL;

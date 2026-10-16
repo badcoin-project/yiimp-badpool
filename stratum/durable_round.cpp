@@ -38,6 +38,31 @@ bool row(YAAMP_DB *db, const std::string &s, std::vector<std::string> &out) {
  mysql_free_result(r); return value != NULL;
 }
 std::string num(unsigned long long n) { return std::to_string(n); }
+// Hash of round_schema_assert.ROUTINE_DEFINITION as installed by the pinned
+// MariaDB 10.11 guard migration. The definer procedure has metadata visibility;
+// the Stratum SQL user needs only EXECUTE, not TRIGGER or schema DDL privilege.
+const char *kSchemaGuardDefinition = "12e0d439aa5a29f1256e2de1c894f77459ca7b3ba675e776c5578cf4ef659034";
+bool schema_guard(YAAMP_DB *db) {
+ if(mysql_query(&db->mysql,"CALL round_schema_assert()")) {
+  stratumlog("BADPOOL_ROUND_SCHEMA_REFUSED error=%u\n",mysql_errno(&db->mysql));
+  return false;
+ }
+ MYSQL_RES *result=mysql_store_result(&db->mysql);
+ if(!result) return false;
+ MYSQL_ROW value=mysql_fetch_row(result);
+ bool valid=mysql_num_fields(result)==1 && value && value[0] &&
+  !strcmp(value[0],kSchemaGuardDefinition) && mysql_fetch_row(result)==NULL &&
+  mysql_errno(&db->mysql)==0;
+ mysql_free_result(result);
+ while(mysql_more_results(&db->mysql)) {
+  if(mysql_next_result(&db->mysql)>0) return false;
+  result=mysql_store_result(&db->mysql);
+  if(result) { valid=false; mysql_free_result(result); }
+  else if(mysql_field_count(&db->mysql)!=0 || mysql_errno(&db->mysql)!=0) return false;
+ }
+ if(!valid) stratumlog("BADPOOL_ROUND_SCHEMA_REFUSED reason=guard_definition_or_result_mismatch\n");
+ return valid;
+}
 std::string scope(YAAMP_JOB *job) {
  return "coin_id="+num(job->coind->id)+" AND algo='"+std::string(g_stratum_algo)+"'";
 }
@@ -104,7 +129,7 @@ bool round_enabled(YAAMP_JOB *job) {
 }
 
 bool round_startup(YAAMP_DB *db) {
- std::vector<std::string> tables,commissioned,revision,engines;
+ std::vector<std::string> tables,commissioned;
  if(!row(db,"SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name='round_lanes'",tables)) return false;
  if(tables[0]=="0") return !g_durable_rounds;
  if(!row(db,"SELECT COUNT(*) FROM round_lanes WHERE algo="+quote(db,g_stratum_algo)+" AND current_round IS NOT NULL",commissioned)) return false;
@@ -113,8 +138,7 @@ bool round_startup(YAAMP_DB *db) {
   return false;
  }
  if(!g_durable_rounds) return true;
- if(!row(db,"SELECT COUNT(*) FROM round_schema_version WHERE version=2",revision) || revision[0]!="1" ||
-    !row(db,"SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() AND engine='InnoDB' AND table_name IN ('blocks','accounts','coins','earnings','live_block_candidates','live_block_attributions')",engines) || engines[0]!="6") return false;
+ if(!schema_guard(db)) return false;
  return round_recover(db);
 }
 
