@@ -1,0 +1,397 @@
+{
+  "task": "POOL-L3.199I-R2",
+  "classification": "PARTIAL",
+  "source_commit": "6a244660243c3061b38ca6ce635a33a9ac128140",
+  "checks": {
+    "private_no_route": "PASS",
+    "listener_reached_inside_namespace": "PASS",
+    "synthetic_bad_scrypt_job": "PASS",
+    "valid_share_durable_owner": "PASS"
+  },
+  "migrations": [
+    {
+      "identity": "2016-04-03-yaamp.sql.gz schema-only",
+      "ddl_statements": 88,
+      "sha256": "7c3c86ff6235a09f3952c75e3235ecfe31cd2a1549a18a36c5563758d9ef9619"
+    },
+    {
+      "identity": "2016-04-24-market_history.sql",
+      "sha256": "7b3dddbfca4a4a9557e1aa1373d172d4edee32238d8f1ac02cd87053c8bb2c35",
+      "result": "APPLIED"
+    },
+    {
+      "identity": "2016-04-27-settings.sql",
+      "sha256": "ebc44aad00bb40e157cfbb13744e7fbc20bfb0360efc748e78e315fca740d6e5",
+      "result": "APPLIED"
+    },
+    {
+      "identity": "2016-05-11-coins.sql",
+      "sha256": "258e03090c8fb9cd03fb5f451ebd51dc4807974b2f6ff8097c28546aac8e7d2f",
+      "result": "APPLIED"
+    },
+    {
+      "identity": "2016-05-15-benchmarks.sql",
+      "sha256": "3a086ee9320cc76f1c4be9d8507f26bc9738097261b6147ad913083d3126613b",
+      "result": "APPLIED"
+    },
+    {
+      "identity": "2016-05-23-bookmarks.sql",
+      "sha256": "d3f09086d023e148933e2470d1e55ba0dc7ed39f82cee3ee401506738f2e8346",
+      "result": "APPLIED"
+    },
+    {
+      "identity": "2016-06-01-notifications.sql",
+      "sha256": "859b621841ef5fad4ab14cca50e3961132fded39ad536e5ca52bd323ee4a3cf2",
+      "result": "APPLIED"
+    },
+    {
+      "identity": "2016-06-04-bench_chips.sql",
+      "sha256": "5f5a9371919f08cec2f18490fe344432bf3bd1157a54400ccb1d74c241c1b121",
+      "result": "APPLIED"
+    },
+    {
+      "identity": "2016-11-23-coins.sql",
+      "sha256": "4f7d0faa9f5e368a9cb97dc3ad74f3ff16914ef05be49865a13527e827a05d32",
+      "result": "APPLIED"
+    },
+    {
+      "identity": "2017-02-05-benchmarks.sql",
+      "sha256": "e8c125c51a7b2a311893686182441e9e3ec4576ef771912668c737d0956395dc",
+      "result": "APPLIED"
+    },
+    {
+      "identity": "2017-03-31-earnings_index.sql",
+      "sha256": "18a56e7e643750549b780febfd6fd433e47e03c68f6cf19c88c011086e09a33e",
+      "result": "APPLIED"
+    },
+    {
+      "identity": "2017-05-accounts_case_swaptime.sql",
+      "sha256": "b6cf69006ed31720d2da8b98b1a09c2c9ed49f2f95bb545868282e5187cd55e3",
+      "result": "APPLIED"
+    },
+    {
+      "identity": "2017-06-payouts_coinid_memo.sql",
+      "sha256": "2a7fdadd3e8629c605236ed5c43ef791d799df71d3187a5060b5e87fcc81186c",
+      "result": "APPLIED"
+    },
+    {
+      "identity": "2017-09-notifications.sql",
+      "sha256": "692f4e9df42c32d0479837641e942892b9d8d718ce980efe67c5688fa3ce9ca9",
+      "result": "APPLIED"
+    },
+    {
+      "identity": "2017-10-bookmarks.sql",
+      "sha256": "eff4457e2e0e7c298d371909f9cbe2e2ac53a55213c28daa0e99a1a67ad04de9",
+      "result": "APPLIED"
+    },
+    {
+      "identity": "2017-11-segwit.sql",
+      "sha256": "94211273f0769d7d63144f8cb70284ac11a20dcad282058c0f3561de2b4bbe49",
+      "result": "APPLIED"
+    },
+    {
+      "identity": "2018-01-stratums_ports.sql",
+      "sha256": "2141858f8c7c8bdebae834e340460c18bda5dd5a0f1f7230171e87264ff03c81",
+      "result": "APPLIED"
+    },
+    {
+      "identity": "2018-02-coins_getinfo.sql",
+      "sha256": "8112e78e17017d130ea35714c0ca642db010310ddca703b4710b302dbbfa4568",
+      "result": "APPLIED"
+    },
+    {
+      "identity": "2026-09-06-live-block-accounting.sql",
+      "sha256": "b9b2bdd39ae4ec0324593837d8cfb523df979b0170f0e3ac53e18b843674f1ab",
+      "result": "APPLIED"
+    },
+    {
+      "identity": "2026-10-04-durable-share-rounds.sql",
+      "sha256": "2505ae840a7714e862c624c7662750cd6d1b1860d179f2234f0aef871a328e5d",
+      "result": "APPLIED"
+    },
+    {
+      "identity": "2026-10-16-durable-schema-guard.sql",
+      "sha256": "421942941875034d22eb598375c60a32e123beb882a8186851e641252fad5ac6",
+      "result": "APPLIED"
+    }
+  ],
+  "attempt": {
+    "id": "r3-priority-01",
+    "concurrency_level": 1,
+    "started_utc": "2026-10-17T01:59:29.110384+00:00",
+    "fixture_root": "/tmp/pool-l3-199i-um8h06pn",
+    "mariadb_error_log_path": "/mnt/c/Users/Michael/AppData/Local/Temp/pool-l3-199i-r3-independent/review/l3-199i-r2/results/mariadb-r3-priority-01.log",
+    "mariadb_pid": 288,
+    "stratum_log_path": "/mnt/c/Users/Michael/AppData/Local/Temp/pool-l3-199i-r3-independent/review/l3-199i-r2/results/stratum-r3-priority-01.log",
+    "stratum_pid": 331,
+    "finished_utc": "2026-10-17T01:59:52.902238+00:00"
+  },
+  "network": {
+    "addresses": [
+      {
+        "ifindex": 1,
+        "ifname": "lo",
+        "flags": [
+          "LOOPBACK",
+          "UP",
+          "LOWER_UP"
+        ],
+        "mtu": 65536,
+        "qdisc": "noqueue",
+        "operstate": "UNKNOWN",
+        "group": "default",
+        "txqlen": 1000,
+        "link_type": "loopback",
+        "address": "00:00:00:00:00:00",
+        "broadcast": "00:00:00:00:00:00",
+        "addr_info": [
+          {
+            "family": "inet",
+            "local": "127.0.0.1",
+            "prefixlen": 8,
+            "scope": "host",
+            "label": "lo",
+            "valid_life_time": 4294967295,
+            "preferred_life_time": 4294967295
+          },
+          {
+            "family": "inet6",
+            "local": "::1",
+            "prefixlen": 128,
+            "scope": "host",
+            "valid_life_time": 4294967295,
+            "preferred_life_time": 4294967295
+          }
+        ]
+      }
+    ],
+    "routes": [],
+    "namespace": "net:[4026532244]"
+  },
+  "binary_sha256": "46cf12e6841a3f162177a788e69715e17db30e77fbf5928fe6d3288530fe2b17",
+  "test_clock": {
+    "mode": "normal",
+    "scope": "all Stratum processes"
+  },
+  "database": {
+    "version": "10.11.18-MariaDB-0+deb12u1",
+    "server": "Michaels-Desktop",
+    "datadir": "/tmp/pool-l3-199i-um8h06pn/db-data/",
+    "socket": "/tmp/pool-l3-199i-um8h06pn/db.sock",
+    "port": "43317",
+    "skip_networking": "0",
+    "database": "pool_l3_199h"
+  },
+  "grants": [
+    "GRANT USAGE ON *.* TO `stratum_h`@`127.0.0.1` IDENTIFIED BY PASSWORD '*D9B0035352C7C8084B96CCF4A1360D0EC81C7351'",
+    "GRANT SELECT, INSERT, UPDATE, DELETE ON `pool_l3_199h`.* TO `stratum_h`@`127.0.0.1`",
+    "GRANT EXECUTE ON PROCEDURE `pool_l3_199h`.`round_lock` TO `stratum_h`@`127.0.0.1`",
+    "GRANT EXECUTE ON PROCEDURE `pool_l3_199h`.`round_resolve` TO `stratum_h`@`127.0.0.1`",
+    "GRANT EXECUTE ON PROCEDURE `pool_l3_199h`.`round_hold` TO `stratum_h`@`127.0.0.1`",
+    "GRANT EXECUTE ON PROCEDURE `pool_l3_199h`.`round_schema_assert` TO `stratum_h`@`127.0.0.1`"
+  ],
+  "migration_definer": [
+    "round_hold\troot@localhost\tDEFINER",
+    "round_lock\troot@localhost\tDEFINER",
+    "round_resolve\troot@localhost\tDEFINER",
+    "round_schema_assert\troot@localhost\tDEFINER"
+  ],
+  "migration_session_identity": "root@localhost",
+  "rpc_calls": [
+    "validateaddress",
+    "getblocktemplate",
+    "validateaddress",
+    "getblocktemplate"
+  ],
+  "stratum_exit": null,
+  "listener_owners": "State  Recv-Q Send-Q Local Address:Port  Peer Address:PortProcess                            \nLISTEN 0      4096         0.0.0.0:43319      0.0.0.0:*    users:((\"stratum\",pid=331,fd=10)) \nLISTEN 0      80         127.0.0.1:43317      0.0.0.0:*    users:((\"mariadbd\",pid=288,fd=21))\nLISTEN 0      5          127.0.0.1:43318      0.0.0.0:*    users:((\"python3\",pid=215,fd=3))  \nLISTEN 0      5          127.0.0.1:43322      0.0.0.0:*    users:((\"python3\",pid=215,fd=5))  \n",
+  "miner_requests": [
+    {
+      "id": 1,
+      "method": "mining.subscribe",
+      "params": [
+        "l3-199h/1"
+      ]
+    },
+    {
+      "id": 2,
+      "method": "mining.authorize",
+      "params": [
+        "test.rig1",
+        "x"
+      ]
+    },
+    {
+      "id": 3,
+      "method": "mining.submit",
+      "params": [
+        "test.rig1",
+        "1",
+        "00000000",
+        "6553f100",
+        "00000000"
+      ]
+    }
+  ],
+  "miner_responses": [
+    {
+      "id": 1,
+      "result": [
+        [
+          [
+            "mining.set_difficulty",
+            "1"
+          ],
+          [
+            "mining.notify",
+            "336c44333074704b5f8a2272256fab73"
+          ]
+        ],
+        "81000001",
+        4
+      ],
+      "error": null
+    },
+    {
+      "id": 2,
+      "result": true,
+      "error": null
+    },
+    {
+      "id": null,
+      "method": "mining.set_difficulty",
+      "params": [
+        1
+      ]
+    },
+    {
+      "id": null,
+      "method": "mining.notify",
+      "params": [
+        "1",
+        "1111111111111111111111111111111111111111111111111111111111111111",
+        "01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff170166000482d6d26a08",
+        "7969696d7000000000000100f2052a010000001976a914740d6b62037e2e8ac5af9429e61919b2bacd6ad388ac00000000",
+        [],
+        "00000002",
+        "1d00ffff",
+        "6553f100",
+        true
+      ]
+    },
+    {
+      "id": 3,
+      "result": true,
+      "error": null
+    }
+  ],
+  "pre_submit_identity": "1\t1BadTest11111111111111111111111111\t1\n1\t1\t1BadTest11111111111111111111111111\trig1",
+  "mined_share": {
+    "jobid": "1",
+    "extranonce1": "81000001",
+    "extranonce2": "00000000",
+    "ntime": "6553f100",
+    "nonce": "00000000",
+    "hash_int": "f6e48e1529b2123a",
+    "header_hex": "020000001111111111111111111111111111111111111111111111111111111111111111a39f38a19242dd169c80da337c362f09698effdd228ef47be76577cee83ad49600f15365ffff001d00000000",
+    "scrypt_digest": "f0177f24f21fbff266cad05c805db894ca631652e03f3a12b229158ee4f6a044"
+  },
+  "share_cases": {
+    "valid": {
+      "id": 3,
+      "result": true,
+      "error": null
+    }
+  },
+  "durable_after_valid": "1\t1\tscrypt\t1\t1\t1\t1\tOWNED_BY_ROUND\t020000001111111111111111111111111111111111111111111111111111111111111111a39f38a19242dd169c80da337c362f09698effdd228ef47be76577cee83ad49600f15365ffff001d00000000",
+  "reconnect_true": {
+    "old_notify_id": "336c44333074704b5f8a2272256fab73",
+    "old_worker_id": 1,
+    "original_owner": "1\t1\tscrypt\t1\t1\t1\t1\tOWNED_BY_ROUND\t020000001111111111111111111111111111111111111111111111111111111111111111a39f38a19242dd169c80da337c362f09698effdd228ef47be76577cee83ad49600f15365ffff001d00000000",
+    "remote_job_fixture": [
+      "upstream1",
+      "1111111111111111111111111111111111111111111111111111111111111111",
+      "01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff170166000482d6d26a08",
+      "7969696d7000000000000100f2052a010000001976a914740d6b62037e2e8ac5af9429e61919b2bacd6ad388ac00000000",
+      [],
+      "00000002",
+      "1d00ffff",
+      "6ad2d685",
+      true
+    ],
+    "remote_row": "199\t1\t1\tscrypt\t127.0.0.1\t43322",
+    "debug_log": "21:59:30: 2026-10-16 starting stratum for scrypt on 127.0.0.1:43319\n21:59:30: connecting to coind BAD\n21:59:32: R3 job order id=1 remote=0 profit=1005828.380585 maxspeed=143.165577 can_mine=1 free=0\n21:59:32: client mining.subscribe 1 null\n21:59:32: new client with nonce 81000001\n21:59:33: client mining.authorize 2 null\n21:59:33: new client test, x, l3-199h/1\n21:59:33: new user 1BadTest11111111111111111111111111 for coin BAD\n21:59:33: client mining.submit 3 null\n21:59:33: submit 127.0.0.1 (uid 1) 1, 00000000, t=6553f100, n=00000000, extra=\n21:59:33: POOL hash_hex=f0177f24f21fbff266cad05c805db894ca631652e03f3a12b229158ee4f6a044\n21:59:33: POOL hash_be=44a0f6e48e1529b2123a3fe0521663ca94b85d805cd0ca66f2bf1ff2247f17f0\n21:59:33: POOL user_target=ffff000000000000\n21:59:33: POOL coin_target=0000ffff00000000\n21:59:33: f6e48e1529b2123a actual\n21:59:33: ffff000000000000 target\n21:59:33: 0000ffff00000000 coin\n21:59:33: share_decision_diag algo=scrypt decision=PROCEED_TO_SUBMIT result=hash_target_gate_passed jobid=1 coinid=1 coin=BAD worker_uid=1 client_ip=127.0.0.1 difficulty=1.00000000 nbits=1d00ffff hash_int=f6e48e1529b2123a user_target=ffff000000000000 coin_target=0000ffff00000000 hash_gt_user_target=0 hash_gt_coin_target=1 share_diff=0.00000000\n21:59:33: share_decision_diag algo=scrypt decision=PROCEED_TO_CLIENT_DO_SUBMIT result=begin jobid=1 coinid=1 coin=BAD worker_uid=1 client_ip=127.0.0.1 difficulty=1.00000000 nbits=1d00ffff hash_int=f6e48e1529b2123a user_target=ffff000000000000 coin_target=0000ffff00000000 hash_gt_user_target=0 hash_gt_coin_target=1 share_diff=0.00000000\n21:59:33: share_decision_diag algo=scrypt decision=SUBMIT_RETURNED result=client_do_submit_returned jobid=1 coinid=1 coin=BAD worker_uid=1 client_ip=127.0.0.1 difficulty=1.00000000 nbits=1d00ffff hash_int=f6e48e1529b2123a user_target=ffff000000000000 coin_target=0000ffff00000000 hash_gt_user_target=0 hash_gt_coin_target=1 share_diff=0.00000000\n21:59:33: share_decision_diag algo=scrypt decision=SHARE_ADD_BEGIN result=valid_true jobid=1 coinid=1 coin=BAD worker_uid=1 client_ip=127.0.0.1 difficulty=1.00000000 nbits=1d00ffff hash_int=f6e48e1529b2123a user_target=ffff000000000000 coin_target=0000ffff00000000 hash_gt_user_target=0 hash_gt_coin_target=1 share_diff=1.00000000\n21:59:33: share_decision_diag algo=scrypt decision=SHARE_ADD_DONE result=reached_after_share_add jobid=1 coinid=1 coin=BAD worker_uid=1 client_ip=127.0.0.1 difficulty=1.00000000 nbits=1d00ffff hash_int=f6e48e1529b2123a user_target=ffff000000000000 coin_target=0000ffff00000000 hash_gt_user_target=0 hash_gt_coin_target=1 share_diff=1.00000000\n21:59:52: connecting to 127.0.0.1:43322 JOB199\n21:59:52: connected to 127.0.0.1:43322 JOB199\n21:59:52: R3 remote notify JOB199 status=4 nonce2=6 difficulty=1.000000\n21:59:52: R3 remote created job=0x7f764400c550 id=2 status=4\n21:59:52: R3 job order id=2 remote=1 profit=1000000000000.000000 maxspeed=1000000000000.000000 can_mine=1 free=1\n21:59:52: R3 remote assign entry job=2 uid=1 worker=1 next=0 locked=0 sent=1 reconnectable=1 extranonce_subscribe=0 maxhash=1000000000000.000000 client_speed=0.800513 job_speed=0.000000\n",
+    "stratum_exit_before_cleanup": null
+  },
+  "upstream_requests": [
+    {
+      "id": 1,
+      "method": "mining.subscribe",
+      "params": [
+        "stratum-proxy/0.0.2"
+      ]
+    },
+    {
+      "id": 2,
+      "method": "mining.authorize",
+      "params": [
+        "synthetic-upstream",
+        "fake"
+      ]
+    },
+    {
+      "id": 3,
+      "method": "mining.extranonce.subscribe",
+      "params": []
+    }
+  ],
+  "upstream_responses": [
+    {
+      "id": 1,
+      "result": [
+        [
+          [
+            "mining.notify",
+            "upstream-session"
+          ]
+        ],
+        "aabbccdd",
+        6
+      ],
+      "error": null
+    },
+    {
+      "id": 2,
+      "result": true,
+      "error": null
+    },
+    {
+      "id": 3,
+      "result": true,
+      "error": null
+    },
+    {
+      "id": null,
+      "method": "mining.set_difficulty",
+      "params": [
+        1
+      ]
+    },
+    {
+      "id": null,
+      "method": "mining.notify",
+      "params": [
+        "upstream1",
+        "1111111111111111111111111111111111111111111111111111111111111111",
+        "01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff170166000482d6d26a08",
+        "7969696d7000000000000100f2052a010000001976a914740d6b62037e2e8ac5af9429e61919b2bacd6ad388ac00000000",
+        [],
+        "00000002",
+        "1d00ffff",
+        "6ad2d685",
+        true
+      ]
+    }
+  ],
+  "error": "fixture did not reach actual client.reconnect path"
+}

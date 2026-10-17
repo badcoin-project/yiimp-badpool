@@ -1,0 +1,653 @@
+{
+  "task": "POOL-L3.199I-R2",
+  "classification": "PARTIAL",
+  "source_commit": "a1e6284049a9fcbcd39bc5a5373229e4dfb073e5",
+  "checks": {
+    "private_no_route": "PASS",
+    "listener_reached_inside_namespace": "PASS",
+    "synthetic_bad_scrypt_job": "PASS",
+    "valid_share_durable_owner": "PASS",
+    "actual_reconnecting_true_triggered": "PASS",
+    "inherited_worker_rejects_claim_before_authorize": "PASS",
+    "inherited_same_worker_authorizes": "PASS",
+    "inherited_same_worker_submits": "PASS",
+    "reconnected_wrong_worker_no_accounting": "PASS"
+  },
+  "migrations": [
+    {
+      "identity": "2016-04-03-yaamp.sql.gz schema-only",
+      "ddl_statements": 88,
+      "sha256": "7c3c86ff6235a09f3952c75e3235ecfe31cd2a1549a18a36c5563758d9ef9619"
+    },
+    {
+      "identity": "2016-04-24-market_history.sql",
+      "sha256": "7b3dddbfca4a4a9557e1aa1373d172d4edee32238d8f1ac02cd87053c8bb2c35",
+      "result": "APPLIED"
+    },
+    {
+      "identity": "2016-04-27-settings.sql",
+      "sha256": "ebc44aad00bb40e157cfbb13744e7fbc20bfb0360efc748e78e315fca740d6e5",
+      "result": "APPLIED"
+    },
+    {
+      "identity": "2016-05-11-coins.sql",
+      "sha256": "258e03090c8fb9cd03fb5f451ebd51dc4807974b2f6ff8097c28546aac8e7d2f",
+      "result": "APPLIED"
+    },
+    {
+      "identity": "2016-05-15-benchmarks.sql",
+      "sha256": "3a086ee9320cc76f1c4be9d8507f26bc9738097261b6147ad913083d3126613b",
+      "result": "APPLIED"
+    },
+    {
+      "identity": "2016-05-23-bookmarks.sql",
+      "sha256": "d3f09086d023e148933e2470d1e55ba0dc7ed39f82cee3ee401506738f2e8346",
+      "result": "APPLIED"
+    },
+    {
+      "identity": "2016-06-01-notifications.sql",
+      "sha256": "859b621841ef5fad4ab14cca50e3961132fded39ad536e5ca52bd323ee4a3cf2",
+      "result": "APPLIED"
+    },
+    {
+      "identity": "2016-06-04-bench_chips.sql",
+      "sha256": "5f5a9371919f08cec2f18490fe344432bf3bd1157a54400ccb1d74c241c1b121",
+      "result": "APPLIED"
+    },
+    {
+      "identity": "2016-11-23-coins.sql",
+      "sha256": "4f7d0faa9f5e368a9cb97dc3ad74f3ff16914ef05be49865a13527e827a05d32",
+      "result": "APPLIED"
+    },
+    {
+      "identity": "2017-02-05-benchmarks.sql",
+      "sha256": "e8c125c51a7b2a311893686182441e9e3ec4576ef771912668c737d0956395dc",
+      "result": "APPLIED"
+    },
+    {
+      "identity": "2017-03-31-earnings_index.sql",
+      "sha256": "18a56e7e643750549b780febfd6fd433e47e03c68f6cf19c88c011086e09a33e",
+      "result": "APPLIED"
+    },
+    {
+      "identity": "2017-05-accounts_case_swaptime.sql",
+      "sha256": "b6cf69006ed31720d2da8b98b1a09c2c9ed49f2f95bb545868282e5187cd55e3",
+      "result": "APPLIED"
+    },
+    {
+      "identity": "2017-06-payouts_coinid_memo.sql",
+      "sha256": "2a7fdadd3e8629c605236ed5c43ef791d799df71d3187a5060b5e87fcc81186c",
+      "result": "APPLIED"
+    },
+    {
+      "identity": "2017-09-notifications.sql",
+      "sha256": "692f4e9df42c32d0479837641e942892b9d8d718ce980efe67c5688fa3ce9ca9",
+      "result": "APPLIED"
+    },
+    {
+      "identity": "2017-10-bookmarks.sql",
+      "sha256": "eff4457e2e0e7c298d371909f9cbe2e2ac53a55213c28daa0e99a1a67ad04de9",
+      "result": "APPLIED"
+    },
+    {
+      "identity": "2017-11-segwit.sql",
+      "sha256": "94211273f0769d7d63144f8cb70284ac11a20dcad282058c0f3561de2b4bbe49",
+      "result": "APPLIED"
+    },
+    {
+      "identity": "2018-01-stratums_ports.sql",
+      "sha256": "2141858f8c7c8bdebae834e340460c18bda5dd5a0f1f7230171e87264ff03c81",
+      "result": "APPLIED"
+    },
+    {
+      "identity": "2018-02-coins_getinfo.sql",
+      "sha256": "8112e78e17017d130ea35714c0ca642db010310ddca703b4710b302dbbfa4568",
+      "result": "APPLIED"
+    },
+    {
+      "identity": "2026-09-06-live-block-accounting.sql",
+      "sha256": "b9b2bdd39ae4ec0324593837d8cfb523df979b0170f0e3ac53e18b843674f1ab",
+      "result": "APPLIED"
+    },
+    {
+      "identity": "2026-10-04-durable-share-rounds.sql",
+      "sha256": "2505ae840a7714e862c624c7662750cd6d1b1860d179f2234f0aef871a328e5d",
+      "result": "APPLIED"
+    },
+    {
+      "identity": "2026-10-16-durable-schema-guard.sql",
+      "sha256": "421942941875034d22eb598375c60a32e123beb882a8186851e641252fad5ac6",
+      "result": "APPLIED"
+    }
+  ],
+  "attempt": {
+    "id": "r3-reconnect-fixed-01",
+    "concurrency_level": 1,
+    "started_utc": "2026-10-17T02:01:45.174721+00:00",
+    "fixture_root": "/tmp/pool-l3-199i-wy3dpytw",
+    "mariadb_error_log_path": "/mnt/c/Users/Michael/AppData/Local/Temp/pool-l3-199i-r3-independent/review/l3-199i-r2/results/mariadb-r3-reconnect-fixed-01.log",
+    "mariadb_pid": 293,
+    "stratum_log_path": "/mnt/c/Users/Michael/AppData/Local/Temp/pool-l3-199i-r3-independent/review/l3-199i-r2/results/stratum-r3-reconnect-fixed-01.log",
+    "stratum_pid": 337,
+    "finished_utc": "2026-10-17T02:02:11.299865+00:00"
+  },
+  "network": {
+    "addresses": [
+      {
+        "ifindex": 1,
+        "ifname": "lo",
+        "flags": [
+          "LOOPBACK",
+          "UP",
+          "LOWER_UP"
+        ],
+        "mtu": 65536,
+        "qdisc": "noqueue",
+        "operstate": "UNKNOWN",
+        "group": "default",
+        "txqlen": 1000,
+        "link_type": "loopback",
+        "address": "00:00:00:00:00:00",
+        "broadcast": "00:00:00:00:00:00",
+        "addr_info": [
+          {
+            "family": "inet",
+            "local": "127.0.0.1",
+            "prefixlen": 8,
+            "scope": "host",
+            "label": "lo",
+            "valid_life_time": 4294967295,
+            "preferred_life_time": 4294967295
+          },
+          {
+            "family": "inet6",
+            "local": "::1",
+            "prefixlen": 128,
+            "scope": "host",
+            "valid_life_time": 4294967295,
+            "preferred_life_time": 4294967295
+          }
+        ]
+      }
+    ],
+    "routes": [],
+    "namespace": "net:[4026532244]"
+  },
+  "binary_sha256": "4a1a55b58832c502e1dc9d5b98705e500a06d25b52b326b3f2aad2444702eb16",
+  "test_clock": {
+    "mode": "normal",
+    "scope": "all Stratum processes"
+  },
+  "database": {
+    "version": "10.11.18-MariaDB-0+deb12u1",
+    "server": "Michaels-Desktop",
+    "datadir": "/tmp/pool-l3-199i-wy3dpytw/db-data/",
+    "socket": "/tmp/pool-l3-199i-wy3dpytw/db.sock",
+    "port": "43317",
+    "skip_networking": "0",
+    "database": "pool_l3_199h"
+  },
+  "grants": [
+    "GRANT USAGE ON *.* TO `stratum_h`@`127.0.0.1` IDENTIFIED BY PASSWORD '*D9B0035352C7C8084B96CCF4A1360D0EC81C7351'",
+    "GRANT SELECT, INSERT, UPDATE, DELETE ON `pool_l3_199h`.* TO `stratum_h`@`127.0.0.1`",
+    "GRANT EXECUTE ON PROCEDURE `pool_l3_199h`.`round_lock` TO `stratum_h`@`127.0.0.1`",
+    "GRANT EXECUTE ON PROCEDURE `pool_l3_199h`.`round_resolve` TO `stratum_h`@`127.0.0.1`",
+    "GRANT EXECUTE ON PROCEDURE `pool_l3_199h`.`round_hold` TO `stratum_h`@`127.0.0.1`",
+    "GRANT EXECUTE ON PROCEDURE `pool_l3_199h`.`round_schema_assert` TO `stratum_h`@`127.0.0.1`"
+  ],
+  "migration_definer": [
+    "round_hold\troot@localhost\tDEFINER",
+    "round_lock\troot@localhost\tDEFINER",
+    "round_resolve\troot@localhost\tDEFINER",
+    "round_schema_assert\troot@localhost\tDEFINER"
+  ],
+  "migration_session_identity": "root@localhost",
+  "rpc_calls": [
+    "validateaddress",
+    "getblocktemplate",
+    "validateaddress",
+    "getblocktemplate",
+    "validateaddress"
+  ],
+  "stratum_exit": null,
+  "listener_owners": "State  Recv-Q Send-Q Local Address:Port  Peer Address:PortProcess                            \nLISTEN 0      80         127.0.0.1:43317      0.0.0.0:*    users:((\"mariadbd\",pid=293,fd=21))\nLISTEN 0      5          127.0.0.1:43318      0.0.0.0:*    users:((\"python3\",pid=222,fd=3))  \nLISTEN 0      5          127.0.0.1:43322      0.0.0.0:*    users:((\"python3\",pid=222,fd=5))  \nLISTEN 0      4096         0.0.0.0:43319      0.0.0.0:*    users:((\"stratum\",pid=337,fd=10)) \n",
+  "miner_requests": [
+    {
+      "id": 1,
+      "method": "mining.subscribe",
+      "params": [
+        "l3-199h/1"
+      ]
+    },
+    {
+      "id": 2,
+      "method": "mining.authorize",
+      "params": [
+        "test.rig1",
+        "x"
+      ]
+    },
+    {
+      "id": 3,
+      "method": "mining.submit",
+      "params": [
+        "test.rig1",
+        "1",
+        "00000000",
+        "6553f100",
+        "00000000"
+      ]
+    },
+    {
+      "id": 4,
+      "method": "mining.subscribe",
+      "params": [
+        "l3-r2-actual-reconnect",
+        "51c8cd73472e7b7773c10fd5697e4a49"
+      ]
+    },
+    {
+      "id": 5,
+      "method": "mining.submit",
+      "params": [
+        "test.other",
+        "1",
+        "00000000",
+        "6553f100",
+        "00000000"
+      ]
+    },
+    {
+      "id": 6,
+      "method": "mining.authorize",
+      "params": [
+        "test.rig1",
+        "x"
+      ]
+    },
+    {
+      "id": 7,
+      "method": "mining.submit",
+      "params": [
+        "test.rig1",
+        "2",
+        "0000000000",
+        "6ad2d70d",
+        "00000000"
+      ]
+    },
+    {
+      "id": 8,
+      "method": "mining.submit",
+      "params": [
+        "test.other",
+        "2",
+        "0000000000",
+        "6ad2d70d",
+        "00000000"
+      ]
+    },
+    {
+      "id": 9,
+      "method": "mining.authorize",
+      "params": [
+        "test.other",
+        "x"
+      ]
+    }
+  ],
+  "miner_responses": [
+    {
+      "id": 1,
+      "result": [
+        [
+          [
+            "mining.set_difficulty",
+            "1"
+          ],
+          [
+            "mining.notify",
+            "51c8cd73472e7b7773c10fd5697e4a49"
+          ]
+        ],
+        "81000001",
+        4
+      ],
+      "error": null
+    },
+    {
+      "id": 2,
+      "result": true,
+      "error": null
+    },
+    {
+      "id": null,
+      "method": "mining.set_difficulty",
+      "params": [
+        1
+      ]
+    },
+    {
+      "id": null,
+      "method": "mining.notify",
+      "params": [
+        "1",
+        "1111111111111111111111111111111111111111111111111111111111111111",
+        "01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff17016600040ad7d26a08",
+        "7969696d7000000000000100f2052a010000001976a914740d6b62037e2e8ac5af9429e61919b2bacd6ad388ac00000000",
+        [],
+        "00000002",
+        "1d00ffff",
+        "6553f100",
+        true
+      ]
+    },
+    {
+      "id": 3,
+      "result": true,
+      "error": null
+    },
+    {
+      "id": null,
+      "method": "client.reconnect",
+      "params": [
+        "127.0.0.1",
+        43319,
+        0
+      ]
+    },
+    {
+      "id": 4,
+      "result": [
+        [
+          [
+            "mining.set_difficulty",
+            "1"
+          ],
+          [
+            "mining.notify",
+            "51c8cd73472e7b7773c10fd5697e4a49"
+          ]
+        ],
+        "aabbccdd00",
+        5
+      ],
+      "error": null
+    },
+    {
+      "id": 5,
+      "result": false,
+      "error": [
+        24,
+        "Unauthorized worker",
+        null
+      ]
+    },
+    {
+      "id": 6,
+      "result": true,
+      "error": null
+    },
+    {
+      "id": null,
+      "method": "mining.set_difficulty",
+      "params": [
+        1
+      ]
+    },
+    {
+      "id": null,
+      "method": "mining.notify",
+      "params": [
+        "2",
+        "1111111111111111111111111111111111111111111111111111111111111111",
+        "01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff17016600040ad7d26a08",
+        "7969696d7000000000000100f2052a010000001976a914740d6b62037e2e8ac5af9429e61919b2bacd6ad388ac00000000",
+        [],
+        "00000002",
+        "1d00ffff",
+        "6ad2d70d",
+        true
+      ]
+    },
+    {
+      "id": 7,
+      "result": true,
+      "error": null
+    },
+    {
+      "id": 8,
+      "result": false,
+      "error": [
+        24,
+        "Unauthorized worker",
+        null
+      ]
+    },
+    {
+      "id": 9,
+      "result": false,
+      "error": [
+        21,
+        "Already logged",
+        null
+      ]
+    }
+  ],
+  "pre_submit_identity": "1\t1BadTest11111111111111111111111111\t1\n1\t1\t1BadTest11111111111111111111111111\trig1",
+  "mined_share": {
+    "jobid": "1",
+    "extranonce1": "81000001",
+    "extranonce2": "00000000",
+    "ntime": "6553f100",
+    "nonce": "00000000",
+    "hash_int": "ed41fd13d19b22e1",
+    "header_hex": "02000000111111111111111111111111111111111111111111111111111111111111111129ac0b16e9c470d89ed07a315734973002d7b1758c29fa6337d4a6289da37b6300f15365ffff001d00000000",
+    "scrypt_digest": "f25a81a18d5e515d3b28404cf6436593220eb3efcd68e1229bd113fd41ed5844"
+  },
+  "share_cases": {
+    "valid": {
+      "id": 3,
+      "result": true,
+      "error": null
+    }
+  },
+  "durable_after_valid": "1\t1\tscrypt\t1\t1\t1\t1\tOWNED_BY_ROUND\t02000000111111111111111111111111111111111111111111111111111111111111111129ac0b16e9c470d89ed07a315734973002d7b1758c29fa6337d4a6289da37b6300f15365ffff001d00000000",
+  "reconnect_true": {
+    "old_notify_id": "51c8cd73472e7b7773c10fd5697e4a49",
+    "old_worker_id": 1,
+    "original_owner": "1\t1\tscrypt\t1\t1\t1\t1\tOWNED_BY_ROUND\t02000000111111111111111111111111111111111111111111111111111111111111111129ac0b16e9c470d89ed07a315734973002d7b1758c29fa6337d4a6289da37b6300f15365ffff001d00000000",
+    "remote_job_fixture": [
+      "upstream1",
+      "1111111111111111111111111111111111111111111111111111111111111111",
+      "01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff17016600040ad7d26a08",
+      "7969696d7000000000000100f2052a010000001976a914740d6b62037e2e8ac5af9429e61919b2bacd6ad388ac00000000",
+      [],
+      "00000002",
+      "1d00ffff",
+      "6ad2d70d",
+      true
+    ],
+    "remote_row": "199\t1\t1\tscrypt\t127.0.0.1\t43322",
+    "reconnect_message": {
+      "id": null,
+      "method": "client.reconnect",
+      "params": [
+        "127.0.0.1",
+        43319,
+        0
+      ]
+    },
+    "subscribe_response": {
+      "id": 4,
+      "result": [
+        [
+          [
+            "mining.set_difficulty",
+            "1"
+          ],
+          [
+            "mining.notify",
+            "51c8cd73472e7b7773c10fd5697e4a49"
+          ]
+        ],
+        "aabbccdd00",
+        5
+      ],
+      "error": null
+    },
+    "true_branch_log": [
+      "22:02:08: reconnecting client locked to 0"
+    ],
+    "wrong_claim_before_reauthorization": {
+      "id": 5,
+      "result": false,
+      "error": [
+        24,
+        "Unauthorized worker",
+        null
+      ]
+    },
+    "same_worker_authorization": {
+      "id": 6,
+      "result": true,
+      "error": null
+    },
+    "remote_job_received": [
+      "2",
+      "1111111111111111111111111111111111111111111111111111111111111111",
+      "01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff17016600040ad7d26a08",
+      "7969696d7000000000000100f2052a010000001976a914740d6b62037e2e8ac5af9429e61919b2bacd6ad388ac00000000",
+      [],
+      "00000002",
+      "1d00ffff",
+      "6ad2d70d",
+      true
+    ],
+    "same_worker_submit": {
+      "id": 7,
+      "result": true,
+      "error": null
+    },
+    "after_valid_accounting": {
+      "owner": "1\t1\tscrypt\t1\t1\t1\t1\tOWNED_BY_ROUND\t02000000111111111111111111111111111111111111111111111111111111111111111129ac0b16e9c470d89ed07a315734973002d7b1758c29fa6337d4a6289da37b6300f15365ffff001d00000000",
+      "workers": "1\t1\t1BadTest11111111111111111111111111\trig1",
+      "counts": "1\t0\t0\t0"
+    },
+    "wrong_claim_response": {
+      "id": 8,
+      "result": false,
+      "error": [
+        24,
+        "Unauthorized worker",
+        null
+      ]
+    },
+    "after_wrong_claim_accounting": {
+      "owner": "1\t1\tscrypt\t1\t1\t1\t1\tOWNED_BY_ROUND\t02000000111111111111111111111111111111111111111111111111111111111111111129ac0b16e9c470d89ed07a315734973002d7b1758c29fa6337d4a6289da37b6300f15365ffff001d00000000",
+      "workers": "1\t1\t1BadTest11111111111111111111111111\trig1",
+      "counts": "1\t0\t0\t0"
+    },
+    "conflicting_reauthorization": {
+      "id": 9,
+      "result": false,
+      "error": [
+        21,
+        "Already logged",
+        null
+      ]
+    },
+    "after_conflicting_authorization_accounting": {
+      "owner": "1\t1\tscrypt\t1\t1\t1\t1\tOWNED_BY_ROUND\t02000000111111111111111111111111111111111111111111111111111111111111111129ac0b16e9c470d89ed07a315734973002d7b1758c29fa6337d4a6289da37b6300f15365ffff001d00000000",
+      "workers": "",
+      "counts": "1\t0\t0\t0"
+    }
+  },
+  "upstream_requests": [
+    {
+      "id": 1,
+      "method": "mining.subscribe",
+      "params": [
+        "stratum-proxy/0.0.2"
+      ]
+    },
+    {
+      "id": 2,
+      "method": "mining.authorize",
+      "params": [
+        "synthetic-upstream",
+        "fake"
+      ]
+    },
+    {
+      "id": 3,
+      "method": "mining.extranonce.subscribe",
+      "params": []
+    },
+    {
+      "method": "mining.submit",
+      "params": [
+        "synthetic-upstream",
+        "upstream1",
+        "000000000000",
+        "6ad2d70d",
+        "00000000"
+      ],
+      "id": 4
+    }
+  ],
+  "upstream_responses": [
+    {
+      "id": 1,
+      "result": [
+        [
+          [
+            "mining.notify",
+            "upstream-session"
+          ]
+        ],
+        "aabbccdd",
+        6
+      ],
+      "error": null
+    },
+    {
+      "id": 2,
+      "result": true,
+      "error": null
+    },
+    {
+      "id": 3,
+      "result": true,
+      "error": null
+    },
+    {
+      "id": null,
+      "method": "mining.set_difficulty",
+      "params": [
+        1
+      ]
+    },
+    {
+      "id": null,
+      "method": "mining.notify",
+      "params": [
+        "upstream1",
+        "1111111111111111111111111111111111111111111111111111111111111111",
+        "01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff17016600040ad7d26a08",
+        "7969696d7000000000000100f2052a010000001976a914740d6b62037e2e8ac5af9429e61919b2bacd6ad388ac00000000",
+        [],
+        "00000002",
+        "1d00ffff",
+        "6ad2d70d",
+        true
+      ]
+    },
+    {
+      "id": 4,
+      "result": true,
+      "error": null
+    }
+  ],
+  "error": "conflicting reauthorization changed inherited identity or accounting"
+}

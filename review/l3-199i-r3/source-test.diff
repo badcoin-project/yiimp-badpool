@@ -1,0 +1,111 @@
+diff --git a/review/l3-199i/isolated_smoke.py b/review/l3-199i/isolated_smoke.py
+index 7a5a627..fea9932 100644
+--- a/review/l3-199i/isolated_smoke.py
++++ b/review/l3-199i/isolated_smoke.py
+@@ -274,6 +274,7 @@ def main():
+             '[STRATUM]\nalgo = scrypt\ndifficulty = 1\ndiff_min = 1\n'
+             f'diff_max = 1\ndurable_rounds = 1\nrenting = {renting}\n[DEBUGLOG]\nhash = 1\n'
+             f'client = {renting}\nremote = {renting}\n')
++        report['fixture_config']=cfg.read_text()
+         logpath=OUT/f'stratum-{RUN_ID}.log'
+         report['attempt']['stratum_log_path']=str(logpath)
+         def enable_core():
+@@ -489,11 +490,14 @@ def main():
+                 trace=report['reconnect_true']={'old_notify_id':subscribed['result'][0][1][1],
+                     'old_worker_id':int(durable.split('\t')[6]),'original_owner':durable}
+                 before_workers=sql('USE pool_l3_199h; SELECT id,userid,name,worker FROM workers ORDER BY id;')
++                trace['before_reconnect_accounting']={'owner':durable,'workers':before_workers,
++                    'shares':sql('USE pool_l3_199h; SELECT id,userid,workerid,valid,difficulty,error,round_id FROM shares ORDER BY id;'),
++                    'candidate_count':sql('USE pool_l3_199h; SELECT COUNT(*) FROM round_intents;')}
+                 upstream_job=list(job);upstream_job[0]='upstream1'
+                 upstream_job[7]=f'{int(time.time()):08x}'
+                 upstream_fixture['job']=upstream_job
+                 sql("USE pool_l3_199h; INSERT INTO jobs(id,ready,active,time,price,speed,difficulty,algo,host,port,username,password) "
+-                    "VALUES(199,1,1,UNIX_TIMESTAMP(),1000,1000000000000,1,'scrypt','127.0.0.1',43322,'synthetic-upstream','fake');")
++                    "VALUES(199,1,1,UNIX_TIMESTAMP(),1000000000000,1000000000000000000,1,'scrypt','127.0.0.1',43322,'synthetic-upstream','fake');")
+                 upstream_fixture['ready'].set()
+                 trace['remote_job_fixture']=upstream_job
+                 trace['remote_row']=sql('USE pool_l3_199h; SELECT id,ready,active,algo,host,port FROM jobs WHERE id=199;')
+@@ -509,8 +513,9 @@ def main():
+                         break
+                 if 'reconnect_message' not in trace:
+                     trace['debug_log']=(root/'scrypt.log').read_text(errors='replace')[-8000:]
+-                    trace['stratum_exit_before_cleanup']=stratum.poll()
+-                    if stratum.poll() is not None:
++                    try: trace['stratum_exit_before_cleanup']=stratum.wait(timeout=5)
++                    except subprocess.TimeoutExpired: trace['stratum_exit_before_cleanup']=None
++                    if trace['stratum_exit_before_cleanup'] is not None:
+                         report['classification']='FAIL'
+                         trace['core_backtrace']=core_trace()
+                     raise RuntimeError('fixture did not reach actual client.reconnect path')
+@@ -600,6 +605,18 @@ def main():
+                    trace['after_conflicting_authorization_accounting']!=accepted_baseline:
+                     raise RuntimeError('conflicting reauthorization changed inherited identity or accounting')
+                 report['checks']['reconnected_reauthorization_no_accounting']='PASS'
++                for next_candidate in range(remote_candidate+1,remote_candidate+10001):
++                    next_nonce=f'{next_candidate:08x}'
++                    next_header=remote_prefix+swap_words(next_nonce)
++                    next_digest=hashlib.scrypt(next_header,salt=next_header,n=1024,r=1,p=1,dklen=32)
++                    next_target=int.from_bytes(next_digest[22:30],'little')
++                    if 0x0000ffff00000000 < next_target <= 0xffff000000000000:break
++                else:raise RuntimeError('no second valid remote Scrypt share')
++                after_conflict=send_resume('mining.submit',['test.rig1',remote_notice[0],remote_nonce2,remote_notice[7],next_nonce])
++                trace['same_worker_after_conflict_submit']=after_conflict
++                if after_conflict.get('result') is not True:
++                    raise RuntimeError('same authenticated worker could not submit after rejected reauthorization')
++                report['checks']['identity_survives_conflicting_reauthorization']='PASS'
+                 resume.close();resume_sock.close();stream.close();sock.close()
+             elif variant == 'auth_contract':
+                 report['authorization_boundary']={}
+@@ -791,6 +808,21 @@ def main():
+         if os.environ.get('H_VARIANT')=='one_case' and stratum.returncode==0:
+             report['post_shutdown_counts']=sql('USE pool_l3_199h; SELECT (SELECT COUNT(*) FROM accepted_work),(SELECT COUNT(*) FROM share_rounds),(SELECT COUNT(*) FROM shares);')
+             report['post_shutdown_shares']=sql('USE pool_l3_199h; SELECT userid,workerid,valid,difficulty,error,round_id FROM shares;')
++        if os.environ.get('H_VARIANT')=='reconnect_true' and stratum.returncode==0:
++            final_shares=sql('USE pool_l3_199h; SELECT id,userid,workerid,coinid,jobid,valid,difficulty,error,round_id FROM shares ORDER BY id;')
++            report['reconnect_true']['post_shutdown_shares']=final_shares
++            report['reconnect_true']['post_shutdown_owner']=sql('USE pool_l3_199h; SELECT id,coin_id,algo,round_id,sequence,userid,workerid,state,header_hex FROM accepted_work;')
++            report['reconnect_true']['post_shutdown_candidates']=sql('USE pool_l3_199h; SELECT COUNT(*) FROM round_intents;')
++            rows=[row.split('\t') for row in final_shares.splitlines() if row]
++            local=[row for row in rows if len(row)==9 and row[3:5]==['1','0']]
++            remote=[row for row in rows if len(row)==9 and row[3:5]==['0','199']]
++            report['reconnect_true']['expected_remote_share_aggregation']='two accepted remote submits in one worker/job row'
++            if len(rows)!=2 or len(local)!=1 or len(remote)!=1 or \
++               any(row[1:3]!=['1',str(report['reconnect_true']['old_worker_id'])] or row[5]!='1' for row in rows) or \
++               not (1.8 < float(remote[0][6])/float(local[0][6]) < 2.2) or \
++               report['reconnect_true']['post_shutdown_owner']!=durable or report['reconnect_true']['post_shutdown_candidates']!='0':
++                raise RuntimeError('post-reconnect shares were not persisted under original authenticated owner')
++            report['checks']['post_reconnect_shares_persisted_under_original_worker']='PASS'
+         if stratum.returncode == -11:
+             report['classification']='FAIL'
+             report['core_backtrace']=core_trace()
+diff --git a/stratum/client.cpp b/stratum/client.cpp
+index afa0800..2216c0e 100644
+--- a/stratum/client.cpp
++++ b/stratum/client.cpp
+@@ -319,8 +319,9 @@ bool client_authorize(YAAMP_CLIENT *client, json_value *json_params)
+ 
+ 	if(g_list_client.Find(client)) {
+ 		clientlog(client, "Already logged");
+-		client_send_error(client, 21, "Already logged");
+-		return false;
++		// Keep the authorized session and its worker row intact after a
++		// conflicting reauthorization. A failed write still closes it.
++		return client_send_error(client, 21, "Already logged");
+ 	}
+ 
+ 	if(json_params->u.array.length>1 && json_params->u.array.values[1]->u.string.ptr)
+diff --git a/stratum/job.cpp b/stratum/job.cpp
+index 3653cc0..7ffb4fe 100644
+--- a/stratum/job.cpp
++++ b/stratum/job.cpp
+@@ -18,7 +18,8 @@ static bool job_assign_client(YAAMP_JOB *job, YAAMP_CLIENT *client, double maxha
+ 	RETURN_ON_CONDITION(client_find_job_history(client, job->id), true);
+ 	RETURN_ON_CONDITION(maxhash > 0 && job->speed + client->speed > maxhash, true);
+ 
+-	if(!g_autoexchange && maxhash >= 0. && client->coinid != job->coind->id) {
++	// Remote jobs have no coind. The coin restriction applies only to local jobs.
++	if(!job->remote && !g_autoexchange && maxhash >= 0. && client->coinid != job->coind->id) {
+ 		//debuglog("prevent client %c on %s, not the right coin\n",
+ 		//	client->username[0], job->coind->symbol);
+ 		return true;

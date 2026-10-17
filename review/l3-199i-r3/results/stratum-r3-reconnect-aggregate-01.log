@@ -1,0 +1,84 @@
+05:15:08: 2026-10-17 starting stratum for scrypt on 127.0.0.1:43319
+05:15:08: connecting to coind BAD
+05:15:10: R3 job order id=1 remote=0 profit=1005828.380585 maxspeed=143.165577 can_mine=1 free=0
+05:15:10: client mining.subscribe 1 null
+05:15:10: new client with nonce 81000001
+05:15:10: client mining.authorize 2 null
+05:15:10: new client test, x, l3-199h/1
+05:15:11: new user 1BadTest11111111111111111111111111 for coin BAD
+05:15:11: client mining.submit 3 null
+05:15:11: submit 127.0.0.1 (uid 1) 1, 00000000, t=6553f100, n=00000000, extra=
+05:15:11: POOL hash_hex=da213ba07f6a6c3af49fb96f7f6bae10c121c11c07e2a93c724b8e539d99a553
+05:15:11: POOL hash_be=53a5999d538e4b723ca9e2071cc121c110ae6b7f6fb99ff43a6c6a7fa03b21da
+05:15:11: POOL user_target=ffff000000000000
+05:15:11: POOL coin_target=0000ffff00000000
+05:15:11: 999d538e4b723ca9 actual
+05:15:11: ffff000000000000 target
+05:15:11: 0000ffff00000000 coin
+05:15:11: share_decision_diag algo=scrypt decision=PROCEED_TO_SUBMIT result=hash_target_gate_passed jobid=1 coinid=1 coin=BAD worker_uid=1 client_ip=127.0.0.1 difficulty=1.00000000 nbits=1d00ffff hash_int=999d538e4b723ca9 user_target=ffff000000000000 coin_target=0000ffff00000000 hash_gt_user_target=0 hash_gt_coin_target=1 share_diff=0.00000000
+05:15:11: share_decision_diag algo=scrypt decision=PROCEED_TO_CLIENT_DO_SUBMIT result=begin jobid=1 coinid=1 coin=BAD worker_uid=1 client_ip=127.0.0.1 difficulty=1.00000000 nbits=1d00ffff hash_int=999d538e4b723ca9 user_target=ffff000000000000 coin_target=0000ffff00000000 hash_gt_user_target=0 hash_gt_coin_target=1 share_diff=0.00000000
+05:15:11: share_decision_diag algo=scrypt decision=SUBMIT_RETURNED result=client_do_submit_returned jobid=1 coinid=1 coin=BAD worker_uid=1 client_ip=127.0.0.1 difficulty=1.00000000 nbits=1d00ffff hash_int=999d538e4b723ca9 user_target=ffff000000000000 coin_target=0000ffff00000000 hash_gt_user_target=0 hash_gt_coin_target=1 share_diff=0.00000000
+05:15:11: share_decision_diag algo=scrypt decision=SHARE_ADD_BEGIN result=valid_true jobid=1 coinid=1 coin=BAD worker_uid=1 client_ip=127.0.0.1 difficulty=1.00000000 nbits=1d00ffff hash_int=999d538e4b723ca9 user_target=ffff000000000000 coin_target=0000ffff00000000 hash_gt_user_target=0 hash_gt_coin_target=1 share_diff=1.00000000
+05:15:11: share_decision_diag algo=scrypt decision=SHARE_ADD_DONE result=reached_after_share_add jobid=1 coinid=1 coin=BAD worker_uid=1 client_ip=127.0.0.1 difficulty=1.00000000 nbits=1d00ffff hash_int=999d538e4b723ca9 user_target=ffff000000000000 coin_target=0000ffff00000000 hash_gt_user_target=0 hash_gt_coin_target=1 share_diff=1.00000000
+05:15:30: connecting to 127.0.0.1:43322 JOB199
+05:15:30: connected to 127.0.0.1:43322 JOB199
+05:15:30: R3 remote notify JOB199 status=4 nonce2=6 difficulty=1.000000
+05:15:30: R3 remote created job=0x7f4c0400c550 id=2 status=4
+05:15:30: R3 job order id=2 remote=1 profit=1000000000000.000000 maxspeed=1000000000000.000000 can_mine=1 free=1
+05:15:30: R3 remote assign entry job=2 uid=1 worker=1 next=0 locked=0 sent=1 reconnectable=1 extranonce_subscribe=0 maxhash=1000000000000.000000 client_speed=0.800513 job_speed=0.000000
+05:15:30: R3 remote extranonce changed job=2 old=81000001/4 new=aabbccdd00/5
+05:15:30: R3 remote assign entry job=2 uid=1 worker=1 next=2 locked=2 sent=2 reconnectable=1 extranonce_subscribe=0 maxhash=1000000000000.000000 client_speed=0.800513 job_speed=0.800513
+05:15:30: R3 remote assign entry job=2 uid=1 worker=1 next=2 locked=2 sent=2 reconnectable=1 extranonce_subscribe=0 maxhash=1000000000000.000000 client_speed=0.800513 job_speed=0.800513
+05:15:30: client mining.subscribe 4 null
+05:15:30: reconnecting client locked to 0
+05:15:30: new client with nonce aabbccdd00
+05:15:30: client mining.submit 5 null
+05:15:30: client mining.authorize 6 null
+05:15:30: new client test, x, l3-r2-actual-reconnect
+05:15:30: ntime warning: value 1700000000 (6553f100) offset 92228530 secs from uid 1
+05:15:30: new user test for coin BAD
+05:15:30: client mining.submit 7 null
+05:15:30: submit 127.0.0.1 (uid 1) 2, 0000000000, t=6ad33c9f, n=00000000, extra=
+05:15:30: POOL hash_hex=8f6507b158425b59bccbb5ffbb829ab1e8be04b57658e7182f13145c53a5db2c
+05:15:30: POOL hash_be=2cdba5535c14132f18e75876b504bee8b19a82bbffb5cbbc595b4258b107658f
+05:15:30: POOL user_target=ffff000000000000
+05:15:30: POOL coin_target=0000ffff00000000
+05:15:30: a5535c14132f18e7 actual
+05:15:30: ffff000000000000 target
+05:15:30: 0000ffff00000000 coin
+05:15:30: share_decision_diag algo=scrypt decision=PROCEED_TO_SUBMIT result=hash_target_gate_passed jobid=2 coinid=0 coin=- worker_uid=1 client_ip=127.0.0.1 difficulty=1.00000000 nbits=1d00ffff hash_int=a5535c14132f18e7 user_target=ffff000000000000 coin_target=0000ffff00000000 hash_gt_user_target=0 hash_gt_coin_target=1 share_diff=0.00000000
+05:15:30: share_decision_diag algo=scrypt decision=PROCEED_TO_REMOTE_SUBMIT result=begin jobid=2 coinid=0 coin=- worker_uid=1 client_ip=127.0.0.1 difficulty=1.00000000 nbits=1d00ffff hash_int=a5535c14132f18e7 user_target=ffff000000000000 coin_target=0000ffff00000000 hash_gt_user_target=0 hash_gt_coin_target=1 share_diff=0.00000000
+05:15:30: share_decision_diag algo=scrypt decision=SUBMIT_RETURNED result=remote_submit_returned jobid=2 coinid=0 coin=- worker_uid=1 client_ip=127.0.0.1 difficulty=1.00000000 nbits=1d00ffff hash_int=a5535c14132f18e7 user_target=ffff000000000000 coin_target=0000ffff00000000 hash_gt_user_target=0 hash_gt_coin_target=1 share_diff=0.00000000
+05:15:30: share_decision_diag algo=scrypt decision=SHARE_ADD_BEGIN result=valid_true jobid=2 coinid=0 coin=- worker_uid=1 client_ip=127.0.0.1 difficulty=1.00000000 nbits=1d00ffff hash_int=a5535c14132f18e7 user_target=ffff000000000000 coin_target=0000ffff00000000 hash_gt_user_target=0 hash_gt_coin_target=1 share_diff=1.00000000
+05:15:30: share_decision_diag algo=scrypt decision=SHARE_ADD_DONE result=reached_after_share_add jobid=2 coinid=0 coin=- worker_uid=1 client_ip=127.0.0.1 difficulty=1.00000000 nbits=1d00ffff hash_int=a5535c14132f18e7 user_target=ffff000000000000 coin_target=0000ffff00000000 hash_gt_user_target=0 hash_gt_coin_target=1 share_diff=1.00000000
+05:15:31: R3 job order id=2 remote=1 profit=1000000000000.000000 maxspeed=1000000000000.000000 can_mine=1 free=1
+05:15:31: R3 remote assign entry job=2 uid=1 worker=1 next=0 locked=2 sent=2 reconnectable=1 extranonce_subscribe=0 maxhash=1000000000000.000000 client_speed=0.800513 job_speed=0.000000
+05:15:31: R3 remote assign entry job=2 uid=1 worker=1 next=0 locked=2 sent=2 reconnectable=1 extranonce_subscribe=0 maxhash=1000000000000.000000 client_speed=0.801154 job_speed=0.000000
+05:15:31: R3 remote assign entry job=2 uid=1 worker=1 next=0 locked=2 sent=2 reconnectable=1 extranonce_subscribe=0 maxhash=1000000000000.000000 client_speed=0.800513 job_speed=0.801154
+05:15:31: R3 remote assign entry job=2 uid=1 worker=1 next=2 locked=2 sent=2 reconnectable=1 extranonce_subscribe=0 maxhash=1000000000000.000000 client_speed=0.801154 job_speed=0.801154
+05:15:31: R3 remote assign entry job=2 uid=1 worker=1 next=0 locked=2 sent=2 reconnectable=1 extranonce_subscribe=0 maxhash=1000000000000.000000 client_speed=0.800513 job_speed=0.801154
+05:15:31: R3 remote assign entry job=2 uid=1 worker=1 next=2 locked=2 sent=2 reconnectable=1 extranonce_subscribe=0 maxhash=1000000000000.000000 client_speed=0.801154 job_speed=0.801154
+05:15:31: R3 job order id=1 remote=0 profit=1005828.380585 maxspeed=143.165577 can_mine=1 free=1
+05:15:31: BAD 102 - diff 1.000000000 job 1 to 1/1/2 clients, hash 0.801/143.166 in 0.0 ms
+05:15:32: client mining.submit 8 null
+05:15:32: client mining.authorize 9 null
+2026-10-17 05:15:32 [127.0.0.1] test, scrypt, Already logged
+05:15:32: client mining.submit 10 null
+05:15:32: submit 127.0.0.1 (uid 1) 2, 0000000000, t=6ad33c9f, n=00000001, extra=
+05:15:32: POOL hash_hex=54fb58785a30d7c5501a3c5033d1a20687634c3cfe5a7d0744b9261a111bf62b
+05:15:32: POOL hash_be=2bf61b111a26b944077d5afe3c4c638706a2d133503c1a50c5d7305a7858fb54
+05:15:32: POOL user_target=ffff000000000000
+05:15:32: POOL coin_target=0000ffff00000000
+05:15:32: 1b111a26b944077d actual
+05:15:32: ffff000000000000 target
+05:15:32: 0000ffff00000000 coin
+05:15:32: share_decision_diag algo=scrypt decision=PROCEED_TO_SUBMIT result=hash_target_gate_passed jobid=2 coinid=0 coin=- worker_uid=1 client_ip=127.0.0.1 difficulty=1.00000000 nbits=1d00ffff hash_int=1b111a26b944077d user_target=ffff000000000000 coin_target=0000ffff00000000 hash_gt_user_target=0 hash_gt_coin_target=1 share_diff=0.00000000
+05:15:32: share_decision_diag algo=scrypt decision=PROCEED_TO_REMOTE_SUBMIT result=begin jobid=2 coinid=0 coin=- worker_uid=1 client_ip=127.0.0.1 difficulty=1.00000000 nbits=1d00ffff hash_int=1b111a26b944077d user_target=ffff000000000000 coin_target=0000ffff00000000 hash_gt_user_target=0 hash_gt_coin_target=1 share_diff=0.00000000
+05:15:32: share_decision_diag algo=scrypt decision=SUBMIT_RETURNED result=remote_submit_returned jobid=2 coinid=0 coin=- worker_uid=1 client_ip=127.0.0.1 difficulty=1.00000000 nbits=1d00ffff hash_int=1b111a26b944077d user_target=ffff000000000000 coin_target=0000ffff00000000 hash_gt_user_target=0 hash_gt_coin_target=1 share_diff=0.00000000
+05:15:32: share_decision_diag algo=scrypt decision=SHARE_ADD_BEGIN result=valid_true jobid=2 coinid=0 coin=- worker_uid=1 client_ip=127.0.0.1 difficulty=1.00000000 nbits=1d00ffff hash_int=1b111a26b944077d user_target=ffff000000000000 coin_target=0000ffff00000000 hash_gt_user_target=0 hash_gt_coin_target=1 share_diff=9.00000000
+05:15:32: share_decision_diag algo=scrypt decision=SHARE_ADD_DONE result=reached_after_share_add jobid=2 coinid=0 coin=- worker_uid=1 client_ip=127.0.0.1 difficulty=1.00000000 nbits=1d00ffff hash_int=1b111a26b944077d user_target=ffff000000000000 coin_target=0000ffff00000000 hash_gt_user_target=0 hash_gt_coin_target=1 share_diff=9.00000000
+05:15:32: client terminate
+05:15:32: client terminate
+05:15:33: 2026-10-17 scrypt graceful shutdown: stopping legacy share acceptance
+05:15:33: 2026-10-17 STRATUM_DRAIN_COMPLETE algo=scrypt persisted_worker_records=1 pending_after=0
+05:15:33: closing database...

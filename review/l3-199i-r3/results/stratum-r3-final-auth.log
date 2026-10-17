@@ -1,0 +1,22 @@
+05:17:43: 2026-10-17 starting stratum for scrypt on 127.0.0.1:43319
+05:17:43: connecting to coind BAD
+05:17:46: new user 1BadTest11111111111111111111111111 for coin BAD
+05:17:46: submit 127.0.0.1 (uid 1) 1, 00000000, t=6553f100, n=00000000, extra=
+05:17:46: POOL hash_hex=829791b3c2f4beae982aac29488edef657bee036ad0e14393e5f791170b34c90
+05:17:46: POOL hash_be=904cb37011795f3e39140ead36e0be57f6de8e4829ac2a98aebef4c2b3919782
+05:17:46: POOL user_target=ffff000000000000
+05:17:46: POOL coin_target=0000ffff00000000
+05:17:46: b37011795f3e3914 actual
+05:17:46: ffff000000000000 target
+05:17:46: 0000ffff00000000 coin
+05:17:46: share_decision_diag algo=scrypt decision=PROCEED_TO_SUBMIT result=hash_target_gate_passed jobid=1 coinid=1 coin=BAD worker_uid=1 client_ip=127.0.0.1 difficulty=1.00000000 nbits=1d00ffff hash_int=b37011795f3e3914 user_target=ffff000000000000 coin_target=0000ffff00000000 hash_gt_user_target=0 hash_gt_coin_target=1 share_diff=0.00000000
+05:17:46: share_decision_diag algo=scrypt decision=PROCEED_TO_CLIENT_DO_SUBMIT result=begin jobid=1 coinid=1 coin=BAD worker_uid=1 client_ip=127.0.0.1 difficulty=1.00000000 nbits=1d00ffff hash_int=b37011795f3e3914 user_target=ffff000000000000 coin_target=0000ffff00000000 hash_gt_user_target=0 hash_gt_coin_target=1 share_diff=0.00000000
+05:17:46: share_decision_diag algo=scrypt decision=SUBMIT_RETURNED result=client_do_submit_returned jobid=1 coinid=1 coin=BAD worker_uid=1 client_ip=127.0.0.1 difficulty=1.00000000 nbits=1d00ffff hash_int=b37011795f3e3914 user_target=ffff000000000000 coin_target=0000ffff00000000 hash_gt_user_target=0 hash_gt_coin_target=1 share_diff=0.00000000
+05:17:46: share_decision_diag algo=scrypt decision=SHARE_ADD_BEGIN result=valid_true jobid=1 coinid=1 coin=BAD worker_uid=1 client_ip=127.0.0.1 difficulty=1.00000000 nbits=1d00ffff hash_int=b37011795f3e3914 user_target=ffff000000000000 coin_target=0000ffff00000000 hash_gt_user_target=0 hash_gt_coin_target=1 share_diff=1.00000000
+05:17:46: share_decision_diag algo=scrypt decision=SHARE_ADD_DONE result=reached_after_share_add jobid=1 coinid=1 coin=BAD worker_uid=1 client_ip=127.0.0.1 difficulty=1.00000000 nbits=1d00ffff hash_int=b37011795f3e3914 user_target=ffff000000000000 coin_target=0000ffff00000000 hash_gt_user_target=0 hash_gt_coin_target=1 share_diff=1.00000000
+2026-10-17 05:17:46 [127.0.0.1] 1BadTest11111111111111111111111111, scrypt, Already logged
+2026-10-17 05:17:46 [127.0.0.1] 1BadTest11111111111111111111111111, scrypt, Already logged
+05:17:47: 2026-10-17 scrypt graceful shutdown: stopping legacy share acceptance
+05:17:47: ntime warning: value 1700000000 (6553f100) offset 92228667 secs from uid 1
+05:17:47: 2026-10-17 STRATUM_DRAIN_COMPLETE algo=scrypt persisted_worker_records=1 pending_after=0
+05:17:47: closing database...
