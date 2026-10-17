@@ -21,12 +21,19 @@ import sys
 import tempfile
 import threading
 import time
+from datetime import datetime, timezone
 
 SOURCE = Path(__file__).resolve().parents[2]
-OUT = SOURCE/'review/l3-199i-r1/results'
+OUT = SOURCE/'review/l3-199i-r2/results'
+RUN_ID = os.environ.get('R2_RUN_ID',f'run-{os.getpid()}-{time.time_ns()}')
+if not re.fullmatch(r'[A-Za-z0-9_-]{1,64}',RUN_ID):
+    raise SystemExit('invalid R2_RUN_ID')
 BIN = Path('/mnt/d/BAD/BadConeGit/yiimp-badpool/.worktrees/production-authoritative-reconciliation-evidence/l3-199c-mariadb-bin')
 PORT_DB, PORT_RPC, PORT_STRATUM = 43317, 43318, 43319
-report = {'task': 'POOL-L3.199I-R1', 'classification': 'PARTIAL', 'source_commit': os.environ.get('I_SOURCE_COMMIT', ''), 'checks': {}, 'migrations': []}
+report = {'task': 'POOL-L3.199I-R2', 'classification': 'PARTIAL',
+          'source_commit': os.environ.get('I_SOURCE_COMMIT', ''), 'checks': {}, 'migrations': [],
+          'attempt': {'id':RUN_ID,'concurrency_level':int(os.environ.get('R2_CONCURRENCY','1')),
+                      'started_utc':datetime.now(timezone.utc).isoformat()}}
 children = []
 
 def run(cmd, data=None, check=True, timeout=120):
@@ -96,7 +103,9 @@ def main():
                                   'fixed_unix_time':1700000000,'scope':'initial and commit-ack restart Stratum only'}
         else:
             report['test_clock']={'mode':'normal','scope':'all Stratum processes'}
-        data = root/'db-data'; dbsock = root/'db.sock'; db_log = root/'mariadb.log'
+        data = root/'db-data'; dbsock = root/'db.sock'; db_log = OUT/f'mariadb-{RUN_ID}.log'
+        report['attempt']['fixture_root']=str(root)
+        report['attempt']['mariadb_error_log_path']=str(db_log)
         run([BIN/'mariadb-install-db','--no-defaults',f'--datadir={data}',
              '--auth-root-authentication-method=normal','--skip-test-db','--user=root'])
         with db_log.open('w') as log:
@@ -105,6 +114,7 @@ def main():
                 f'--port={PORT_DB}','--user=root','--innodb-flush-log-at-trx-commit=1'],
                 stdout=log,stderr=log)
         children.append(server)
+        report['attempt']['mariadb_pid']=server.pid
         wait_file(dbsock,server)
         client = [BIN/'mariadb','--no-defaults',f'--socket={dbsock}','-uroot','--batch','--skip-column-names']
         def sql(s): return run(client,data=s,timeout=120).stdout.strip()
@@ -218,14 +228,54 @@ def main():
                 except (BrokenPipeError,ConnectionResetError):pass
         httpd=http.server.ThreadingHTTPServer(('127.0.0.1',PORT_RPC),Rpc)
         thread=threading.Thread(target=httpd.serve_forever,daemon=True);thread.start()
+        upstream_server=None
+        upstream_fixture={'job':None,'ready':threading.Event()}
+        if os.environ.get('H_VARIANT')=='reconnect_true':
+            class Upstream(socketserver.BaseRequestHandler):
+                def handle(self):
+                    wire=self.request.makefile('rwb',buffering=0)
+                    def send(value):
+                        wire.write((json.dumps(value)+'\n').encode())
+                        report.setdefault('upstream_responses',[]).append(value)
+                    try:
+                        while True:
+                            raw=wire.readline()
+                            if not raw:break
+                            request=json.loads(raw)
+                            report.setdefault('upstream_requests',[]).append(request)
+                            method=request.get('method')
+                            if method=='mining.subscribe':
+                                send({'id':request['id'],'result':[[['mining.notify','upstream-session']],
+                                     'aabbccdd',6],'error':None})
+                            elif method=='mining.authorize':
+                                send({'id':request['id'],'result':True,'error':None})
+                            elif method=='mining.extranonce.subscribe':
+                                send({'id':request['id'],'result':True,'error':None})
+                                if not upstream_fixture['ready'].wait(25):break
+                                send({'id':None,'method':'mining.set_difficulty','params':[1]})
+                                send({'id':None,'method':'mining.notify','params':upstream_fixture['job']})
+                            elif method=='mining.submit':
+                                send({'id':request['id'],'result':True,'error':None})
+                    except (BrokenPipeError,ConnectionResetError,OSError):
+                        pass
+                    finally:
+                        wire.close()
+            class UpstreamServer(socketserver.ThreadingTCPServer):
+                allow_reuse_address=True
+                daemon_threads=True
+            upstream_server=UpstreamServer(('127.0.0.1',43322),Upstream)
+            threading.Thread(target=upstream_server.serve_forever,daemon=True).start()
         cfg=root/'scrypt.conf'
         sql_port=43321 if os.environ.get('H_VARIANT')=='commit_ack' else PORT_DB
+        renting=1 if os.environ.get('H_VARIANT')=='reconnect_true' else 0
         cfg.write_text(f'[TCP]\nserver = 127.0.0.1\nport = {PORT_STRATUM}\npassword = isolated-only\n'
             f'[SQL]\nhost = 127.0.0.1\nport = {sql_port}\ndatabase = pool_l3_199h\n'
             'username = stratum_h\npassword = disposable-only\n'
             '[STRATUM]\nalgo = scrypt\ndifficulty = 1\ndiff_min = 1\n'
-            'diff_max = 1\ndurable_rounds = 1\nrenting = 0\n[DEBUGLOG]\nhash = 1\n')
-        logpath=root/'stratum.log'
+            f'diff_max = 1\ndurable_rounds = 1\nrenting = {renting}\n[DEBUGLOG]\nhash = 1\n'
+            f'client = {renting}\nremote = {renting}\n')
+        logpath=OUT/f'stratum-{RUN_ID}.log'
+        report['attempt']['stratum_log_path']=str(logpath)
         def enable_core():
             resource.setrlimit(resource.RLIMIT_CORE,(512*1024*1024,512*1024*1024))
         def core_trace():
@@ -237,6 +287,7 @@ def main():
         with logpath.open('w') as log:
             stratum=subprocess.Popen([str(binary),'scrypt'],cwd=root,stdout=log,stderr=log,preexec_fn=enable_core,env=stratum_env)
         children.append(stratum)
+        report['attempt']['stratum_pid']=stratum.pid
         sock=None
         for _ in range(100):
             if stratum.poll() is not None: break
@@ -245,8 +296,17 @@ def main():
             except OSError: time.sleep(.2)
         report['stratum_exit']=stratum.poll()
         if not sock:
-            report['startup_log']=logpath.read_text(errors='replace')[-5000:]
+            report['startup_log']=logpath.read_text(errors='replace')
             report['startup_debug_log']=(root/'scrypt.log').read_text(errors='replace')[-5000:] if (root/'scrypt.log').exists() else ''
+            report['mariadb_error_log']=db_log.read_text(errors='replace') if db_log.exists() else 'missing'
+            guard_lines=[line for line in report['startup_log'].splitlines() if 'BADPOOL_ROUND_SCHEMA_REFUSED' in line]
+            report['guard_failure_log_lines']=guard_lines
+            if guard_lines:
+                match=re.search(r'phase=(\S+) error=(\d+) sqlstate=(\S+) detail=(.*)',guard_lines[-1])
+                if match:
+                    report['guard_call_failure']={'phase':match[1],'mysql_errno':int(match[2]),
+                                                  'sqlstate':match[3],'mysql_error':match[4]}
+            report['attempt']['stratum_exit_before_cleanup']=stratum.poll()
             raise RuntimeError('isolated Stratum did not open its expected listener')
         if sock:
             report['checks']['listener_reached_inside_namespace']='PASS'
@@ -423,6 +483,124 @@ def main():
                     raise RuntimeError('STOP: database outage did not close only the miner session')
                 report['checks']['database_outage_session_closed']='PASS'
                 stream.close();sock.close()
+            elif variant == 'guard_startup':
+                stream.close();sock.close()
+            elif variant == 'reconnect_true':
+                trace=report['reconnect_true']={'old_notify_id':subscribed['result'][0][1][1],
+                    'old_worker_id':int(durable.split('\t')[6]),'original_owner':durable}
+                before_workers=sql('USE pool_l3_199h; SELECT id,userid,name,worker FROM workers ORDER BY id;')
+                upstream_job=list(job);upstream_job[0]='upstream1'
+                upstream_job[7]=f'{int(time.time()):08x}'
+                upstream_fixture['job']=upstream_job
+                sql("USE pool_l3_199h; INSERT INTO jobs(id,ready,active,time,price,speed,difficulty,algo,host,port,username,password) "
+                    "VALUES(199,1,1,UNIX_TIMESTAMP(),1000,1000000000000,1,'scrypt','127.0.0.1',43322,'synthetic-upstream','fake');")
+                upstream_fixture['ready'].set()
+                trace['remote_job_fixture']=upstream_job
+                trace['remote_row']=sql('USE pool_l3_199h; SELECT id,ready,active,algo,host,port FROM jobs WHERE id=199;')
+                sock.settimeout(None)
+                deadline=time.monotonic()+38
+                while time.monotonic()<deadline:
+                    if not select.select([sock],[],[],max(0,deadline-time.monotonic()))[0]:break
+                    raw=stream.readline()
+                    if not raw:break
+                    event=json.loads(raw);report['miner_responses'].append(event)
+                    if event.get('method')=='client.reconnect':
+                        trace['reconnect_message']=event
+                        break
+                if 'reconnect_message' not in trace:
+                    trace['debug_log']=(root/'scrypt.log').read_text(errors='replace')[-8000:]
+                    trace['stratum_exit_before_cleanup']=stratum.poll()
+                    if stratum.poll() is not None:
+                        report['classification']='FAIL'
+                        trace['core_backtrace']=core_trace()
+                    raise RuntimeError('fixture did not reach actual client.reconnect path')
+                report['checks']['actual_reconnecting_true_triggered']='PASS'
+                resume_sock=socket.create_connection(('127.0.0.1',PORT_STRATUM),timeout=4)
+                resume_sock.settimeout(5);resume=resume_sock.makefile('rwb',buffering=0)
+                def send_resume(method,params):
+                    request={'id':len(report['miner_requests'])+1,'method':method,'params':params}
+                    report['miner_requests'].append(request)
+                    resume.write((json.dumps(request)+'\n').encode())
+                    for _ in range(16):
+                        raw=resume.readline()
+                        if not raw:raise RuntimeError('resumed connection closed before reply')
+                        value=json.loads(raw);report['miner_responses'].append(value)
+                        if value.get('id')==request['id']:return value
+                    raise RuntimeError(f'no reply to {method} on resumed session')
+                resumed=send_resume('mining.subscribe',['l3-r2-actual-reconnect',trace['old_notify_id']])
+                trace['subscribe_response']=resumed
+                if resumed.get('result',[None,None])[1]!='aabbccdd00':
+                    raise RuntimeError('reconnect did not inherit upstream extranonce')
+                inherited_log=(root/'scrypt.log').read_text(errors='replace')
+                trace['true_branch_log']=[line for line in inherited_log.splitlines() if 'reconnecting client locked' in line]
+                if not trace['true_branch_log']:
+                    raise RuntimeError('true reconnect identity-inheritance branch not observed')
+                before_auth_wrong=send_resume('mining.submit',['test.other',job[0],nonce2,job[7],nonce])
+                trace['wrong_claim_before_reauthorization']=before_auth_wrong
+                if before_auth_wrong.get('result') is not False or before_auth_wrong.get('error',[None])[0]!=24:
+                    raise RuntimeError('inherited identity did not reject conflicting submit before authorize')
+                if sql('USE pool_l3_199h; SELECT id,userid,name,worker FROM workers ORDER BY id;')!=before_workers or \
+                   sql('USE pool_l3_199h; SELECT id,coin_id,algo,round_id,sequence,userid,workerid,state,header_hex FROM accepted_work;')!=durable:
+                    raise RuntimeError('conflicting inherited identity changed worker or owner')
+                report['checks']['inherited_worker_rejects_claim_before_authorize']='PASS'
+                same_auth=send_resume('mining.authorize',['test.rig1','x'])
+                trace['same_worker_authorization']=same_auth
+                if same_auth.get('result') is not True or \
+                   sql('USE pool_l3_199h; SELECT id,userid,name,worker FROM workers ORDER BY id;')!=before_workers:
+                    raise RuntimeError('same worker did not authorize with inherited worker row')
+                report['checks']['inherited_same_worker_authorizes']='PASS'
+                remote_notice=None
+                for _ in range(12):
+                    raw=resume.readline()
+                    if not raw:break
+                    event=json.loads(raw);report['miner_responses'].append(event)
+                    if event.get('method')=='mining.notify':
+                        remote_notice=event['params'];break
+                if not remote_notice:raise RuntimeError('resumed session received no remote job')
+                trace['remote_job_received']=remote_notice
+                remote_nonce1=resumed['result'][1]
+                remote_nonce2='00'*resumed['result'][2]
+                remote_coinbase=bytes.fromhex(remote_notice[2]+remote_nonce1+remote_nonce2+remote_notice[3])
+                remote_merkle=hashlib.sha256(hashlib.sha256(remote_coinbase).digest()).digest()
+                remote_prefix=swap_words(remote_notice[5]+remote_notice[1]+swap_words(remote_merkle.hex()).hex()+remote_notice[7]+remote_notice[6])
+                for remote_candidate in range(10000):
+                    remote_nonce=f'{remote_candidate:08x}'
+                    remote_header=remote_prefix+swap_words(remote_nonce)
+                    remote_digest=hashlib.scrypt(remote_header,salt=remote_header,n=1024,r=1,p=1,dklen=32)
+                    remote_target=int.from_bytes(remote_digest[22:30],'little')
+                    if 0x0000ffff00000000 < remote_target <= 0xffff000000000000:break
+                else:raise RuntimeError('no valid non-candidate remote Scrypt share')
+                normal_submit=send_resume('mining.submit',['test.rig1',remote_notice[0],remote_nonce2,remote_notice[7],remote_nonce])
+                trace['same_worker_submit']=normal_submit
+                if normal_submit.get('result') is not True:
+                    raise RuntimeError('inherited same worker could not submit normally')
+                report['checks']['inherited_same_worker_submits']='PASS'
+                time.sleep(2)
+                def accounting_rows():
+                    return {'owner':sql('USE pool_l3_199h; SELECT id,coin_id,algo,round_id,sequence,userid,workerid,state,header_hex FROM accepted_work;'),
+                        'workers':sql('USE pool_l3_199h; SELECT id,userid,name,worker FROM workers ORDER BY id;'),
+                        'counts':sql(f'USE pool_l3_199h; SELECT (SELECT COUNT(*) FROM shares),(SELECT COUNT(*) FROM earnings),(SELECT COUNT(*) FROM round_intents),'
+                            f'(SELECT COUNT(*) FROM shares WHERE workerid<>{trace["old_worker_id"]});')}
+                accepted_baseline=accounting_rows()
+                trace['after_valid_accounting']=accepted_baseline
+                if accepted_baseline['owner']!=durable or accepted_baseline['workers']!=before_workers or \
+                   accepted_baseline['counts'].split('\t')[-1]!='0':
+                    raise RuntimeError('remote valid share changed BAD durable owner or worker identity')
+                wrong=send_resume('mining.submit',['test.other',remote_notice[0],remote_nonce2,remote_notice[7],remote_nonce])
+                trace['wrong_claim_response']=wrong
+                trace['after_wrong_claim_accounting']=accounting_rows()
+                if wrong.get('result') is not False or wrong.get('error',[None])[0]!=24 or \
+                   trace['after_wrong_claim_accounting']!=accepted_baseline:
+                    raise RuntimeError('conflicting submit changed inherited identity or accounting')
+                report['checks']['reconnected_wrong_worker_no_accounting']='PASS'
+                conflict=send_resume('mining.authorize',['test.other','x'])
+                trace['conflicting_reauthorization']=conflict
+                trace['after_conflicting_authorization_accounting']=accounting_rows()
+                if conflict.get('result') is not False or conflict.get('error',[None])[0]!=21 or \
+                   trace['after_conflicting_authorization_accounting']!=accepted_baseline:
+                    raise RuntimeError('conflicting reauthorization changed inherited identity or accounting')
+                report['checks']['reconnected_reauthorization_no_accounting']='PASS'
+                resume.close();resume_sock.close();stream.close();sock.close()
             elif variant == 'auth_contract':
                 report['authorization_boundary']={}
                 baseline={
@@ -581,7 +759,7 @@ def main():
                 if not any(x.get('method')=='mining.notify' for x in replies):
                     raise RuntimeError(f'no job for {tag}')
                 return new_sock,new_stream,next(x['params'] for x in replies if x.get('method')=='mining.notify')
-            if variant not in ('guard_restore','one_case','db_down','rpc_reject','rpc_timeout','commit_ack','auth_contract'):
+            if variant not in ('guard_restore','guard_startup','reconnect_true','one_case','db_down','rpc_reject','rpc_timeout','commit_ack','auth_contract'):
                 for case,tag in [('malformed_nonce','rig2'),('stale_job','rig3'),('wrong_worker','rig4')]:
                     new_sock,stream,new_job=new_miner(tag)
                     if case=='malformed_nonce': params=[f'test.{tag}',new_job[0],nonce2,new_job[7],'xx']
@@ -776,6 +954,8 @@ def main():
             require_exit(restored_stratum,0,'restored Stratum')
             report['checks']['restored_process_expected_exit']='PASS'
         httpd.shutdown();httpd.server_close()
+        if upstream_server:
+            upstream_server.shutdown();upstream_server.server_close()
         if proxy_server:
             proxy_server.shutdown();proxy_server.server_close()
     acceptable_exit = (1,) if os.environ.get('H_VARIANT')=='db_down' else (0,)
@@ -799,12 +979,9 @@ if __name__=='__main__':
                 try: child.wait(timeout=8)
                 except subprocess.TimeoutExpired: child.kill();child.wait()
         OUT.mkdir(parents=True,exist_ok=True)
-        (OUT/'result.json').write_text(json.dumps(report,indent=2,default=str)+'\n')
-        variant=os.environ.get('H_VARIANT','duplicate')
-        case=os.environ.get('H_CASE','')
-        mutation=os.environ.get('H_GUARD_MUTATION','')
-        suffix='-'+case if case else ('-'+mutation if mutation else '')
-        (OUT/f'result-{variant}{suffix}.json').write_text(json.dumps(report,indent=2,default=str)+'\n')
+        report['attempt']['finished_utc']=datetime.now(timezone.utc).isoformat()
+        with (OUT/f'result-{RUN_ID}.json').open('x') as result_file:
+            result_file.write(json.dumps(report,indent=2,default=str)+'\n')
         print(json.dumps({'classification':report['classification'],'error':report.get('error'),
                           'checks':report['checks'],'migrations':len(report['migrations'])}))
     sys.exit(code)

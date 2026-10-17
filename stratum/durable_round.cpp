@@ -42,23 +42,29 @@ std::string num(unsigned long long n) { return std::to_string(n); }
 // MariaDB 10.11 guard migration. The definer procedure has metadata visibility;
 // the Stratum SQL user needs only EXECUTE, not TRIGGER or schema DDL privilege.
 const char *kSchemaGuardDefinition = "12e0d439aa5a29f1256e2de1c894f77459ca7b3ba675e776c5578cf4ef659034";
+void log_schema_guard_db_error(YAAMP_DB *db,const char *phase) {
+ stratumlog("BADPOOL_ROUND_SCHEMA_REFUSED phase=%s error=%u sqlstate=%s detail=%s\n",
+  phase,mysql_errno(&db->mysql),mysql_sqlstate(&db->mysql),mysql_error(&db->mysql));
+}
 bool schema_guard(YAAMP_DB *db) {
  if(mysql_query(&db->mysql,"CALL round_schema_assert()")) {
-  stratumlog("BADPOOL_ROUND_SCHEMA_REFUSED error=%u\n",mysql_errno(&db->mysql));
+  log_schema_guard_db_error(db,"call");
   return false;
  }
  MYSQL_RES *result=mysql_store_result(&db->mysql);
- if(!result) return false;
+ if(!result) { log_schema_guard_db_error(db,"store_result"); return false; }
  MYSQL_ROW value=mysql_fetch_row(result);
  bool valid=mysql_num_fields(result)==1 && value && value[0] &&
   !strcmp(value[0],kSchemaGuardDefinition) && mysql_fetch_row(result)==NULL &&
   mysql_errno(&db->mysql)==0;
  mysql_free_result(result);
  while(mysql_more_results(&db->mysql)) {
-  if(mysql_next_result(&db->mysql)>0) return false;
+  if(mysql_next_result(&db->mysql)>0) { log_schema_guard_db_error(db,"next_result"); return false; }
   result=mysql_store_result(&db->mysql);
   if(result) { valid=false; mysql_free_result(result); }
-  else if(mysql_field_count(&db->mysql)!=0 || mysql_errno(&db->mysql)!=0) return false;
+  else if(mysql_field_count(&db->mysql)!=0 || mysql_errno(&db->mysql)!=0) {
+   log_schema_guard_db_error(db,"trailing_result"); return false;
+  }
  }
  if(!valid) stratumlog("BADPOOL_ROUND_SCHEMA_REFUSED reason=guard_definition_or_result_mismatch\n");
  return valid;
