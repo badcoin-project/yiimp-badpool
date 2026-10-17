@@ -540,12 +540,23 @@ def main():
                 trace['true_branch_log']=[line for line in inherited_log.splitlines() if 'reconnecting client locked' in line]
                 if not trace['true_branch_log']:
                     raise RuntimeError('true reconnect identity-inheritance branch not observed')
+                def accounting_rows():
+                    return {'owner':sql('USE pool_l3_199h; SELECT id,coin_id,algo,round_id,sequence,userid,workerid,state,header_hex FROM accepted_work;'),
+                        'workers':sql('USE pool_l3_199h; SELECT id,userid,name,worker FROM workers ORDER BY id;'),
+                        'shares':sql('USE pool_l3_199h; SELECT id,userid,workerid,coinid,jobid,valid,difficulty,error,round_id FROM shares ORDER BY id;'),
+                        'earnings':sql('USE pool_l3_199h; SELECT * FROM earnings ORDER BY id;'),
+                        'candidates':sql('USE pool_l3_199h; SELECT * FROM round_intents ORDER BY id;'),
+                        'counts':sql(f'USE pool_l3_199h; SELECT (SELECT COUNT(*) FROM shares),(SELECT COUNT(*) FROM earnings),(SELECT COUNT(*) FROM round_intents),'
+                            f'(SELECT COUNT(*) FROM shares WHERE workerid<>{trace["old_worker_id"]});')}
+                trace['before_inherited_wrong_submit_accounting']=accounting_rows()
                 before_auth_wrong=send_resume('mining.submit',['test.other',job[0],nonce2,job[7],nonce])
                 trace['wrong_claim_before_reauthorization']=before_auth_wrong
+                trace['after_inherited_wrong_submit_accounting']=accounting_rows()
                 if before_auth_wrong.get('result') is not False or before_auth_wrong.get('error',[None])[0]!=24:
                     raise RuntimeError('inherited identity did not reject conflicting submit before authorize')
-                if sql('USE pool_l3_199h; SELECT id,userid,name,worker FROM workers ORDER BY id;')!=before_workers or \
-                   sql('USE pool_l3_199h; SELECT id,coin_id,algo,round_id,sequence,userid,workerid,state,header_hex FROM accepted_work;')!=durable:
+                if trace['after_inherited_wrong_submit_accounting']!=trace['before_inherited_wrong_submit_accounting'] or \
+                   trace['after_inherited_wrong_submit_accounting']['workers']!=before_workers or \
+                   trace['after_inherited_wrong_submit_accounting']['owner']!=durable:
                     raise RuntimeError('conflicting inherited identity changed worker or owner')
                 report['checks']['inherited_worker_rejects_claim_before_authorize']='PASS'
                 same_auth=send_resume('mining.authorize',['test.rig1','x'])
@@ -581,11 +592,6 @@ def main():
                     raise RuntimeError('inherited same worker could not submit normally')
                 report['checks']['inherited_same_worker_submits']='PASS'
                 time.sleep(2)
-                def accounting_rows():
-                    return {'owner':sql('USE pool_l3_199h; SELECT id,coin_id,algo,round_id,sequence,userid,workerid,state,header_hex FROM accepted_work;'),
-                        'workers':sql('USE pool_l3_199h; SELECT id,userid,name,worker FROM workers ORDER BY id;'),
-                        'counts':sql(f'USE pool_l3_199h; SELECT (SELECT COUNT(*) FROM shares),(SELECT COUNT(*) FROM earnings),(SELECT COUNT(*) FROM round_intents),'
-                            f'(SELECT COUNT(*) FROM shares WHERE workerid<>{trace["old_worker_id"]});')}
                 accepted_baseline=accounting_rows()
                 trace['after_valid_accounting']=accepted_baseline
                 if accepted_baseline['owner']!=durable or accepted_baseline['workers']!=before_workers or \
