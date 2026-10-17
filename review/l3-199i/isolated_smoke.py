@@ -809,12 +809,17 @@ def main():
             report['post_shutdown_counts']=sql('USE pool_l3_199h; SELECT (SELECT COUNT(*) FROM accepted_work),(SELECT COUNT(*) FROM share_rounds),(SELECT COUNT(*) FROM shares);')
             report['post_shutdown_shares']=sql('USE pool_l3_199h; SELECT userid,workerid,valid,difficulty,error,round_id FROM shares;')
         if os.environ.get('H_VARIANT')=='reconnect_true' and stratum.returncode==0:
-            final_shares=sql('USE pool_l3_199h; SELECT id,userid,workerid,valid,difficulty,error,round_id FROM shares ORDER BY id;')
+            final_shares=sql('USE pool_l3_199h; SELECT id,userid,workerid,coinid,jobid,valid,difficulty,error,round_id FROM shares ORDER BY id;')
             report['reconnect_true']['post_shutdown_shares']=final_shares
             report['reconnect_true']['post_shutdown_owner']=sql('USE pool_l3_199h; SELECT id,coin_id,algo,round_id,sequence,userid,workerid,state,header_hex FROM accepted_work;')
             report['reconnect_true']['post_shutdown_candidates']=sql('USE pool_l3_199h; SELECT COUNT(*) FROM round_intents;')
             rows=[row.split('\t') for row in final_shares.splitlines() if row]
-            if len(rows)<3 or any(len(row)<4 or row[1:4]!=['1',str(report['reconnect_true']['old_worker_id']),'1'] for row in rows) or \
+            local=[row for row in rows if len(row)==9 and row[3:5]==['1','0']]
+            remote=[row for row in rows if len(row)==9 and row[3:5]==['0','199']]
+            report['reconnect_true']['expected_remote_share_aggregation']='two accepted remote submits in one worker/job row'
+            if len(rows)!=2 or len(local)!=1 or len(remote)!=1 or \
+               any(row[1:3]!=['1',str(report['reconnect_true']['old_worker_id'])] or row[5]!='1' for row in rows) or \
+               not (1.8 < float(remote[0][6])/float(local[0][6]) < 2.2) or \
                report['reconnect_true']['post_shutdown_owner']!=durable or report['reconnect_true']['post_shutdown_candidates']!='0':
                 raise RuntimeError('post-reconnect shares were not persisted under original authenticated owner')
             report['checks']['post_reconnect_shares_persisted_under_original_worker']='PASS'
