@@ -12,6 +12,7 @@
 
 static bool job_assign_client(YAAMP_JOB *job, YAAMP_CLIENT *client, double maxhash)
 {
+	if(job->remote) debuglog("R3 remote assign entry job=%d uid=%d worker=%d next=%d locked=%d sent=%d reconnectable=%d extranonce_subscribe=%d maxhash=%f client_speed=%f job_speed=%f\n", job->id, client->userid, client->workerid, client->jobid_next, client->jobid_locked, client->jobid_sent, client->reconnectable, client->extranonce_subscribe, maxhash, client->speed, job->speed);
 	RETURN_ON_CONDITION(client->deleted, true);
 	RETURN_ON_CONDITION(client->jobid_next, true);
 	RETURN_ON_CONDITION(client->jobid_locked && client->jobid_locked != job->id, true);
@@ -108,6 +109,7 @@ static bool job_assign_client(YAAMP_JOB *job, YAAMP_CLIENT *client, double maxha
 //	debuglog(" assign %x, %f, %d, %s\n", job->id, client->speed, client->reconnecting, client->sock->ip);
 	if(strcmp(client->extranonce1, client->extranonce1_last) || client->extranonce2size != client->extranonce2size_last)
 	{
+		if(job->remote) debuglog("R3 remote extranonce changed job=%d old=%s/%d new=%s/%d\n", job->id, client->extranonce1_last, client->extranonce2size_last, client->extranonce1, client->extranonce2size);
 //		debuglog("new nonce %x %s %s\n", job->id, client->extranonce1_last, client->extranonce1);
 		if(!client->extranonce_subscribe)
 		{

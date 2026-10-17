@@ -244,6 +244,7 @@ void *remote_thread(void *p)
 
 			else if(!strcmp(method, "mining.notify"))
 			{
+				debuglog("R3 remote notify JOB%d status=%d nonce2=%d difficulty=%f\n", remote->id, remote->status, remote->nonce2size_next, remote->difficulty_next);
 				strncpy(remote->jobid, json_params->u.array.values[0]->u.string.ptr, 16);
 				string_lower(remote->jobid);
 
@@ -258,6 +259,7 @@ void *remote_thread(void *p)
 					remote->difficulty_actual = remote->difficulty_next;
 
 					remote_create_job(remote, json_params);
+					debuglog("R3 remote created job=%p id=%d status=%d\n", remote->job, remote->job ? remote->job->id : 0, remote->status);
 					if(!remote->job) break;
 
 					job_signal();
