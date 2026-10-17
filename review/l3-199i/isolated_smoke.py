@@ -493,7 +493,7 @@ def main():
                 upstream_job[7]=f'{int(time.time()):08x}'
                 upstream_fixture['job']=upstream_job
                 sql("USE pool_l3_199h; INSERT INTO jobs(id,ready,active,time,price,speed,difficulty,algo,host,port,username,password) "
-                    "VALUES(199,1,1,UNIX_TIMESTAMP(),1000,1000000000000,1,'scrypt','127.0.0.1',43322,'synthetic-upstream','fake');")
+                    "VALUES(199,1,1,UNIX_TIMESTAMP(),1000000000000,1000000000000000000,1,'scrypt','127.0.0.1',43322,'synthetic-upstream','fake');")
                 upstream_fixture['ready'].set()
                 trace['remote_job_fixture']=upstream_job
                 trace['remote_row']=sql('USE pool_l3_199h; SELECT id,ready,active,algo,host,port FROM jobs WHERE id=199;')

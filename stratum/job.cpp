@@ -271,6 +271,7 @@ void job_update()
 	for(CLI li = g_list_job.first; li; li = li->next)
 	{
 		YAAMP_JOB *job = (YAAMP_JOB *)li->data;
+		debuglog("R3 job order id=%d remote=%d profit=%f maxspeed=%f can_mine=%d free=%d\n", job->id, job->remote != NULL, job->profit, job->maxspeed, job_can_mine(job), job_has_free_client());
 		if(!job_can_mine(job)) continue;
 
 		job_assign_clients(job, job->maxspeed);
