@@ -198,10 +198,7 @@ bool client_subscribe(YAAMP_CLIENT *client, json_value *json_params)
 			client->speed = client1->speed;
 			client->extranonce1_id = client1->extranonce1_id;
 
-			client->userid = client1->userid;
-			client->workerid = client1->workerid;
-			strncpy(client->authorized_worker_name, client1->authorized_worker_name,
-				sizeof(client->authorized_worker_name)-1);
+			client_inherit_reconnect_identity(client, client1);
 
 			memcpy(client->job_history, client1->job_history, sizeof(client->job_history));
 			client1->lock_count = 0;
@@ -342,7 +339,7 @@ bool client_authorize(YAAMP_CLIENT *client, json_value *json_params)
 		int len = strlen(client->username);
 		if (!len)
 			return false;
-		if(client->workerid && strcmp(client->authorized_worker_name, client->username)) {
+		if(client->workerid && !client_claim_matches_authorized_worker(client, client->username)) {
 			client_send_error(client, 24, "Unauthorized worker");
 			return false;
 		}

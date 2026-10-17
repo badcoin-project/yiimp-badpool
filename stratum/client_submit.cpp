@@ -917,9 +917,8 @@ bool client_submit(YAAMP_CLIENT *client, json_value *json_params)
 	// A connection has one authorized accounting identity. The first submit
 	// parameter must name that same authorization; never let a claimed worker
 	// reach the durable journal or the share accumulator.
-	if(!client->workerid || !client->authorized_worker_name[0] ||
-		strcmp(json_params->u.array.values[0]->u.string.ptr,
-			client->authorized_worker_name))
+	if(!client_claim_matches_authorized_worker(client,
+		json_params->u.array.values[0]->u.string.ptr))
 	{
 		client_send_error(client, 24, "Unauthorized worker");
 		client->submit_bad++;

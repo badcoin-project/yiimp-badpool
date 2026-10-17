@@ -872,7 +872,7 @@ def main():
             report['checks']['complete_guard_restricted_stratum']='PASS'
             mutation=os.environ.get('H_GUARD_MUTATION','missing_trigger')
             report['guard_mutation']=mutation
-            backup=OUT/f'backup-{mutation}.sql'
+            backup=OUT/f'backup-{RUN_ID}-{mutation}.sql'
             dump=run(['mariadb-dump','--no-defaults','--protocol=socket','--skip-ssl',f'--socket={dbsock}','-uroot',
                 '--single-transaction','--routines','--triggers','--events','--databases','pool_l3_199h'],timeout=120)
             backup.write_text(dump.stdout)

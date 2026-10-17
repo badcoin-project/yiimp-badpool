@@ -105,6 +105,23 @@ public:
 	int broadcast_timeouts;
 };
 
+// The reconnecting=true subscription must retain the original accounting
+// owner and the full authorization name used by mining.submit.
+inline void client_inherit_reconnect_identity(YAAMP_CLIENT *dest, const YAAMP_CLIENT *source)
+{
+	dest->userid = source->userid;
+	dest->workerid = source->workerid;
+	strncpy(dest->authorized_worker_name, source->authorized_worker_name,
+		sizeof(dest->authorized_worker_name)-1);
+	dest->authorized_worker_name[sizeof(dest->authorized_worker_name)-1] = '\0';
+}
+
+inline bool client_claim_matches_authorized_worker(const YAAMP_CLIENT *client, const char *claim)
+{
+	return client && client->workerid && client->authorized_worker_name[0] &&
+		claim && !strcmp(claim, client->authorized_worker_name);
+}
+
 inline void client_delete(YAAMP_OBJECT *object)
 {
 	YAAMP_CLIENT *client = (YAAMP_CLIENT *)object;
