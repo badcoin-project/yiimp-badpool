@@ -23,10 +23,10 @@ import threading
 import time
 
 SOURCE = Path(__file__).resolve().parents[2]
-OUT = Path(__file__).resolve().parent
+OUT = SOURCE/'review/l3-199i-r1/results'
 BIN = Path('/mnt/d/BAD/BadConeGit/yiimp-badpool/.worktrees/production-authoritative-reconciliation-evidence/l3-199c-mariadb-bin')
 PORT_DB, PORT_RPC, PORT_STRATUM = 43317, 43318, 43319
-report = {'task': 'POOL-L3.199I', 'classification': 'PARTIAL', 'source_commit': os.environ.get('I_SOURCE_COMMIT', ''), 'checks': {}, 'migrations': []}
+report = {'task': 'POOL-L3.199I-R1', 'classification': 'PARTIAL', 'source_commit': os.environ.get('I_SOURCE_COMMIT', ''), 'checks': {}, 'migrations': []}
 children = []
 
 def run(cmd, data=None, check=True, timeout=120):
@@ -43,6 +43,28 @@ def wait_file(path, child, seconds=15):
         time.sleep(.1)
     raise RuntimeError(f'timed out waiting for {path}')
 
+def wait_listener(child, port, seconds=7, probe=None):
+    """Require a live child and an observed listener before the deadline."""
+    if probe is None:
+        def probe():
+            with socket.socket() as sock:
+                sock.settimeout(.1)
+                return sock.connect_ex(('127.0.0.1',port)) == 0
+    deadline=time.monotonic()+seconds
+    while time.monotonic()<deadline:
+        if child.poll() is not None:
+            raise RuntimeError(f'listener process exited before opening: {child.returncode}')
+        if probe():
+            if child.poll() is not None:
+                raise RuntimeError(f'listener process exited after probe: {child.returncode}')
+            return True
+        time.sleep(.1)
+    raise RuntimeError(f'listener on {port} missing after {seconds}s')
+
+def require_exit(child, expected, label):
+    if child.returncode != expected:
+        raise RuntimeError(f'{label} exit {child.returncode}, expected {expected}')
+
 def main():
     if os.geteuid() != 0: raise RuntimeError('run as root only inside disposable netns')
     run(['ip','link','set','lo','up'])
@@ -56,19 +78,24 @@ def main():
     source_head = run(['git','-C',SOURCE,'rev-parse','HEAD']).stdout.strip()
     if not report['source_commit'] or source_head != report['source_commit']:
         raise RuntimeError('wrong or missing I_SOURCE_COMMIT')
+    OUT.mkdir(parents=True,exist_ok=True)
     binary = SOURCE/'stratum/stratum'
     report['binary_sha256'] = hashlib.sha256(binary.read_bytes()).hexdigest()
     with tempfile.TemporaryDirectory(prefix='pool-l3-199i-', dir='/tmp') as temporary:
         root = Path(temporary).resolve()
         if root.parent != Path('/tmp'): raise RuntimeError('wrong disposable directory')
-        # Keep Stratum's coinbase timestamp stable across a process restart so
-        # an end-to-end retry can reproduce the exact original 80-byte header.
-        clock_source=root/'fixed_time.c';clock_shim=root/'fixed_time.so'
-        clock_source.write_text('#include <time.h>\ntime_t time(time_t *out) { time_t fixed=1700000000; if(out) *out=fixed; return fixed; }\n')
-        run(['cc','-shared','-fPIC','-o',clock_shim,clock_source])
-        stratum_env=os.environ.copy();stratum_env['LD_PRELOAD']=str(clock_shim)
-        report['test_clock']={'source':str(clock_source),'sha256':hashlib.sha256(clock_shim.read_bytes()).hexdigest(),
-                              'fixed_unix_time':1700000000,'scope':'Stratum processes only'}
+        stratum_env=os.environ.copy()
+        stratum_env.pop('LD_PRELOAD',None)
+        if os.environ.get('H_VARIANT')=='commit_ack':
+            # Only the exact-header restart retry needs a stable coinbase time.
+            clock_source=root/'fixed_time.c';clock_shim=root/'fixed_time.so'
+            clock_source.write_text('#include <time.h>\ntime_t time(time_t *out) { time_t fixed=1700000000; if(out) *out=fixed; return fixed; }\n')
+            run(['cc','-shared','-fPIC','-o',clock_shim,clock_source])
+            stratum_env['LD_PRELOAD']=str(clock_shim)
+            report['test_clock']={'source':str(clock_source),'sha256':hashlib.sha256(clock_shim.read_bytes()).hexdigest(),
+                                  'fixed_unix_time':1700000000,'scope':'initial and commit-ack restart Stratum only'}
+        else:
+            report['test_clock']={'mode':'normal','scope':'all Stratum processes'}
         data = root/'db-data'; dbsock = root/'db.sock'; db_log = root/'mariadb.log'
         run([BIN/'mariadb-install-db','--no-defaults',f'--datadir={data}',
              '--auth-root-authentication-method=normal','--skip-test-db','--user=root'])
@@ -396,6 +423,69 @@ def main():
                     raise RuntimeError('STOP: database outage did not close only the miner session')
                 report['checks']['database_outage_session_closed']='PASS'
                 stream.close();sock.close()
+            elif variant == 'auth_contract':
+                report['authorization_boundary']={}
+                baseline={
+                    'owner':durable,
+                    'counts':sql('USE pool_l3_199h; SELECT (SELECT COUNT(*) FROM accepted_work),(SELECT COUNT(*) FROM shares),(SELECT COUNT(*) FROM earnings),(SELECT COUNT(*) FROM round_intents);')}
+                def receive_id(connection, request_id):
+                    for _ in range(12):
+                        raw=connection.readline()
+                        if not raw:raise RuntimeError(f'authorization session closed before response {request_id}')
+                        value=json.loads(raw)
+                        report['miner_responses'].append(value)
+                        if value.get('id')==request_id:return value
+                    raise RuntimeError(f'authorization response {request_id} missing')
+                def send_on(connection, method, params):
+                    request_id=len(report['miner_requests'])+1
+                    request={'id':request_id,'method':method,'params':params}
+                    report['miner_requests'].append(request)
+                    connection.write((json.dumps(request)+'\n').encode())
+                    return receive_id(connection,request_id)
+                def unchanged(label):
+                    actual={
+                        'owner':sql('USE pool_l3_199h; SELECT id,coin_id,algo,round_id,sequence,userid,workerid,state,header_hex FROM accepted_work;'),
+                        'counts':sql('USE pool_l3_199h; SELECT (SELECT COUNT(*) FROM accepted_work),(SELECT COUNT(*) FROM shares),(SELECT COUNT(*) FROM earnings),(SELECT COUNT(*) FROM round_intents);'),
+                        'claimed_worker_rows':sql("USE pool_l3_199h; SELECT COUNT(*) FROM workers WHERE worker='other';")}
+                    report.setdefault('authorization_boundary',{})[label]=actual
+                    if actual['owner']!=baseline['owner'] or actual['counts']!=baseline['counts'] or actual['claimed_worker_rows']!='0':
+                        raise RuntimeError(f'STOP: {label} changed authenticated accounting identity')
+                pre_sock=socket.create_connection(('127.0.0.1',PORT_STRATUM),timeout=4)
+                pre_sock.settimeout(4);pre=pre_sock.makefile('rwb',buffering=0)
+                send_on(pre,'mining.subscribe',['l3-r1-preauth'])
+                pre_submit=send_on(pre,'mining.submit',['test.other',job[0],nonce2,job[7],nonce])
+                report['authorization_boundary']['pre_authorization_response']=pre_submit
+                if pre_submit.get('result') is not False or pre_submit.get('error',[None])[0]!=24:
+                    raise RuntimeError('submit before authorization was not rejected')
+                unchanged('before_authorization')
+                report['checks']['submit_before_authorization_no_accounting']='PASS'
+                pre.close();pre_sock.close()
+                notify_id=subscribed['result'][0][1][1]
+                resume_sock=socket.create_connection(('127.0.0.1',PORT_STRATUM),timeout=4)
+                resume_sock.settimeout(4);resume=resume_sock.makefile('rwb',buffering=0)
+                resumed=send_on(resume,'mining.subscribe',['l3-r1-resume',notify_id])
+                reauth=send_on(resume,'mining.authorize',['test.rig1','x'])
+                report['authorization_boundary']['resumed_subscription']={'notify_id':notify_id,'response':resumed,'authorization':reauth}
+                if reauth.get('result') is not True:
+                    raise RuntimeError('restored subscription did not authorize the original worker')
+                mismatch=send_on(resume,'mining.submit',['test.other',job[0],nonce2,job[7],nonce])
+                if mismatch.get('result') is not False or mismatch.get('error',[None])[0]!=24:
+                    raise RuntimeError('restored subscription accepted conflicting submit identity')
+                unchanged('resumed_session_conflicting_submit')
+                report['checks']['resumed_subscription_submit_worker_binding']='PASS'
+                conflict=send_on(resume,'mining.authorize',['test.other','x'])
+                report['authorization_boundary']['resumed_conflicting_authorization']=conflict
+                if conflict.get('result') is not False or conflict.get('error',[None])[0]!=21:
+                    raise RuntimeError('conflicting authorization on resumed connection was not rejected')
+                unchanged('resumed_session_conflicting_authorization')
+                report['checks']['conflicting_authorization_no_accounting']='PASS'
+                resume.close();resume_sock.close()
+                original_conflict=send_on(stream,'mining.authorize',['test.other','x'])
+                report['authorization_boundary']['original_conflicting_authorization']=original_conflict
+                if original_conflict.get('result') is not False or original_conflict.get('error',[None])[0]!=21:
+                    raise RuntimeError('conflicting authorization on original connection was not rejected')
+                unchanged('original_session_conflicting_authorization')
+                stream.close();sock.close()
             elif variant == 'one_case':
                 case=os.environ.get('H_CASE')
                 if case=='malformed_nonce': params=['test.rig1',job[0],nonce2,job[7],'xx']
@@ -491,7 +581,7 @@ def main():
                 if not any(x.get('method')=='mining.notify' for x in replies):
                     raise RuntimeError(f'no job for {tag}')
                 return new_sock,new_stream,next(x['params'] for x in replies if x.get('method')=='mining.notify')
-            if variant not in ('guard_restore','one_case','db_down','rpc_reject','rpc_timeout','commit_ack'):
+            if variant not in ('guard_restore','one_case','db_down','rpc_reject','rpc_timeout','commit_ack','auth_contract'):
                 for case,tag in [('malformed_nonce','rig2'),('stale_job','rig3'),('wrong_worker','rig4')]:
                     new_sock,stream,new_job=new_miner(tag)
                     if case=='malformed_nonce': params=[f'test.{tag}',new_job[0],nonce2,new_job[7],'xx']
@@ -502,6 +592,10 @@ def main():
                 report['durable_after_cases']=sql('USE pool_l3_199h; SELECT id,userid,workerid,state,sequence FROM accepted_work ORDER BY id;')
             elif variant == 'guard_restore':
                 stream.close();sock.close()
+            elif variant == 'auth_contract':
+                healthy_sock,healthy_stream,_=new_miner('rig1')
+                healthy_stream.close();healthy_sock.close()
+                report['checks']['authorization_rejections_process_stays_available']='PASS'
         else: report['checks']['listener_reached_inside_namespace']='FAIL'
         if os.environ.get('H_VARIANT') != 'db_down':
             report['tables']=sql("SELECT table_name,engine FROM information_schema.tables WHERE table_schema='pool_l3_199h' AND table_name IN ('accepted_work','share_rounds','round_schema_version','shares','coins') ORDER BY table_name;").splitlines()
@@ -578,10 +672,19 @@ def main():
             restart.send_signal(signal.SIGTERM);restart.wait(timeout=10)
             report['commit_restart']['exit_after_shutdown']=restart.returncode
             report['commit_restart']['log']=restart_log.read_text(errors='replace')[-3000:]
+            require_exit(restart,0,'commit-ack restart')
+            report['checks']['commit_ack_restart_expected_exit']='PASS'
         if os.environ.get('H_VARIANT') == 'guard_restore':
             if stratum.returncode != 0:
                 raise RuntimeError(f'isolated Stratum failed graceful exit {stratum.returncode}')
             report['post_shutdown_counts']=sql('USE pool_l3_199h; SELECT (SELECT COUNT(*) FROM accepted_work),(SELECT COUNT(*) FROM share_rounds),(SELECT COUNT(*) FROM shares);')
+            expected_records={
+                'owner':durable,
+                'rounds':sql('USE pool_l3_199h; SELECT * FROM share_rounds ORDER BY id;'),
+                'shares':sql('USE pool_l3_199h; SELECT * FROM shares ORDER BY id;')}
+            report['pre_backup_records']=expected_records
+            if not all(expected_records.values()):
+                raise RuntimeError('missing durable owner, round, or persisted share before backup')
             app_client=[BIN/'mariadb','--no-defaults','--protocol=tcp','--host=127.0.0.1',
                         f'--port={PORT_DB}','-ustratum_h','--password=disposable-only',
                         '--batch','--skip-column-names','pool_l3_199h']
@@ -641,29 +744,37 @@ def main():
             report['restore']={'server_version':sql2('SELECT VERSION();'),'datadir':sql2('SELECT @@datadir;'),
                 'socket':sql2('SELECT @@socket;'),'port':sql2('SELECT @@port;'),
                 'counts':sql2('USE pool_l3_199h; SELECT (SELECT COUNT(*) FROM accepted_work),(SELECT COUNT(*) FROM share_rounds),(SELECT COUNT(*) FROM shares);'),
-                'owner':sql2('USE pool_l3_199h; SELECT id,coin_id,algo,round_id,sequence,userid,workerid,state,header_hex FROM accepted_work;')}
-            if report['restored_guard_result'] != report['restricted_guard_result'] or report['restore']['owner'] != durable:
-                raise RuntimeError('restored guard or owner mismatched backup')
-            report['checks']['backup_restore_owner_guard']='PASS'
+                'owner':sql2('USE pool_l3_199h; SELECT id,coin_id,algo,round_id,sequence,userid,workerid,state,header_hex FROM accepted_work;'),
+                'rounds':sql2('USE pool_l3_199h; SELECT * FROM share_rounds ORDER BY id;'),
+                'shares':sql2('USE pool_l3_199h; SELECT * FROM shares ORDER BY id;')}
+            if report['restored_guard_result'] != report['restricted_guard_result'] or \
+               any(report['restore'][key]!=value for key,value in expected_records.items()):
+                raise RuntimeError('restored guard, owner, round, or share mismatched backup')
+            report['checks']['backup_restore_owner_round_share_guard']='PASS'
             cfg.write_text(cfg.read_text().replace(f'port = {PORT_DB}', 'port = 43320'))
             restored_log=root/'restored-stratum.log'
+            submitblock_before=report.get('rpc_calls',[]).count('submitblock')
             with restored_log.open('w') as log:
-                restored_stratum=subprocess.Popen([str(binary),'scrypt'],cwd=root,stdout=log,stderr=log)
+                restored_stratum=subprocess.Popen([str(binary),'scrypt'],cwd=root,stdout=log,stderr=log,env=stratum_env)
             children.append(restored_stratum)
-            for _ in range(60):
-                if restored_stratum.poll() is not None:break
-                probe=socket.socket();probe.settimeout(.1)
-                if probe.connect_ex(('127.0.0.1',PORT_STRATUM))==0:
-                    probe.close();break
-                probe.close();time.sleep(.1)
+            report['restore']['listener_open']=wait_listener(restored_stratum,PORT_STRATUM,seconds=7)
             report['restore']['stratum_exit_before_shutdown']=restored_stratum.poll()
-            report['restore']['post_start_count']=sql2('USE pool_l3_199h; SELECT COUNT(*) FROM accepted_work;')
-            if restored_stratum.poll() is not None or report['restore']['post_start_count']!='1':
-                raise RuntimeError('restored process did not start cleanly or replayed accepted work')
-            report['checks']['restore_startup_no_silent_replay']='PASS'
+            report['restore']['post_start_records']={
+                'owner':sql2('USE pool_l3_199h; SELECT id,coin_id,algo,round_id,sequence,userid,workerid,state,header_hex FROM accepted_work;'),
+                'rounds':sql2('USE pool_l3_199h; SELECT * FROM share_rounds ORDER BY id;'),
+                'shares':sql2('USE pool_l3_199h; SELECT * FROM shares ORDER BY id;')}
+            report['restore']['submitblock_calls_before_start']=submitblock_before
+            report['restore']['submitblock_calls_after_start']=report.get('rpc_calls',[]).count('submitblock')
+            if restored_stratum.poll() is not None or \
+               report['restore']['post_start_records']!=expected_records or \
+               report['restore']['submitblock_calls_after_start']!=submitblock_before:
+                raise RuntimeError('restored startup changed durable records or called submitblock')
+            report['checks']['restore_listener_records_no_replay']='PASS'
             restored_stratum.send_signal(signal.SIGTERM);restored_stratum.wait(timeout=10)
             report['restore']['stratum_final_exit']=restored_stratum.returncode
             report['restore']['log']=restored_log.read_text(errors='replace')[-3000:]
+            require_exit(restored_stratum,0,'restored Stratum')
+            report['checks']['restored_process_expected_exit']='PASS'
         httpd.shutdown();httpd.server_close()
         if proxy_server:
             proxy_server.shutdown();proxy_server.server_close()

@@ -24,6 +24,8 @@ SOURCES := stratum.cpp db.cpp coind.cpp coind_aux.cpp coind_template.cpp coind_s
            json.cpp base58.cpp rpc_curl.cpp durable_round.cpp shutdown_drain.cpp
 
 OBJECTS := $(SOURCES:.cpp=.o)
+# Generated dependency files can define object targets before "all" below.
+.DEFAULT_GOAL := all
 -include $(OBJECTS:.o=.d)
 OUTPUT  := stratum
 
@@ -35,6 +37,10 @@ all: $(CODEDIRS) $(OUTPUT)
 
 $(CODEDIRS):
 	$(MAKE) -C $@
+
+# The library recipes may touch stratum.cpp. Finish them before compiling
+# objects, without making the phony directory targets force a rebuild.
+$(OBJECTS): | $(CODEDIRS)
 
 $(OUTPUT): $(OBJECTS)
 	$(CXX) $(OBJECTS) $(LDFLAGS) $(LDLIBS) -o $@
