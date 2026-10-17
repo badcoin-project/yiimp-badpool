@@ -274,6 +274,7 @@ def main():
             '[STRATUM]\nalgo = scrypt\ndifficulty = 1\ndiff_min = 1\n'
             f'diff_max = 1\ndurable_rounds = 1\nrenting = {renting}\n[DEBUGLOG]\nhash = 1\n'
             f'client = {renting}\nremote = {renting}\n')
+        report['fixture_config']=cfg.read_text()
         logpath=OUT/f'stratum-{RUN_ID}.log'
         report['attempt']['stratum_log_path']=str(logpath)
         def enable_core():
@@ -489,6 +490,9 @@ def main():
                 trace=report['reconnect_true']={'old_notify_id':subscribed['result'][0][1][1],
                     'old_worker_id':int(durable.split('\t')[6]),'original_owner':durable}
                 before_workers=sql('USE pool_l3_199h; SELECT id,userid,name,worker FROM workers ORDER BY id;')
+                trace['before_reconnect_accounting']={'owner':durable,'workers':before_workers,
+                    'shares':sql('USE pool_l3_199h; SELECT id,userid,workerid,valid,difficulty,error,round_id FROM shares ORDER BY id;'),
+                    'candidate_count':sql('USE pool_l3_199h; SELECT COUNT(*) FROM round_intents;')}
                 upstream_job=list(job);upstream_job[0]='upstream1'
                 upstream_job[7]=f'{int(time.time()):08x}'
                 upstream_fixture['job']=upstream_job
@@ -601,6 +605,18 @@ def main():
                    trace['after_conflicting_authorization_accounting']!=accepted_baseline:
                     raise RuntimeError('conflicting reauthorization changed inherited identity or accounting')
                 report['checks']['reconnected_reauthorization_no_accounting']='PASS'
+                for next_candidate in range(remote_candidate+1,remote_candidate+10001):
+                    next_nonce=f'{next_candidate:08x}'
+                    next_header=remote_prefix+swap_words(next_nonce)
+                    next_digest=hashlib.scrypt(next_header,salt=next_header,n=1024,r=1,p=1,dklen=32)
+                    next_target=int.from_bytes(next_digest[22:30],'little')
+                    if 0x0000ffff00000000 < next_target <= 0xffff000000000000:break
+                else:raise RuntimeError('no second valid remote Scrypt share')
+                after_conflict=send_resume('mining.submit',['test.rig1',remote_notice[0],remote_nonce2,remote_notice[7],next_nonce])
+                trace['same_worker_after_conflict_submit']=after_conflict
+                if after_conflict.get('result') is not True:
+                    raise RuntimeError('same authenticated worker could not submit after rejected reauthorization')
+                report['checks']['identity_survives_conflicting_reauthorization']='PASS'
                 resume.close();resume_sock.close();stream.close();sock.close()
             elif variant == 'auth_contract':
                 report['authorization_boundary']={}
@@ -792,6 +808,16 @@ def main():
         if os.environ.get('H_VARIANT')=='one_case' and stratum.returncode==0:
             report['post_shutdown_counts']=sql('USE pool_l3_199h; SELECT (SELECT COUNT(*) FROM accepted_work),(SELECT COUNT(*) FROM share_rounds),(SELECT COUNT(*) FROM shares);')
             report['post_shutdown_shares']=sql('USE pool_l3_199h; SELECT userid,workerid,valid,difficulty,error,round_id FROM shares;')
+        if os.environ.get('H_VARIANT')=='reconnect_true' and stratum.returncode==0:
+            final_shares=sql('USE pool_l3_199h; SELECT id,userid,workerid,valid,difficulty,error,round_id FROM shares ORDER BY id;')
+            report['reconnect_true']['post_shutdown_shares']=final_shares
+            report['reconnect_true']['post_shutdown_owner']=sql('USE pool_l3_199h; SELECT id,coin_id,algo,round_id,sequence,userid,workerid,state,header_hex FROM accepted_work;')
+            report['reconnect_true']['post_shutdown_candidates']=sql('USE pool_l3_199h; SELECT COUNT(*) FROM round_intents;')
+            rows=[row.split('\t') for row in final_shares.splitlines() if row]
+            if len(rows)<3 or any(len(row)<4 or row[1:4]!=['1',str(report['reconnect_true']['old_worker_id']),'1'] for row in rows) or \
+               report['reconnect_true']['post_shutdown_owner']!=durable or report['reconnect_true']['post_shutdown_candidates']!='0':
+                raise RuntimeError('post-reconnect shares were not persisted under original authenticated owner')
+            report['checks']['post_reconnect_shares_persisted_under_original_worker']='PASS'
         if stratum.returncode == -11:
             report['classification']='FAIL'
             report['core_backtrace']=core_trace()

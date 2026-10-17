@@ -319,8 +319,9 @@ bool client_authorize(YAAMP_CLIENT *client, json_value *json_params)
 
 	if(g_list_client.Find(client)) {
 		clientlog(client, "Already logged");
-		client_send_error(client, 21, "Already logged");
-		return false;
+		// Keep the authorized session and its worker row intact after a
+		// conflicting reauthorization. A failed write still closes it.
+		return client_send_error(client, 21, "Already logged");
 	}
 
 	if(json_params->u.array.length>1 && json_params->u.array.values[1]->u.string.ptr)
