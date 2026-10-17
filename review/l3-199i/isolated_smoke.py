@@ -509,8 +509,9 @@ def main():
                         break
                 if 'reconnect_message' not in trace:
                     trace['debug_log']=(root/'scrypt.log').read_text(errors='replace')[-8000:]
-                    trace['stratum_exit_before_cleanup']=stratum.poll()
-                    if stratum.poll() is not None:
+                    try: trace['stratum_exit_before_cleanup']=stratum.wait(timeout=5)
+                    except subprocess.TimeoutExpired: trace['stratum_exit_before_cleanup']=None
+                    if trace['stratum_exit_before_cleanup'] is not None:
                         report['classification']='FAIL'
                         trace['core_backtrace']=core_trace()
                     raise RuntimeError('fixture did not reach actual client.reconnect path')
