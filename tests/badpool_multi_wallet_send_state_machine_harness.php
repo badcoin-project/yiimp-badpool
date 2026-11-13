@@ -5,6 +5,7 @@ $fixture=json_decode(file_get_contents(dirname(__FILE__).'/badpool_multi_lane_wa
 $checks=0;$failures=array();$roots=array();
 function sm_ok($v,$m){global$checks,$failures;$checks++;if(!$v)$failures[]=$m;}
 function sm_throws($fn){try{$fn();return false;}catch(Exception$e){return true;}}
+function sm_throw_message($fn){try{$fn();return null;}catch(Exception$e){return$e->getMessage();}}
 function sm_rows($fixture){$out=array();foreach($fixture['payouts']as$row)$out[$row['payout_id']]=$row;return$out;}
 function sm_entry($r){return array('payout_id'=>$r['payout_id'],'lane_id'=>$r['lane_id'],'coin_id'=>$r['coin_id'],'account_id'=>$r['account_id'],'amount'=>$r['amount'],'recipient'=>$r['recipient'],'wallet_binding_identity'=>$r['wallet_binding_identity'],'source_account_identity'=>$r['source_account_identity'],'expected_completed'=>0,'expected_tx'=>null,'expected_batch_state'=>'READY_FOR_WALLET_APPROVAL');}
 function sm_approval($rows,$ids=array(526,527,528)){sort($ids,SORT_NUMERIC);$e=array();foreach($ids as$id)$e[]=sm_entry($rows[$id]);return array('schema'=>'badpool.wallet_send.multi_lane_approval.v1','human_approved'=>true,'entries'=>$e);}
@@ -116,7 +117,13 @@ $mixedResult=$exec->execute($mixedApproval);sm_ok($mixedResult['status']==='pass
 $reconciledIds=array_keys($repo->reconciled);sort($reconciledIds,SORT_NUMERIC);sm_ok(count(array_unique(array_values($repo->reconciled)))===2&&$reconciledIds===$mixedIds,'mixed wallet payouts receive their own wallet txids');
 $rounding=$sameWallet;$rounding[526]['amount']='0.000000005';$rounding[529]['amount']='0.000000005';
 list($exec,$repo,$gateway,$journal)=sm_system($rounding,'rounding-drift');
-sm_ok(sm_throws(function()use($exec,$rounding){$exec->preflight(sm_approval($rounding,array(526,529)));}),'two individually rounded satoshis cannot exceed rounded raw total');
+$message=sm_throw_message(function()use($exec,$rounding){$exec->preflight(sm_approval($rounding,array(526,529)));});
+sm_ok($message==='Per-payout rounding does not reconcile for recipient.','recipient-level rounding mismatch fails closed');
+$operationRounding=$sameWallet;$operationRounding[526]['amount']='0.000000004';$operationRounding[529]['amount']='0.000000004';$operationRounding[529]['recipient']='BAD-scrypt-account-90';
+list($exec)=sm_system($operationRounding,'operation-rounding');$message=sm_throw_message(function()use($exec,$operationRounding){$exec->preflight(sm_approval($operationRounding,array(526,529)));});
+sm_ok($message==='Per-payout rounding does not reconcile with wallet operation total.','wallet-operation rounding mismatch fails closed');
+$zeroResult=$rows;$zeroResult[526]['amount']='0.000000004';list($exec)=sm_system($zeroResult,'zero-result');$message=sm_throw_message(function()use($exec,$zeroResult){$exec->preflight(sm_approval($zeroResult,array(526)));});
+sm_ok($message==='Wallet operation amount projects to zero.','zero-result wallet operation fails closed');
 
 $registry=new BadpoolLivePaymentLaneRegistry();sm_ok($registry->get('live-skein-v1')->isHumanApprovedWalletSendEligible()&&!$registry->get('live-skein-v1')->isWalletSendCommissioned(),'Skein wallet-ready lane is operator eligible while recurring send stays disabled');sm_ok(!$registry->get('live-sha256d-v1')->isHumanApprovedWalletSendEligible()&&!$registry->get('live-sha256d-v1')->isPayoutPreparationCommissioned(),'SHA256d excluded');sm_ok(!$registry->get('live-groestl-v1')->isWalletSendCommissioned()&&!$registry->get('live-yescrypt-v1')->isWalletSendCommissioned(),'recurring wallet flags remain disabled');
 $coordinator=file_get_contents(dirname(__FILE__).'/../web/yaamp/core/backend/BadpoolLivePaymentCoordinator.php');sm_ok(strpos($coordinator,'BadpoolPerWalletOperationGateway')===false&&strpos($coordinator,'sendApprovedWalletOperation')===false,'recurring coordinator cannot reach gateway');
